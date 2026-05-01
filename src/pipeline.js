@@ -17,7 +17,7 @@ function buildPreChain(settings) {
     parts.push('afftdn=nf=-20:tn=1:nr=20:om=o');
   }
   if (settings.noiseGateEnabled !== false) {
-    parts.push('agate=threshold=0.008:ratio=6:attack=3:release=40:range=0.005');
+    parts.push('agate=threshold=0.005:ratio=4:attack=5:release=80:range=0.003');
   }
   if (settings.silenceTrimEnabled !== false) {
     // Trim leading silence only; trailing uses areverse trick to avoid cutting mid-speech pauses
@@ -36,13 +36,16 @@ function buildEqChain(settings) {
 
   const filters = [
     `highpass=f=${hpfFreq}:poles=2`,
-    'equalizer=f=200:width_type=o:width=1.5:g=-2',
-    'equalizer=f=2800:width_type=o:width=1.5:g=2.5',
-    'equalizer=f=12000:width_type=o:width=2:g=1.5',
+    'equalizer=f=150:width_type=o:width=1.0:g=1',
+    'equalizer=f=250:width_type=o:width=1.5:g=-1.5',
+    'equalizer=f=800:width_type=o:width=2.0:g=1',
+    'equalizer=f=2500:width_type=o:width=2.0:g=3',
+    'equalizer=f=4000:width_type=o:width=1.5:g=2',
+    'equalizer=f=12000:width_type=o:width=2:g=2',
   ];
 
   if (deEsser) {
-    filters.splice(3, 0, 'equalizer=f=5500:width_type=h:width=3000:g=-2.5');
+    filters.splice(6, 0, 'equalizer=f=6500:width_type=h:width=2000:g=-2');
   }
 
   if (breathReduction) {
@@ -52,10 +55,10 @@ function buildEqChain(settings) {
   return filters.join(',');
 }
 
-const LIMITER = 'alimiter=level_in=1:limit=0.891:level_out=1:attack=3:release=30';
+const LIMITER = 'alimiter=level_in=1:limit=0.891:level_out=1:attack=5:release=50';
 
 function buildSingleBandComp() {
-  return `acompressor=threshold=0.08:ratio=4:attack=8:release=80:makeup=2,${LIMITER}`;
+  return `acompressor=threshold=0.06:ratio=3:attack=15:release=150:makeup=2.5,${LIMITER}`;
 }
 
 function buildLoudnormBase(lufsTarget) {

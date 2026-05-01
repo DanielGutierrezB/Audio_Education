@@ -77,12 +77,24 @@ app.on('before-quit', () => {
 // ── Logger IPC ──
 ipcMain.handle('log:getFormatted', () => logger.formatForClipboard());
 ipcMain.handle('log:push', (_, category, message, data) => {
-  logger.push(category ?? 'renderer', message, data);
+  // Cap renderer log input to prevent abuse
+  const cat = String(category ?? 'renderer').slice(0, 32);
+  const msg = String(message ?? '').slice(0, 500);
+  const d = data !== undefined ? String(typeof data === 'string' ? data : JSON.stringify(data)).slice(0, 2000) : undefined;
+  logger.push(cat, msg, d);
 });
 
 ipcMain.handle('store:get', (_, key) => store.get(key));
 ipcMain.handle('store:set', (_, key, value) => {
   if (typeof key !== 'string' || !VALID_STORE_KEYS.has(key)) return;
+  // Type-validate values to prevent store corruption
+  const BOOL_KEYS = new Set(['deEsserEnabled', 'noiseGateEnabled', 'stereoToMonoEnabled',
+    'silenceTrimEnabled', 'breathReductionEnabled', 'multiBandCompEnabled', 'showNotifications']);
+  const STRING_KEYS = new Set(['processingMode', 'outputFormat']);
+  const INT_KEYS = new Set(['lufsTarget', 'hpfFrequency', 'sampleRate']);
+  if (BOOL_KEYS.has(key) && typeof value !== 'boolean') return;
+  if (STRING_KEYS.has(key) && typeof value !== 'string') return;
+  if (INT_KEYS.has(key) && (typeof value !== 'number' || !Number.isFinite(value))) return;
   store.set(key, value);
 });
 ipcMain.handle('store:getAll', () => store.store);
@@ -115,10 +127,15 @@ ipcMain.handle('files:open', async (event) => {
 
 ipcMain.handle('shell:openPath', (_, filePath) => {
   if (typeof filePath !== 'string' || !filePath) return;
-  shell.showItemInFolder(filePath);
+  // Block path traversal — only allow absolute paths without .. components
+  const resolved = path.resolve(filePath);
+  if (resolved !== filePath && resolved !== path.normalize(filePath)) return;
+  if (filePath.includes('..')) return;
+  shell.showItemInFolder(resolved);
 });
 
 ipcMain.handle('folders:scan', (_, folderPath) => {
+  if (typeof folderPath !== 'string' || !folderPath || folderPath.includes('..')) return [];
   try {
     const entries = fs.readdirSync(folderPath, { withFileTypes: true });
     return entries
@@ -139,6 +156,15 @@ let pipelineState = null;
 
 ipcMain.handle('pipeline:start', (event, files) => {
   if (pipelineState?.running) return { error: 'Already processing' };
+  // Validate files array from renderer
+  if (!Array.isArray(files) || files.length === 0 || files.length > 10000) {
+    return { error: 'Invalid files list' };
+  }
+  for (const f of files) {
+    if (typeof f?.path !== 'string' || !f.path || f.path.includes('..')) {
+      return { error: 'Invalid file path in list' };
+    }
+  }
 
   const win = BrowserWindow.fromWebContents(event.sender);
   const settings = {
@@ -171,8 +197,14 @@ ipcMain.handle('pipeline:start', (event, files) => {
     if (type === 'file:done') logger.push('pipeline', `✓ Done: ${data.file}`, `→ ${data.outputPath}`);
     if (type === 'file:error') logger.push('pipeline', `✗ Error: ${data.file}`, data.error);
     if (type === 'analysis') logger.push('analysis', `Analysis: ${data.file}`, data.recommendations?.reasoning);
-    if (type === 'progress' && data.stepIndex !== undefined && data.pct <= 3) {
-      logger.push('pipeline', `  Step ${data.stepIndex}/${data.stepTotal}: ${data.step}`, path.basename(data.file));
+    if (type === 'progress' && data.stepIndex !== undefined) {
+      // Log step transitions (first progress event per step, identified by low pct or new step name)
+      const stepKey = `${data.file}:${data.stepIndex}`;
+      if (!emit._loggedSteps) emit._loggedSteps = new Set();
+      if (!emit._loggedSteps.has(stepKey)) {
+        emit._loggedSteps.add(stepKey);
+        logger.push('pipeline', `  Step ${data.stepIndex}/${data.stepTotal}: ${data.step}`, path.basename(data.file));
+      }
     }
     if (type === 'batch:done') logger.push('pipeline', `Batch complete: ${data.done}/${data.total} files`);
   };
@@ -189,10 +221,9 @@ ipcMain.handle('pipeline:start', (event, files) => {
     const state = pipelineState;
     pipelineState = null;
     if (!state?.cancelled && store.get('showNotifications') && Notification.isSupported()) {
-      const done = files.length;
       new Notification({
         title: 'AudioPro',
-        body: `Processing complete — ${done} file${done !== 1 ? 's' : ''} saved to Audio_Pro/`,
+        body: `Processing complete — ${files.length} file${files.length !== 1 ? 's' : ''} saved to Audio_Pro/`,
       }).show();
     }
   });
@@ -209,7 +240,8 @@ ipcMain.handle('pipeline:cancel', () => {
 });
 
 ipcMain.handle('audio:peaks', (_, filePath, numPeaks) => {
-  if (typeof filePath !== 'string' || !filePath) return null;
+  if (typeof filePath !== 'string' || !filePath || filePath.includes('..')) return null;
+  if (typeof numPeaks !== 'number' || numPeaks < 10 || numPeaks > 10000) numPeaks = 800;
   logger.push('waveform', `Generating peaks: ${path.basename(filePath)} (${numPeaks} points)`);
   return new Promise(resolve => {
     const timer = setTimeout(() => resolve(null), 30_000);
@@ -256,7 +288,7 @@ ipcMain.handle('audio:peaks', (_, filePath, numPeaks) => {
 });
 
 ipcMain.handle('ffprobe:metadata', (_, filePath) => {
-  if (typeof filePath !== 'string' || !filePath) return null;
+  if (typeof filePath !== 'string' || !filePath || filePath.includes('..')) return null;
   return new Promise(resolve => {
     const timer = setTimeout(() => resolve(null), 15_000);
     const done = (val) => { clearTimeout(timer); resolve(val); };

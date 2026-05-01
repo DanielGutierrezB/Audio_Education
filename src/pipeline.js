@@ -138,7 +138,11 @@ function run(cmd, args, opts = {}) {
       clearTimeout(timer);
       if (opts.setCurrent) opts.setCurrent(null);
       if (code === 0 || code === null) resolve(stderr);
-      else reject(new Error(`${path.basename(cmd)} exited ${code}`));
+      else {
+        // Include last 300 chars of stderr for troubleshooting
+        const tail = stderr.slice(-300).trim();
+        reject(new Error(`${path.basename(cmd)} exited ${code}${tail ? ': ' + tail : ''}`));
+      }
     });
     proc.on('error', err => {
       clearTimeout(timer);

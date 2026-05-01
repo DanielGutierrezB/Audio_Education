@@ -327,25 +327,32 @@ function buildRecommendations(analysis) {
 async function analyzeAudio(filePath, onStatus) {
   const status = (msg) => { if (onStatus) onStatus(msg); };
 
-  status('Getting file info...');
-  const basic = await getBasicInfo(filePath);
+  // Each measurement is resilient — failure in one doesn't block the rest
+  async function safe(label, fn) {
+    status(label);
+    try { return await fn(); } catch (err) {
+      console.warn(`Analysis step "${label}" failed: ${err.message}`);
+      return null;
+    }
+  }
 
-  status('Measuring loudness...');
-  const loudness = await measureLoudness(filePath);
+  const basic = await safe('Getting file info...', () => getBasicInfo(filePath));
+  if (!basic) throw new Error('Cannot read file metadata — file may be corrupted or not a valid audio file');
 
-  status('Analyzing noise floor...');
-  const noise = await measureNoiseFloor(filePath, basic.channels);
+  const loudness  = await safe('Measuring loudness...', () => measureLoudness(filePath));
+  const noise     = await safe('Analyzing noise floor...', () => measureNoiseFloor(filePath, basic.channels));
+  const sibilance = await safe('Detecting sibilance...', () => detectSibilance(filePath));
+  const reverb    = await safe('Checking reverb...', () => detectReverb(filePath));
+  const dynamics  = await safe('Analyzing dynamics...', () => detectDynamicRange(filePath));
 
-  status('Detecting sibilance...');
-  const sibilance = await detectSibilance(filePath);
-
-  status('Checking reverb...');
-  const reverb = await detectReverb(filePath);
-
-  status('Analyzing dynamics...');
-  const dynamics = await detectDynamicRange(filePath);
-
-  const analysis = { basic, loudness, noise, sibilance, reverb, dynamics };
+  const analysis = {
+    basic,
+    loudness:  loudness  ?? { integratedLUFS: null, truePeak: null, lra: null, threshold: null },
+    noise:     noise     ?? { noiseFloorDb: null, noiseRmsDb: null, overallRmsDb: null, overallPeakDb: null, dcOffset: null, hasSilenceRegions: false },
+    sibilance: sibilance ?? { overallDb: null, sibilanceDb: null, sibilanceRatio: null, hasSibilance: false, severity: 'unknown' },
+    reverb:    reverb    ?? { crestFactor: null, likelyReverb: false, severity: 'unknown' },
+    dynamics:  dynamics  ?? { peakDb: null, rmsDb: null, rmsPeakDb: null, rmsTroughDb: null, dynamicRange: null, hasClipping: false, needsCompression: true, compressionLevel: 'moderate' },
+  };
   const recommendations = buildRecommendations(analysis);
 
   return { analysis, recommendations };

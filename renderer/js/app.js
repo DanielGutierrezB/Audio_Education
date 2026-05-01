@@ -773,9 +773,20 @@ function addToPreviewSelector(filePath, outputPath) {
   item.className = 'preview-file-item';
   item.dataset.filePath = filePath;
   item.dataset.outputPath = outputPath;
-  item.innerHTML = `<span class="preview-file-icon">✓</span>`
-    + `<span class="preview-file-name">${name}</span>`
-    + (folder ? `<span class="preview-file-folder">${folder}</span>` : '');
+  // Build DOM safely — no innerHTML with user data
+  const iconSpan = document.createElement('span');
+  iconSpan.className = 'preview-file-icon';
+  iconSpan.textContent = '✓';
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'preview-file-name';
+  nameSpan.textContent = name;
+  item.append(iconSpan, nameSpan);
+  if (folder) {
+    const folderSpan = document.createElement('span');
+    folderSpan.className = 'preview-file-folder';
+    folderSpan.textContent = folder;
+    item.appendChild(folderSpan);
+  }
   item.addEventListener('click', () => selectPreviewItem(item));
   previewFileList.appendChild(item);
 
@@ -796,6 +807,7 @@ function selectPreviewFile(filePath) {
 
 let currentPreviewOriginal = null;
 let currentPreviewOutput = null;
+let waveformLoadId = 0; // Monotonic counter to cancel stale waveform loads
 
 async function loadPreviewFile(filePath, outputPath) {
   cancelAnimationFrame(rafId);
@@ -869,6 +881,7 @@ function sizePreviewCanvas() {
 }
 
 async function loadWaveform(filePath) {
+  const loadId = ++waveformLoadId; // Cancel any in-flight load
   previewLoading.hidden = false;
   previewCanvas.style.opacity = '0';
   waveformImageData = null;
@@ -878,6 +891,7 @@ async function loadWaveform(filePath) {
   // Canvas may be 0-width if the view isn't visible yet — retry after a frame
   if (numPeaks < 10) {
     await new Promise(r => requestAnimationFrame(r));
+    if (loadId !== waveformLoadId) return; // Cancelled
     sizePreviewCanvas();
     numPeaks = previewCanvas.width;
   }
@@ -886,6 +900,7 @@ async function loadWaveform(filePath) {
   let peaks = waveformCache.get(filePath);
   if (!peaks && window.api) {
     peaks = await window.api.audio.peaks(filePath, numPeaks);
+    if (loadId !== waveformLoadId) return; // Cancelled — user switched files
     if (peaks) waveformCacheSet(filePath, peaks);
   }
 

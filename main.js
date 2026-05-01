@@ -128,6 +128,49 @@ ipcMain.handle('pipeline:cancel', () => {
   }
 });
 
+ipcMain.handle('audio:peaks', (_, filePath, numPeaks) => {
+  return new Promise(resolve => {
+    const probeProc = spawn('ffprobe', [
+      '-v', 'quiet', '-print_format', 'json', '-show_format', filePath,
+    ]);
+    let probeOut = '';
+    probeProc.stdout.on('data', c => { probeOut += c; });
+    probeProc.on('close', code => {
+      if (code !== 0) return resolve(null);
+      let duration = 1;
+      try { duration = parseFloat(JSON.parse(probeOut).format?.duration) || 1; } catch { /* ok */ }
+
+      const rate = Math.max(50, Math.ceil(numPeaks / duration));
+      const proc = spawn('ffmpeg', [
+        '-i', filePath,
+        '-af', `aresample=${rate}`,
+        '-f', 'f32le', '-ac', '1', 'pipe:1',
+      ]);
+      const chunks = [];
+      proc.stdout.on('data', chunk => chunks.push(chunk));
+      proc.on('close', code2 => {
+        if (code2 !== 0) return resolve(null);
+        const buf = Buffer.concat(chunks);
+        const count = Math.floor(buf.length / 4);
+        const floats = new Float32Array(buf.buffer, buf.byteOffset, count);
+        const step = Math.max(1, Math.floor(count / numPeaks));
+        const peaks = [];
+        for (let i = 0; i < numPeaks; i++) {
+          let max = 0;
+          for (let j = 0; j < step; j++) {
+            const v = Math.abs(floats[i * step + j] ?? 0);
+            if (v > max) max = v;
+          }
+          peaks.push(max);
+        }
+        resolve(peaks);
+      });
+      proc.on('error', () => resolve(null));
+    });
+    probeProc.on('error', () => resolve(null));
+  });
+});
+
 ipcMain.handle('ffprobe:metadata', (_, filePath) => {
   return new Promise(resolve => {
     const proc = spawn('ffprobe', [

@@ -14,9 +14,12 @@
       <div class="titlebar-drag">
         <nav class="tabs" role="tablist">
           <button class="tab active" data-tab="processing" role="tab" aria-selected="true"
-            title="Manage folders and process audio files">Processing</button>
+            title="Manage folders and process audio files">
+            Processing
+            <span class="tab-badge" id="badge-done" hidden></span>
+          </button>
           <button class="tab" data-tab="preview" role="tab" aria-selected="false"
-            title="Compare original vs processed audio">Preview</button>
+            title="Compare original vs processed audio side by side">Preview</button>
           <button class="tab" data-tab="about" role="tab" aria-selected="false"
             title="About AudioPro and the processing pipeline">About</button>
         </nav>
@@ -38,6 +41,10 @@
           </button>
           <span class="toolbar-spacer"></span>
           <span class="queue-summary" id="queue-summary"></span>
+          <div class="mode-toggle" title="Quality: includes afftdn noise reduction (~30s extra per file). Fast: skip denoising for quick turnaround.">
+            <button class="mode-btn" id="mode-quality" data-mode="quality">Quality</button>
+            <button class="mode-btn" id="mode-fast" data-mode="fast">Fast</button>
+          </div>
         </div>
 
         <div class="queue-container">
@@ -53,7 +60,7 @@
         <div class="progress-bar-section" id="progress-section" hidden>
           <div class="progress-header">
             <span class="progress-filename" id="progress-filename">filename.wav</span>
-            <span class="progress-step" id="progress-step">Step 1/5 &middot; Analysis</span>
+            <span class="progress-step" id="progress-step">Step 1/4 &middot; Analysis</span>
           </div>
           <div class="progress-track" title="Current processing progress">
             <div class="progress-fill" id="progress-fill"></div>
@@ -67,12 +74,51 @@
 
       <!-- ── Preview View ── -->
       <section class="view" id="view-preview" role="tabpanel" hidden>
-        <div class="view-empty">
+        <div class="view-empty" id="preview-empty">
           <div class="view-empty-icon">&#9654;</div>
           <p>No processed files yet</p>
           <p class="text-muted">Process files in the <strong>Processing</strong> tab first,<br>
             then return here to compare original vs processed audio.</p>
         </div>
+
+        <div class="preview-content" id="preview-content" hidden>
+          <div class="preview-selector-bar">
+            <label for="preview-file-select" class="preview-select-label">File:</label>
+            <select id="preview-file-select" title="Choose a processed file to compare"></select>
+          </div>
+
+          <div class="preview-panels">
+            <div class="preview-panel" id="panel-original">
+              <div class="panel-header">
+                <span class="panel-label">Original</span>
+                <button class="btn-play-panel" id="play-original" title="Play original audio">&#9654;</button>
+                <span class="time-display" id="time-original">0:00</span>
+              </div>
+              <div class="waveform-wrap">
+                <canvas class="waveform" id="waveform-original"></canvas>
+                <div class="waveform-loading" id="loading-original">Loading waveform…</div>
+              </div>
+            </div>
+
+            <div class="preview-divider"></div>
+
+            <div class="preview-panel" id="panel-processed">
+              <div class="panel-header">
+                <span class="panel-label">Processed</span>
+                <button class="btn-play-panel" id="play-processed" title="Play processed audio">&#9654;</button>
+                <span class="time-display" id="time-processed">0:00</span>
+              </div>
+              <div class="waveform-wrap">
+                <canvas class="waveform" id="waveform-processed"></canvas>
+                <div class="waveform-loading" id="loading-processed">Loading waveform…</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Hidden audio elements -->
+        <audio id="audio-original" preload="none"></audio>
+        <audio id="audio-processed" preload="none"></audio>
       </section>
 
       <!-- ── About View ── -->
@@ -83,6 +129,32 @@
             <p class="about-tagline">Drop files, get podcast quality.</p>
           </div>
 
+          <div class="pipeline-diagram">
+            <div class="pipe-node pipe-node-analysis">
+              <span class="pipe-icon">&#128270;</span>
+              <span class="pipe-label">Analysis</span>
+              <span class="pipe-sub">FFprobe · ~2s</span>
+            </div>
+            <div class="pipe-arrow">&#8594;</div>
+            <div class="pipe-node pipe-node-denoise">
+              <span class="pipe-icon">&#127925;</span>
+              <span class="pipe-label">Denoise</span>
+              <span class="pipe-sub">afftdn · Quality</span>
+            </div>
+            <div class="pipe-arrow">&#8594;</div>
+            <div class="pipe-node pipe-node-eq">
+              <span class="pipe-icon">&#9000;</span>
+              <span class="pipe-label">EQ + Dynamics</span>
+              <span class="pipe-sub">FFmpeg · ~5s</span>
+            </div>
+            <div class="pipe-arrow">&#8594;</div>
+            <div class="pipe-node pipe-node-render">
+              <span class="pipe-icon">&#128190;</span>
+              <span class="pipe-label">Render</span>
+              <span class="pipe-sub">WAV 24-bit 48kHz</span>
+            </div>
+          </div>
+
           <div class="pipeline-steps">
             <h2>Processing Pipeline</h2>
 
@@ -90,39 +162,31 @@
               <div class="step-number">1</div>
               <div class="step-body">
                 <h3>Analysis <span class="step-time">~2s</span></h3>
-                <p>Detects format, sample rate, bit depth, channels, duration, voice pitch range, and current loudness (LUFS). Results inform every subsequent step automatically.</p>
+                <p>Detects format, sample rate, bit depth, channels, and duration using FFprobe. Results inform every subsequent step automatically — no manual configuration needed.</p>
               </div>
             </div>
 
             <div class="pipeline-step">
               <div class="step-number">2</div>
               <div class="step-body">
-                <h3>Denoising — DeepFilterNet v3 <span class="step-time">~30&ndash;60s / 20min</span></h3>
-                <p>Full-band neural noise suppression at 48kHz. Removes background noise, fans, AC hum, street noise. ARM64 native binary &mdash; runs fast on CPU.</p>
+                <h3>Denoise — afftdn <span class="step-time">Quality mode only</span></h3>
+                <p>FFmpeg's adaptive frequency-domain noise filter. Targets a noise floor of &minus;25dB with temporal smoothing enabled. Removes background hum, fan noise, and room noise while preserving voice character. Skip with <em>Fast</em> mode.</p>
               </div>
             </div>
 
             <div class="pipeline-step">
               <div class="step-number">3</div>
               <div class="step-body">
-                <h3>Speech Enhancement — Resemble Enhance <span class="step-time">~3&ndash;5min / 20min</span></h3>
-                <p>AI restoration of speech quality. Removes residual reverb, mic distortion, and compression artifacts. Extends bandwidth and improves clarity. Runs on Apple Silicon GPU (MPS).</p>
+                <h3>EQ &amp; Filters <span class="step-time">~5s</span></h3>
+                <p>High-pass filter removes rumble (configurable 60&ndash;120Hz). Parametric EQ boosts presence at 2.5kHz (+2dB), tames muddiness at 300Hz (&minus;2dB), softens sibilance at 6kHz (&minus;3dB), and adds air at 12kHz (+1dB). Two-pass loudness normalization to your target LUFS.</p>
               </div>
             </div>
 
             <div class="pipeline-step">
               <div class="step-number">4</div>
               <div class="step-body">
-                <h3>EQ &amp; Filters <span class="step-time">~5s</span></h3>
-                <p>High-pass filter at 80Hz removes rumble. Adaptive parametric EQ curve auto-selected from pitch analysis. De-esser attenuates sibilants. De-plosive filter cleans transients below 120Hz.</p>
-              </div>
-            </div>
-
-            <div class="pipeline-step">
-              <div class="step-number">5</div>
-              <div class="step-body">
                 <h3>Dynamics &amp; Output <span class="step-time">~5s</span></h3>
-                <p>Compressor (3:1 ratio, &minus;20dB threshold) controls dynamic range. Limiter sets ceiling at &minus;1dB. Loudness normalization to &minus;16 LUFS &mdash; the podcast/streaming standard. Output: WAV 24-bit 48kHz.</p>
+                <p>3:1 compressor (threshold &minus;20dB) controls dynamic range. Hard limiter at &minus;1dBTP prevents clipping. Loudness normalization to target LUFS &mdash; the podcast/streaming standard. Output: WAV 24-bit 48kHz saved to <code>Audio_Pro/</code> next to the source folder.</p>
               </div>
             </div>
           </div>

@@ -5,6 +5,13 @@ const { spawn } = require('child_process');
 const Store = require('electron-store');
 const pipeline = require('./src/pipeline');
 
+const VALID_STORE_KEYS = new Set([
+  'processingMode', 'lufsTarget', 'hpfFrequency', 'deEsserEnabled',
+  'noiseGateEnabled', 'stereoToMonoEnabled', 'silenceTrimEnabled',
+  'breathReductionEnabled', 'multiBandCompEnabled', 'outputFormat',
+  'sampleRate', 'showNotifications',
+]);
+
 const store = new Store({
   defaults: {
     processingMode: 'quality',
@@ -54,8 +61,18 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+app.on('before-quit', () => {
+  if (pipelineState) {
+    pipelineState.cancelled = true;
+    pipelineState.currentProc?.kill('SIGTERM');
+  }
+});
+
 ipcMain.handle('store:get', (_, key) => store.get(key));
-ipcMain.handle('store:set', (_, key, value) => store.set(key, value));
+ipcMain.handle('store:set', (_, key, value) => {
+  if (typeof key !== 'string' || !VALID_STORE_KEYS.has(key)) return;
+  store.set(key, value);
+});
 ipcMain.handle('store:getAll', () => store.store);
 
 ipcMain.handle('folders:open', async (event) => {
@@ -84,6 +101,7 @@ ipcMain.handle('files:open', async (event) => {
 });
 
 ipcMain.handle('shell:openPath', (_, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) return;
   shell.showItemInFolder(filePath);
 });
 
@@ -160,14 +178,17 @@ ipcMain.handle('pipeline:cancel', () => {
 });
 
 ipcMain.handle('audio:peaks', (_, filePath, numPeaks) => {
+  if (typeof filePath !== 'string' || !filePath) return null;
   return new Promise(resolve => {
+    const timer = setTimeout(() => resolve(null), 30_000);
+    const done = (val) => { clearTimeout(timer); resolve(val); };
     const probeProc = spawn('ffprobe', [
       '-v', 'quiet', '-print_format', 'json', '-show_format', filePath,
     ]);
     let probeOut = '';
     probeProc.stdout.on('data', c => { probeOut += c; });
     probeProc.on('close', code => {
-      if (code !== 0) return resolve(null);
+      if (code !== 0) return done(null);
       let duration = 1;
       try { duration = parseFloat(JSON.parse(probeOut).format?.duration) || 1; } catch { /* ok */ }
 
@@ -180,7 +201,7 @@ ipcMain.handle('audio:peaks', (_, filePath, numPeaks) => {
       const chunks = [];
       proc.stdout.on('data', chunk => chunks.push(chunk));
       proc.on('close', code2 => {
-        if (code2 !== 0) return resolve(null);
+        if (code2 !== 0) return done(null);
         const buf = Buffer.concat(chunks);
         const count = Math.floor(buf.length / 4);
         const floats = new Float32Array(buf.buffer, buf.byteOffset, count);
@@ -194,31 +215,34 @@ ipcMain.handle('audio:peaks', (_, filePath, numPeaks) => {
           }
           peaks.push(max);
         }
-        resolve(peaks);
+        done(peaks);
       });
-      proc.on('error', () => resolve(null));
+      proc.on('error', () => done(null));
     });
-    probeProc.on('error', () => resolve(null));
+    probeProc.on('error', () => done(null));
   });
 });
 
 ipcMain.handle('ffprobe:metadata', (_, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) return null;
   return new Promise(resolve => {
+    const timer = setTimeout(() => resolve(null), 15_000);
+    const done = (val) => { clearTimeout(timer); resolve(val); };
     const proc = spawn('ffprobe', [
       '-v', 'quiet', '-print_format', 'json', '-show_format', filePath,
     ]);
     let out = '';
     proc.stdout.on('data', chunk => { out += chunk; });
     proc.on('close', code => {
-      if (code !== 0) return resolve(null);
+      if (code !== 0) return done(null);
       try {
         const data = JSON.parse(out);
         const duration = parseFloat(data.format?.duration);
-        resolve(isNaN(duration) ? null : { duration });
+        done(isNaN(duration) ? null : { duration });
       } catch {
-        resolve(null);
+        done(null);
       }
     });
-    proc.on('error', () => resolve(null));
+    proc.on('error', () => done(null));
   });
 });

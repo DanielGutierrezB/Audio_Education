@@ -1,6 +1,10 @@
 'use strict';
 
 const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const crypto = require('crypto');
 
 // ── Helpers ──
 
@@ -77,7 +81,7 @@ async function measureNoiseFloor(filePath, channels) {
 
   if (silenceStart !== null) {
     // Extract silence section and measure
-    const tmpFile = `/tmp/audiopro_analyze_${Date.now()}.wav`;
+    const tmpFile = path.join(os.tmpdir(), `audiopro_analyze_${crypto.randomBytes(6).toString('hex')}.wav`);
     try {
       await runCmd('ffmpeg', [
         '-y', '-i', filePath,
@@ -93,8 +97,10 @@ async function measureNoiseFloor(filePath, channels) {
       const rmsMatch = statsStderr.match(/RMS level dB:\s*([\-\d.]+)/);
       noiseFloorDb = nfMatch ? (nfMatch[1] === '-inf' ? -Infinity : parseNumber(nfMatch[1])) : null;
       noiseRmsDb = rmsMatch ? parseNumber(rmsMatch[1]) : null;
-      require('fs').unlinkSync(tmpFile);
     } catch { /* ignore */ }
+    finally {
+      try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+    }
   }
 
   // Also measure overall stats to detect noise in voice sections

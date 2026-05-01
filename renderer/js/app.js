@@ -84,10 +84,12 @@ function statusIcon(status) {
 // ── Mode toggle ──
 const modeQuality = document.getElementById('mode-quality');
 const modeFast    = document.getElementById('mode-fast');
+const modeAuto    = document.getElementById('mode-auto');
 
 function applyMode(mode) {
   modeQuality.classList.toggle('active', mode === 'quality');
   modeFast.classList.toggle('active', mode === 'fast');
+  modeAuto.classList.toggle('active', mode === 'auto');
 }
 
 modeQuality.addEventListener('click', () => {
@@ -98,6 +100,11 @@ modeQuality.addEventListener('click', () => {
 modeFast.addEventListener('click', () => {
   applyMode('fast');
   if (window.api) window.api.store.set('processingMode', 'fast');
+  updateQueueSummary();
+});
+modeAuto.addEventListener('click', () => {
+  applyMode('auto');
+  if (window.api) window.api.store.set('processingMode', 'auto');
   updateQueueSummary();
 });
 
@@ -474,16 +481,23 @@ queueContainer.addEventListener('drop', async e => {
   queueContainer.classList.remove('drag-over');
   if (!window.api) return;
 
-  const paths = [];
+  const folderPaths = [];
+  const wavFileInfos = [];
+
   for (const item of e.dataTransfer.items) {
     if (item.kind !== 'file') continue;
+    const file = item.getAsFile();
+    if (!file?.path) continue;
     const entry = item.webkitGetAsEntry();
     if (entry?.isDirectory) {
-      const file = item.getAsFile();
-      if (file?.path) paths.push(file.path);
+      folderPaths.push(file.path);
+    } else if (file.name.toLowerCase().endsWith('.wav')) {
+      wavFileInfos.push({ path: file.path, name: file.name, size: file.size });
     }
   }
-  if (paths.length) await processFolderPaths(paths);
+
+  if (folderPaths.length) await processFolderPaths(folderPaths);
+  if (wavFileInfos.length) addIndividualFiles(wavFileInfos);
 });
 
 // ── Progress bar ──
@@ -530,7 +544,7 @@ function startProcessing() {
   btnAddFiles.disabled = true;
 
   progressSection.hidden = false;
-  setProgress(0, 'Starting…', 1, 4, files[0].path.split('/').pop(), null);
+  setProgress(0, 'Starting…', 1, 6, files[0].path.split('/').pop(), null);
 
   unsubPipeline = window.api.pipeline.onEvent(handlePipelineEvent);
 
@@ -593,6 +607,10 @@ function handlePipelineEvent(event) {
         const f = group.files.find(f => f.path === event.file);
         if (f) f.status = 'error';
       }
+      break;
+
+    case 'analysis':
+      // Analysis complete — pipeline step text already reflects individual status updates
       break;
 
     case 'batch:done':
@@ -701,8 +719,15 @@ const previewLoading = document.getElementById('preview-loading');
 const volumeSlider   = document.getElementById('preview-volume');
 
 let previewMode = 'original'; // 'original' | 'processed'
-// Map<filePath, peaks[]>
+// LRU-bounded waveform cache — avoids unbounded memory growth when processing many files
+const WAVEFORM_CACHE_MAX = 50;
 const waveformCache = new Map();
+function waveformCacheSet(key, peaks) {
+  if (waveformCache.size >= WAVEFORM_CACHE_MAX) {
+    waveformCache.delete(waveformCache.keys().next().value);
+  }
+  waveformCache.set(key, peaks);
+}
 // Stored waveform image (without playhead) for repaint
 let waveformImageData = null;
 // RAF handle
@@ -824,7 +849,7 @@ async function loadWaveform(filePath) {
   let peaks = waveformCache.get(filePath);
   if (!peaks && window.api) {
     peaks = await window.api.audio.peaks(filePath, numPeaks);
-    if (peaks) waveformCache.set(filePath, peaks);
+    if (peaks) waveformCacheSet(filePath, peaks);
   }
 
   previewLoading.hidden = true;
@@ -922,17 +947,9 @@ document.addEventListener('mousemove', (e) => {
   if (isScrubbing) seekFromEvent(e);
 });
 document.addEventListener('mouseup', () => { isScrubbing = false; });
+window.addEventListener('blur', () => { isScrubbing = false; });
 
 // ── Transport controls ──
-function stopAudio() {
-  cancelAnimationFrame(rafId);
-  audioPlayer.pause();
-  audioPlayer.currentTime = 0;
-  audioPlayer.src = '';
-  btnPlayMain.textContent = '▶';
-  currentTimeEl.textContent = '0:00';
-}
-
 function togglePlayPause() {
   if (audioPlayer.paused) {
     audioPlayer.play().catch(() => {});

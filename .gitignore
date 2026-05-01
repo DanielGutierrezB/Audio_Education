@@ -2,5 +2,8 @@ node_modules/
 dist/
 out/
 bin/
+build/icons/
 *.dmg
 *.pkg
+*.log
+.DS_Store

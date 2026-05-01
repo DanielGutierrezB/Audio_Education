@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 
 // ── Filter builders ──
 
@@ -104,10 +105,19 @@ function resolveOutputPath(inputPath, settings) {
 
 // ── Spawn helper ──
 
+const RUN_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes max per FFmpeg pass
+
 function run(cmd, args, opts = {}) {
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args);
     if (opts.setCurrent) opts.setCurrent(proc);
+
+    const timer = setTimeout(() => {
+      proc.kill('SIGTERM');
+      if (opts.setCurrent) opts.setCurrent(null);
+      reject(new Error(`${path.basename(cmd)} timed out after ${RUN_TIMEOUT_MS / 1000}s`));
+    }, opts.timeout ?? RUN_TIMEOUT_MS);
+
     let stderr = '';
     proc.stderr.on('data', chunk => {
       const text = chunk.toString();
@@ -121,11 +131,13 @@ function run(cmd, args, opts = {}) {
       }
     });
     proc.on('close', code => {
+      clearTimeout(timer);
       if (opts.setCurrent) opts.setCurrent(null);
       if (code === 0 || code === null) resolve(stderr);
       else reject(new Error(`${path.basename(cmd)} exited ${code}`));
     });
     proc.on('error', err => {
+      clearTimeout(timer);
       if (opts.setCurrent) opts.setCurrent(null);
       reject(err);
     });
@@ -272,6 +284,13 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
   for (const file of files) {
     if (isCancelled()) break;
 
+    // Validate file is readable before starting
+    try { fs.accessSync(file.path, fs.constants.R_OK); } catch {
+      emit('file:error', { file: file.path, error: 'File not readable or not found' });
+      done++;
+      continue;
+    }
+
     emit('file:start', { file: file.path, index: done, total });
     let tempPath = null;
     let dfnTempPath = null;
@@ -324,7 +343,7 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
           pct: 8, eta: calcEta(t0, done, total),
         });
 
-        dfnTempPath = path.join(os.tmpdir(), `audiopro_dfn_${Date.now()}_${path.basename(file.path)}`);
+        dfnTempPath = path.join(os.tmpdir(), `audiopro_dfn_${crypto.randomBytes(8).toString('hex')}_${path.basename(file.path)}`);
 
         try {
           await runDeepFilterNet(file.path, dfnTempPath, setCurrent);
@@ -346,7 +365,7 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
         pct: 25, eta: calcEta(t0, done + 0.1, total),
       });
 
-      tempPath = path.join(os.tmpdir(), `audiopro_${Date.now()}_${path.basename(file.path)}`);
+      tempPath = path.join(os.tmpdir(), `audiopro_${crypto.randomBytes(8).toString('hex')}_${path.basename(file.path)}`);
 
       await preprocessFile(pipelineInput, tempPath, fileSettings, duration,
         frac => {

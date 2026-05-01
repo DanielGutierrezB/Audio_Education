@@ -1,5 +1,7 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const { spawn } = require('child_process');
 const Store = require('electron-store');
 
 const store = new Store({
@@ -50,3 +52,51 @@ app.on('window-all-closed', () => {
 ipcMain.handle('store:get', (_, key) => store.get(key));
 ipcMain.handle('store:set', (_, key, value) => store.set(key, value));
 ipcMain.handle('store:getAll', () => store.store);
+
+ipcMain.handle('folders:open', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(win, {
+    title: 'Select folders containing WAV files',
+    properties: ['openDirectory', 'multiSelections'],
+  });
+  return result.canceled ? [] : result.filePaths;
+});
+
+ipcMain.handle('folders:scan', (_, folderPath) => {
+  try {
+    const entries = fs.readdirSync(folderPath, { withFileTypes: true });
+    return entries
+      .filter(e => e.isFile() && e.name.toLowerCase().endsWith('.wav'))
+      .map(e => {
+        const filePath = path.join(folderPath, e.name);
+        const { size } = fs.statSync(filePath);
+        return { path: filePath, name: e.name, size };
+      });
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle('ffprobe:metadata', (_, filePath) => {
+  return new Promise(resolve => {
+    const proc = spawn('ffprobe', [
+      '-v', 'quiet',
+      '-print_format', 'json',
+      '-show_format',
+      filePath,
+    ]);
+    let out = '';
+    proc.stdout.on('data', chunk => { out += chunk; });
+    proc.on('close', code => {
+      if (code !== 0) return resolve(null);
+      try {
+        const data = JSON.parse(out);
+        const duration = parseFloat(data.format?.duration);
+        resolve(isNaN(duration) ? null : { duration });
+      } catch {
+        resolve(null);
+      }
+    });
+    proc.on('error', () => resolve(null));
+  });
+});

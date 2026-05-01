@@ -226,6 +226,13 @@ body {
   color: var(--text);
 }
 
+.queue-container.drag-over {
+  outline: 2px dashed rgba(74, 143, 232, 0.45);
+  outline-offset: -6px;
+  border-radius: var(--radius);
+  background: rgba(74, 143, 232, 0.025);
+}
+
 .queue-container.drag-over .queue-empty {
   outline: 2px dashed var(--accent);
   outline-offset: -12px;
@@ -265,6 +272,12 @@ body {
   white-space: nowrap;
   font-family: 'SF Mono', 'Menlo', monospace;
   font-size: 11.5px;
+}
+
+.folder-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-3);
 }
 
 .btn-remove-folder {
@@ -311,9 +324,17 @@ body {
 }
 
 .status-queued   { color: var(--text-3); }
-.status-processing { color: var(--accent); }
 .status-done     { color: var(--success); }
 .status-error    { color: var(--error); }
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.45; }
+}
+.status-processing {
+  color: var(--accent);
+  animation: status-pulse 1.4s ease-in-out infinite;
+}
 
 /* ── Progress bar ── */
 .progress-bar-section {

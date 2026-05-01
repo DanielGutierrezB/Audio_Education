@@ -13,10 +13,10 @@ function buildPreChain(settings) {
     parts.push('pan=mono|c0=0.5*c0+0.5*c1');
   }
   if (settings.mode !== 'fast') {
-    parts.push('afftdn=nf=-25:tn=1');
+    parts.push('afftdn=nf=-20:tn=1:nr=20:om=o');
   }
   if (settings.noiseGateEnabled !== false) {
-    parts.push('agate=threshold=0.005:attack=10:release=200:ratio=20');
+    parts.push('agate=threshold=0.008:ratio=6:attack=3:release=40:range=0.005');
   }
   if (settings.silenceTrimEnabled !== false) {
     // Trim leading silence only; trailing uses areverse trick to avoid cutting mid-speech pauses
@@ -35,13 +35,13 @@ function buildEqChain(settings) {
 
   const filters = [
     `highpass=f=${hpfFreq}:poles=2`,
-    'equalizer=f=300:width_type=o:width=1.5:g=-2',
-    'equalizer=f=2500:width_type=o:width=1.5:g=2',
-    'equalizer=f=12000:width_type=o:width=2:g=1',
+    'equalizer=f=200:width_type=o:width=1.5:g=-2',
+    'equalizer=f=2800:width_type=o:width=1.5:g=2.5',
+    'equalizer=f=12000:width_type=o:width=2:g=1.5',
   ];
 
   if (deEsser) {
-    filters.splice(3, 0, 'equalizer=f=6000:width_type=h:width=4000:g=-3');
+    filters.splice(3, 0, 'equalizer=f=5500:width_type=h:width=3000:g=-2.5');
   }
 
   if (breathReduction) {
@@ -51,10 +51,10 @@ function buildEqChain(settings) {
   return filters.join(',');
 }
 
-const LIMITER = 'alimiter=level_in=1:limit=0.891:level_out=1:attack=5:release=50';
+const LIMITER = 'alimiter=level_in=1:limit=0.891:level_out=1:attack=3:release=30';
 
 function buildSingleBandComp() {
-  return `acompressor=threshold=0.1:ratio=3:attack=10:release=100:makeup=1,${LIMITER}`;
+  return `acompressor=threshold=0.08:ratio=4:attack=8:release=80:makeup=2,${LIMITER}`;
 }
 
 function buildLoudnormBase(lufsTarget) {
@@ -195,10 +195,10 @@ async function renderFile(inputPath, outputPath, stats, eqChain, loudnormBase, s
       '[la]lowpass=f=300:poles=2[lf]',
       '[ma]highpass=f=250:poles=2,lowpass=f=3500:poles=2[mf]',
       '[ha]highpass=f=3000:poles=2[hf]',
-      '[lf]acompressor=threshold=0.05:ratio=5:attack=20:release=300:makeup=2[lc]',
-      '[mf]acompressor=threshold=0.1:ratio=3:attack=8:release=150:makeup=1.5[mc]',
-      '[hf]acompressor=threshold=0.15:ratio=2:attack=3:release=80:makeup=1[hc]',
-      `[lc][mc][hc]amix=inputs=3:normalize=0,volume=0.4,${LIMITER},${loudnorm}[out]`,
+      '[lf]acompressor=threshold=0.05:ratio=5:attack=20:release=300:makeup=3[lc]',
+      '[mf]acompressor=threshold=0.08:ratio=3.5:attack=8:release=120:makeup=2[mc]',
+      '[hf]acompressor=threshold=0.12:ratio=2:attack=3:release=80:makeup=1.5[hc]',
+      `[lc][mc][hc]amix=inputs=3:normalize=0,volume=1.0,${LIMITER},${loudnorm}[out]`,
     ];
     await run('ffmpeg', [
       '-y', '-i', inputPath,

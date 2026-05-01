@@ -5,10 +5,14 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
+const binPaths = require('./bin-paths');
 
 // ── Helpers ──
 
 function runCmd(cmd, args) {
+  // Resolve bundled binary paths
+  if (cmd === 'ffmpeg')  cmd = binPaths.ffmpeg();
+  if (cmd === 'ffprobe') cmd = binPaths.ffprobe();
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args);
     let stdout = '', stderr = '';

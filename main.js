@@ -4,6 +4,7 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const Store = require('electron-store');
 const pipeline = require('./src/pipeline');
+const binPaths = require('./src/bin-paths');
 
 const VALID_STORE_KEYS = new Set([
   'processingMode', 'lufsTarget', 'hpfFrequency', 'deEsserEnabled',
@@ -182,7 +183,7 @@ ipcMain.handle('audio:peaks', (_, filePath, numPeaks) => {
   return new Promise(resolve => {
     const timer = setTimeout(() => resolve(null), 30_000);
     const done = (val) => { clearTimeout(timer); resolve(val); };
-    const probeProc = spawn('ffprobe', [
+    const probeProc = spawn(binPaths.ffprobe(), [
       '-v', 'quiet', '-print_format', 'json', '-show_format', filePath,
     ]);
     let probeOut = '';
@@ -193,7 +194,7 @@ ipcMain.handle('audio:peaks', (_, filePath, numPeaks) => {
       try { duration = parseFloat(JSON.parse(probeOut).format?.duration) || 1; } catch { /* ok */ }
 
       const rate = Math.max(50, Math.ceil(numPeaks / duration));
-      const proc = spawn('ffmpeg', [
+      const proc = spawn(binPaths.ffmpeg(), [
         '-i', filePath,
         '-af', `aresample=${rate}`,
         '-f', 'f32le', '-ac', '1', 'pipe:1',
@@ -228,7 +229,7 @@ ipcMain.handle('ffprobe:metadata', (_, filePath) => {
   return new Promise(resolve => {
     const timer = setTimeout(() => resolve(null), 15_000);
     const done = (val) => { clearTimeout(timer); resolve(val); };
-    const proc = spawn('ffprobe', [
+    const proc = spawn(binPaths.ffprobe(), [
       '-v', 'quiet', '-print_format', 'json', '-show_format', filePath,
     ]);
     let out = '';

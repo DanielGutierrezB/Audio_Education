@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
+const binPaths = require('./bin-paths');
 
 // ── Filter builders ──
 
@@ -108,6 +109,9 @@ function resolveOutputPath(inputPath, settings) {
 const RUN_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes max per FFmpeg pass
 
 function run(cmd, args, opts = {}) {
+  // Resolve bundled binary paths
+  if (cmd === 'ffmpeg')  cmd = binPaths.ffmpeg();
+  if (cmd === 'ffprobe') cmd = binPaths.ffprobe();
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args);
     if (opts.setCurrent) opts.setCurrent(proc);
@@ -148,7 +152,7 @@ function run(cmd, args, opts = {}) {
 
 async function analyzeFile(filePath, setCurrent) {
   const out = await new Promise((resolve, reject) => {
-    const proc = spawn('ffprobe', [
+    const proc = spawn(binPaths.ffprobe(), [
       '-v', 'quiet', '-print_format', 'json', '-show_streams', '-show_format', filePath,
     ]);
     setCurrent(proc);
@@ -173,29 +177,41 @@ async function analyzeFile(filePath, setCurrent) {
 
 // ── DeepFilterNet denoise ──
 
-const DENOISE_SCRIPT = path.join(__dirname, 'python', 'denoise.py');
-
 async function runDeepFilterNet(inputPath, outputPath, setCurrent) {
+  // deep-filter writes to an output directory, so we use a temp dir
+  const tmpDir = path.join(os.tmpdir(), `audiopro_dfn_${crypto.randomBytes(6).toString('hex')}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+
   return new Promise((resolve, reject) => {
-    const proc = spawn('python3', [DENOISE_SCRIPT, inputPath, outputPath]);
+    const proc = spawn(binPaths.deepFilter(), [
+      inputPath,
+      '-o', tmpDir,
+      '--compensate-delay',
+    ]);
     if (setCurrent) setCurrent(proc);
     let stderr = '';
-    proc.stdout.on('data', chunk => {
-      const line = chunk.toString().trim();
-      // Parse status lines: DFN:loading, DFN:processing:duration, DFN:done:elapsed
-      if (line.startsWith('DFN:')) {
-        const [, status] = line.split(':');
-        // Could emit progress here if needed
-      }
-    });
     proc.stderr.on('data', chunk => { stderr += chunk.toString(); });
     proc.on('close', code => {
       if (setCurrent) setCurrent(null);
-      if (code === 0) resolve();
-      else reject(new Error(`DeepFilterNet failed (code ${code}): ${stderr.slice(-200)}`));
+      if (code !== 0) {
+        try { fs.rmSync(tmpDir, { recursive: true }); } catch { /* ok */ }
+        return reject(new Error(`DeepFilterNet failed (code ${code}): ${stderr.slice(-200)}`));
+      }
+      // deep-filter outputs to tmpDir with the same filename
+      const outName = path.basename(inputPath);
+      const dfnOutput = path.join(tmpDir, outName);
+      try {
+        fs.copyFileSync(dfnOutput, outputPath);
+        fs.rmSync(tmpDir, { recursive: true });
+      } catch (e) {
+        try { fs.rmSync(tmpDir, { recursive: true }); } catch { /* ok */ }
+        return reject(new Error(`DeepFilterNet output not found: ${e.message}`));
+      }
+      resolve();
     });
     proc.on('error', err => {
       if (setCurrent) setCurrent(null);
+      try { fs.rmSync(tmpDir, { recursive: true }); } catch { /* ok */ }
       reject(err);
     });
   });

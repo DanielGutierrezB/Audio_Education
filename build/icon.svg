@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="110" fill="#12121a"/>
+
+  <!-- Outer ring -->
+  <circle cx="256" cy="256" r="192" fill="none" stroke="#4a8fe8" stroke-width="6" opacity="0.25"/>
+
+  <!-- Waveform bars (7 bars, symmetric, voice-like shape) -->
+  <g fill="#4a8fe8">
+    <!-- bar 1 (leftmost) -->
+    <rect x="110" y="220" width="20" height="72" rx="10"/>
+    <!-- bar 2 -->
+    <rect x="148" y="176" width="20" height="160" rx="10"/>
+    <!-- bar 3 -->
+    <rect x="186" y="200" width="20" height="112" rx="10"/>
+    <!-- bar 4 (center, tallest) -->
+    <rect x="246" y="148" width="20" height="216" rx="10"/>
+    <!-- bar 5 -->
+    <rect x="306" y="200" width="20" height="112" rx="10"/>
+    <!-- bar 6 -->
+    <rect x="344" y="176" width="20" height="160" rx="10"/>
+    <!-- bar 7 (rightmost) -->
+    <rect x="382" y="220" width="20" height="72" rx="10"/>
+  </g>
+
+  <!-- Subtle center glow -->
+  <circle cx="256" cy="256" r="30" fill="#4a8fe8" opacity="0.08"/>
+</svg>

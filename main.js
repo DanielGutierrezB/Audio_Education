@@ -86,6 +86,12 @@ ipcMain.handle('pipeline:start', (event, files) => {
   if (pipelineState?.running) return { error: 'Already processing' };
 
   const win = BrowserWindow.fromWebContents(event.sender);
+  const settings = {
+    mode: store.get('processingMode'),
+    lufsTarget: store.get('lufsTarget'),
+    hpfFrequency: store.get('hpfFrequency'),
+    deEsserEnabled: store.get('deEsserEnabled'),
+  };
 
   pipelineState = { running: true, cancelled: false, currentProc: null };
 
@@ -97,6 +103,7 @@ ipcMain.handle('pipeline:start', (event, files) => {
     emit,
     isCancelled: () => pipelineState?.cancelled ?? false,
     setCurrent: proc => { if (pipelineState) pipelineState.currentProc = proc; },
+    settings,
   }).catch(err => {
     emit('error', { error: err.message });
   }).finally(() => {

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>AudioPro</title>
+  <link rel="stylesheet" href="styles/app.css">
+</head>
+<body>
+  <div id="app">
+
+    <header class="titlebar">
+      <div class="titlebar-drag">
+        <nav class="tabs" role="tablist">
+          <button class="tab active" data-tab="processing" role="tab" aria-selected="true"
+            title="Manage folders and process audio files">Processing</button>
+          <button class="tab" data-tab="preview" role="tab" aria-selected="false"
+            title="Compare original vs processed audio">Preview</button>
+          <button class="tab" data-tab="about" role="tab" aria-selected="false"
+            title="About AudioPro and the processing pipeline">About</button>
+        </nav>
+      </div>
+    </header>
+
+    <main class="content">
+
+      <!-- ── Processing View ── -->
+      <section class="view active" id="view-processing" role="tabpanel">
+        <div class="toolbar">
+          <button class="btn btn-secondary" id="btn-add-folders"
+            title="Open a native folder dialog to add folders containing WAV files">
+            <span class="btn-icon">+</span> Add Folders
+          </button>
+          <button class="btn btn-accent" id="btn-process-all" disabled
+            title="Start processing all queued WAV files through the full pipeline">
+            &#9654; Process All
+          </button>
+          <span class="toolbar-spacer"></span>
+          <span class="queue-summary" id="queue-summary"></span>
+        </div>
+
+        <div class="queue-container">
+          <div class="queue-empty" id="queue-empty">
+            <div class="drop-zone-icon">&#128193;</div>
+            <p class="drop-zone-label">Drop folders here</p>
+            <p class="text-muted">or click <strong>Add Folders</strong> to get started</p>
+            <p class="text-muted small">Accepts WAV files &mdash; outputs 24-bit 48kHz podcast quality</p>
+          </div>
+          <div class="queue-list" id="queue-list" hidden></div>
+        </div>
+
+        <div class="progress-bar-section" id="progress-section" hidden>
+          <div class="progress-header">
+            <span class="progress-filename" id="progress-filename">filename.wav</span>
+            <span class="progress-step" id="progress-step">Step 1/5 &middot; Analysis</span>
+          </div>
+          <div class="progress-track" title="Current processing progress">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+          <div class="progress-footer">
+            <span class="progress-percent" id="progress-percent">0%</span>
+            <span class="progress-eta" id="progress-eta">ETA: &mdash;</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Preview View ── -->
+      <section class="view" id="view-preview" role="tabpanel" hidden>
+        <div class="view-empty">
+          <div class="view-empty-icon">&#9654;</div>
+          <p>No processed files yet</p>
+          <p class="text-muted">Process files in the <strong>Processing</strong> tab first,<br>
+            then return here to compare original vs processed audio.</p>
+        </div>
+      </section>
+
+      <!-- ── About View ── -->
+      <section class="view" id="view-about" role="tabpanel" hidden>
+        <div class="about-container">
+          <div class="about-header">
+            <h1>AudioPro <span class="version">v0.1</span></h1>
+            <p class="about-tagline">Drop files, get podcast quality.</p>
+          </div>
+
+          <div class="pipeline-steps">
+            <h2>Processing Pipeline</h2>
+
+            <div class="pipeline-step">
+              <div class="step-number">1</div>
+              <div class="step-body">
+                <h3>Analysis <span class="step-time">~2s</span></h3>
+                <p>Detects format, sample rate, bit depth, channels, duration, voice pitch range, and current loudness (LUFS). Results inform every subsequent step automatically.</p>
+              </div>
+            </div>
+
+            <div class="pipeline-step">
+              <div class="step-number">2</div>
+              <div class="step-body">
+                <h3>Denoising — DeepFilterNet v3 <span class="step-time">~30&ndash;60s / 20min</span></h3>
+                <p>Full-band neural noise suppression at 48kHz. Removes background noise, fans, AC hum, street noise. ARM64 native binary &mdash; runs fast on CPU.</p>
+              </div>
+            </div>
+
+            <div class="pipeline-step">
+              <div class="step-number">3</div>
+              <div class="step-body">
+                <h3>Speech Enhancement — Resemble Enhance <span class="step-time">~3&ndash;5min / 20min</span></h3>
+                <p>AI restoration of speech quality. Removes residual reverb, mic distortion, and compression artifacts. Extends bandwidth and improves clarity. Runs on Apple Silicon GPU (MPS).</p>
+              </div>
+            </div>
+
+            <div class="pipeline-step">
+              <div class="step-number">4</div>
+              <div class="step-body">
+                <h3>EQ &amp; Filters <span class="step-time">~5s</span></h3>
+                <p>High-pass filter at 80Hz removes rumble. Adaptive parametric EQ curve auto-selected from pitch analysis. De-esser attenuates sibilants. De-plosive filter cleans transients below 120Hz.</p>
+              </div>
+            </div>
+
+            <div class="pipeline-step">
+              <div class="step-number">5</div>
+              <div class="step-body">
+                <h3>Dynamics &amp; Output <span class="step-time">~5s</span></h3>
+                <p>Compressor (3:1 ratio, &minus;20dB threshold) controls dynamic range. Limiter sets ceiling at &minus;1dB. Loudness normalization to &minus;16 LUFS &mdash; the podcast/streaming standard. Output: WAV 24-bit 48kHz.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="about-footer">
+            <p class="text-muted">Built for Platzi &mdash; educational audio at scale.</p>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+  <script src="js/app.js"></script>
+</body>
+</html>

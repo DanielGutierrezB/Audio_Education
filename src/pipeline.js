@@ -260,10 +260,7 @@ function calcEta(startMs, done, total) {
 // ── Queue runner ──
 
 async function processQueue(files, { emit, isCancelled, setCurrent, settings = {} }) {
-  const useMLDenoise = settings.mode !== 'fast';
-  const STEP_TOTAL = useMLDenoise ? 5 : 4; // Analysis, [DFN Denoise], Pre-process, EQ Measure, Render
-  const eqChain = buildEqChain(settings);
-  const loudnormBase = buildLoudnormBase(settings.lufsTarget);
+  const { analyzeAudio } = require('./analyzer');
 
   const total = files.length;
   let done = 0;
@@ -277,24 +274,51 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
     let dfnTempPath = null;
 
     try {
-      // Step 1 — Analysis
+      // Step 1 — Smart Analysis
       emit('progress', {
-        file: file.path, step: 'Analysis', stepIndex: 1, stepTotal: STEP_TOTAL,
-        pct: 3, eta: null,
+        file: file.path, step: 'Analyzing audio...', stepIndex: 1, stepTotal: 6,
+        pct: 2, eta: null,
       });
 
-      const meta = await analyzeFile(file.path, setCurrent);
+      // Run deep analysis to determine optimal workflow
+      const { analysis, recommendations } = await analyzeAudio(file.path, (status) => {
+        emit('progress', {
+          file: file.path, step: `Analyzing: ${status}`, stepIndex: 1, stepTotal: 6,
+          pct: 3, eta: null,
+        });
+      });
+
+      // Merge analyzer recommendations with user overrides
+      const fileSettings = { ...recommendations.settings, ...settings };
+      // But let analyzer win on auto-detected things unless user explicitly set them
+      if (settings.mode === 'auto' || !settings.mode) {
+        Object.assign(fileSettings, recommendations.settings);
+      }
+
+      // Emit analysis results for UI
+      emit('analysis', {
+        file: file.path,
+        analysis,
+        recommendations,
+      });
+
       if (isCancelled()) break;
 
-      const duration = meta.duration ?? file.duration ?? null;
+      const duration = analysis.basic.duration ?? file.duration ?? null;
+      const useMLDenoise = fileSettings.mode !== 'fast';
+      const STEP_TOTAL = useMLDenoise ? 6 : 5;
       let stepIdx = 2;
       let pipelineInput = file.path;
 
-      // Step 2 (Quality only) — DeepFilterNet ML Denoise
+      // Build chains from per-file settings
+      const eqChain = buildEqChain(fileSettings);
+      const loudnormBase = buildLoudnormBase(fileSettings.lufsTarget);
+
+      // Step 2 — DeepFilterNet ML Denoise (if recommended)
       if (useMLDenoise) {
         emit('progress', {
           file: file.path, step: 'AI Denoise (DeepFilterNet)', stepIndex: stepIdx, stepTotal: STEP_TOTAL,
-          pct: 5, eta: calcEta(t0, done, total),
+          pct: 8, eta: calcEta(t0, done, total),
         });
 
         dfnTempPath = path.join(os.tmpdir(), `audiopro_dfn_${Date.now()}_${path.basename(file.path)}`);
@@ -303,31 +327,30 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
           await runDeepFilterNet(file.path, dfnTempPath, setCurrent);
           pipelineInput = dfnTempPath;
         } catch (dfnErr) {
-          // Fall back to FFmpeg denoise if DFN fails
           console.warn(`DeepFilterNet failed, falling back to FFmpeg: ${dfnErr.message}`);
+          // Force FFmpeg denoise in pre-process
+          fileSettings.mode = 'fast';
         }
 
         if (isCancelled()) break;
         stepIdx++;
       }
 
-      // Step 3 (or 2 in Fast) — Pre-process (mono + gate + trim)
+      // Step 3 — Pre-process (mono + gate + trim)
       const prepLabel = useMLDenoise ? 'Gate + Trim' : 'Denoise + Gate';
       emit('progress', {
         file: file.path, step: prepLabel, stepIndex: stepIdx, stepTotal: STEP_TOTAL,
-        pct: useMLDenoise ? 25 : 10, eta: calcEta(t0, done + 0.1, total),
+        pct: 25, eta: calcEta(t0, done + 0.1, total),
       });
 
       tempPath = path.join(os.tmpdir(), `audiopro_${Date.now()}_${path.basename(file.path)}`);
 
-      await preprocessFile(pipelineInput, tempPath, settings, duration,
+      await preprocessFile(pipelineInput, tempPath, fileSettings, duration,
         frac => {
           if (isCancelled()) return;
-          const base = useMLDenoise ? 25 : 10;
-          const range = useMLDenoise ? 15 : 30;
           emit('progress', {
             file: file.path, step: prepLabel, stepIndex: stepIdx, stepTotal: STEP_TOTAL,
-            pct: Math.round(base + frac * range),
+            pct: Math.round(25 + frac * 15),
             eta: calcEta(t0, done + frac * 0.2, total),
           });
         }, setCurrent);
@@ -335,10 +358,10 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       if (isCancelled()) break;
       stepIdx++;
 
-      // Step 4 (or 3) — EQ Measure
+      // Step 4 — EQ Measure
       emit('progress', {
         file: file.path, step: 'EQ Measure', stepIndex: stepIdx, stepTotal: STEP_TOTAL,
-        pct: useMLDenoise ? 42 : 42, eta: calcEta(t0, done + 0.3, total),
+        pct: 42, eta: calcEta(t0, done + 0.3, total),
       });
 
       const stats = await measureLoudness(tempPath, duration, eqChain, loudnormBase,
@@ -354,15 +377,15 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       if (isCancelled()) break;
       stepIdx++;
 
-      // Step 5 (or 4) — Render
-      const outputPath = resolveOutputPath(file.path, settings);
+      // Step 5 — Render
+      const outputPath = resolveOutputPath(file.path, fileSettings);
 
       emit('progress', {
         file: file.path, step: 'Render', stepIndex: stepIdx, stepTotal: STEP_TOTAL,
         pct: 64, eta: calcEta(t0, done + 0.5, total),
       });
 
-      await renderFile(tempPath, outputPath, stats, eqChain, loudnormBase, settings, duration,
+      await renderFile(tempPath, outputPath, stats, eqChain, loudnormBase, fileSettings, duration,
         frac => {
           if (isCancelled()) return;
           emit('progress', {

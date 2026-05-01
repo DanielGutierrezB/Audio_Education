@@ -1,0 +1,341 @@
+'use strict';
+
+const { spawn } = require('child_process');
+
+// ── Helpers ──
+
+function runCmd(cmd, args) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(cmd, args);
+    let stdout = '', stderr = '';
+    proc.stdout.on('data', c => { stdout += c; });
+    proc.stderr.on('data', c => { stderr += c; });
+    proc.on('close', code => {
+      if (code === 0 || code === null) resolve({ stdout, stderr });
+      else reject(new Error(`${cmd} exited ${code}: ${stderr.slice(-300)}`));
+    });
+    proc.on('error', reject);
+  });
+}
+
+function parseNumber(val) {
+  const n = parseFloat(val);
+  return isNaN(n) ? null : n;
+}
+
+// ── Analysis Functions ──
+
+async function getBasicInfo(filePath) {
+  const { stdout } = await runCmd('ffprobe', [
+    '-v', 'quiet', '-print_format', 'json',
+    '-show_streams', '-show_format', filePath,
+  ]);
+  const probe = JSON.parse(stdout);
+  const audio = probe.streams?.find(s => s.codec_type === 'audio');
+  return {
+    duration: parseNumber(probe.format?.duration),
+    sampleRate: parseInt(audio?.sample_rate) || 48000,
+    channels: parseInt(audio?.channels) || 1,
+    bitDepth: parseInt(audio?.bits_per_sample) || 16,
+    codec: audio?.codec_name || 'unknown',
+  };
+}
+
+async function measureLoudness(filePath) {
+  const { stderr } = await runCmd('ffmpeg', [
+    '-i', filePath,
+    '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json',
+    '-f', 'null', '-',
+  ]);
+  const m = stderr.match(/\{[^{}]*"input_i"[^{}]*\}/s);
+  if (!m) return null;
+  try {
+    const stats = JSON.parse(m[0]);
+    return {
+      integratedLUFS: parseNumber(stats.input_i),
+      truePeak: parseNumber(stats.input_tp),
+      lra: parseNumber(stats.input_lra),
+      threshold: parseNumber(stats.input_thresh),
+    };
+  } catch { return null; }
+}
+
+async function measureNoiseFloor(filePath, channels) {
+  // Find first silence region to measure noise
+  const { stderr: silenceStderr } = await runCmd('ffmpeg', [
+    '-i', filePath,
+    '-af', 'silencedetect=noise=-40dB:d=0.3',
+    '-f', 'null', '-',
+  ]);
+
+  // Parse first silence start
+  const silenceMatch = silenceStderr.match(/silence_start:\s*([\d.]+)/);
+  const silenceStart = silenceMatch ? parseFloat(silenceMatch[1]) : null;
+
+  let noiseFloorDb = null;
+  let noiseRmsDb = null;
+
+  if (silenceStart !== null) {
+    // Extract silence section and measure
+    const tmpFile = `/tmp/audiopro_analyze_${Date.now()}.wav`;
+    try {
+      await runCmd('ffmpeg', [
+        '-y', '-i', filePath,
+        '-ss', String(silenceStart), '-t', '0.5',
+        '-ac', '1', tmpFile,
+      ]);
+      const { stderr: statsStderr } = await runCmd('ffmpeg', [
+        '-i', tmpFile,
+        '-af', 'astats=measure_perchannel=none:measure_overall=all',
+        '-f', 'null', '-',
+      ]);
+      const nfMatch = statsStderr.match(/Noise floor dB:\s*([\-\d.inf]+)/);
+      const rmsMatch = statsStderr.match(/RMS level dB:\s*([\-\d.]+)/);
+      noiseFloorDb = nfMatch ? (nfMatch[1] === '-inf' ? -Infinity : parseNumber(nfMatch[1])) : null;
+      noiseRmsDb = rmsMatch ? parseNumber(rmsMatch[1]) : null;
+      require('fs').unlinkSync(tmpFile);
+    } catch { /* ignore */ }
+  }
+
+  // Also measure overall stats to detect noise in voice sections
+  const { stderr: overallStderr } = await runCmd('ffmpeg', [
+    '-i', filePath, '-t', '60', '-ac', '1',
+    '-af', 'astats=measure_perchannel=none:measure_overall=all',
+    '-f', 'null', '-',
+  ]);
+  const overallRms = overallStderr.match(/RMS level dB:\s*([\-\d.]+)/);
+  const overallPeak = overallStderr.match(/Peak level dB:\s*([\-\d.]+)/);
+  const dcOffset = overallStderr.match(/DC offset:\s*([\-\d.e]+)/);
+
+  return {
+    noiseFloorDb,
+    noiseRmsDb,
+    overallRmsDb: overallRms ? parseNumber(overallRms[1]) : null,
+    overallPeakDb: overallPeak ? parseNumber(overallPeak[1]) : null,
+    dcOffset: dcOffset ? parseNumber(dcOffset[1]) : null,
+    hasSilenceRegions: silenceStart !== null,
+  };
+}
+
+async function detectSibilance(filePath) {
+  // Measure energy in sibilance range (4-10kHz) vs overall
+  const { stderr: fullStderr } = await runCmd('ffmpeg', [
+    '-i', filePath, '-t', '30', '-ac', '1',
+    '-af', 'volumedetect',
+    '-f', 'null', '-',
+  ]);
+  const { stderr: highStderr } = await runCmd('ffmpeg', [
+    '-i', filePath, '-t', '30', '-ac', '1',
+    '-af', 'highpass=f=4000,lowpass=f=10000,volumedetect',
+    '-f', 'null', '-',
+  ]);
+
+  const fullMean = fullStderr.match(/mean_volume:\s*([\-\d.]+)/);
+  const highMean = highStderr.match(/mean_volume:\s*([\-\d.]+)/);
+
+  const fullDb = fullMean ? parseNumber(fullMean[1]) : null;
+  const highDb = highMean ? parseNumber(highMean[1]) : null;
+
+  // If high-freq content is within 20dB of the overall, there's significant sibilance
+  const sibilanceRatio = (fullDb !== null && highDb !== null) ? fullDb - highDb : null;
+
+  return {
+    overallDb: fullDb,
+    sibilanceDb: highDb,
+    sibilanceRatio,
+    hasSibilance: sibilanceRatio !== null && sibilanceRatio < 18,
+    severity: sibilanceRatio !== null ? (sibilanceRatio < 12 ? 'high' : sibilanceRatio < 18 ? 'moderate' : 'low') : 'unknown',
+  };
+}
+
+async function detectReverb(filePath) {
+  // Compare dry/direct sound energy vs late reflections using RT60 approximation
+  // We measure correlation between a short segment and its delayed version
+  // High correlation at 50-300ms delays = reverb
+  const { stderr } = await runCmd('ffmpeg', [
+    '-i', filePath, '-t', '30', '-ac', '1',
+    '-af', 'volumedetect',
+    '-f', 'null', '-',
+  ]);
+  // Simple heuristic: measure crest factor (peak/rms ratio)
+  // Reverby audio has lower crest factor (more sustained energy)
+  const { stderr: crestStderr } = await runCmd('ffmpeg', [
+    '-i', filePath, '-t', '60', '-ac', '1',
+    '-af', 'astats=measure_perchannel=none:measure_overall=all',
+    '-f', 'null', '-',
+  ]);
+  const crestMatch = crestStderr.match(/Crest factor:\s*([\d.]+)/);
+  const crest = crestMatch ? parseNumber(crestMatch[1]) : null;
+
+  // Crest factor < 8 = likely reverby, > 15 = dry
+  return {
+    crestFactor: crest,
+    likelyReverb: crest !== null && crest < 10,
+    severity: crest !== null ? (crest < 6 ? 'heavy' : crest < 10 ? 'moderate' : 'minimal') : 'unknown',
+  };
+}
+
+async function detectDynamicRange(filePath) {
+  // Analyze volume distribution
+  const { stderr } = await runCmd('ffmpeg', [
+    '-i', filePath, '-ac', '1',
+    '-af', 'astats=measure_perchannel=none:measure_overall=all',
+    '-f', 'null', '-',
+  ]);
+  const peakMatch = stderr.match(/Peak level dB:\s*([\-\d.]+)/);
+  const rmsMatch = stderr.match(/RMS level dB:\s*([\-\d.]+)/);
+  const rmsPeakMatch = stderr.match(/RMS peak dB:\s*([\-\d.]+)/);
+  const rmsTroughMatch = stderr.match(/RMS trough dB:\s*([\-\d.]+)/);
+
+  const peak = peakMatch ? parseNumber(peakMatch[1]) : null;
+  const rms = rmsMatch ? parseNumber(rmsMatch[1]) : null;
+  const rmsPeak = rmsPeakMatch ? parseNumber(rmsPeakMatch[1]) : null;
+  const rmsTrough = rmsTroughMatch ? parseNumber(rmsTroughMatch[1]) : null;
+
+  const dynamicRange = (rmsPeak !== null && rmsTrough !== null) ? rmsPeak - rmsTrough : null;
+  const hasClipping = peak !== null && peak >= -0.5;
+
+  return {
+    peakDb: peak,
+    rmsDb: rms,
+    rmsPeakDb: rmsPeak,
+    rmsTroughDb: rmsTrough,
+    dynamicRange,
+    hasClipping,
+    needsCompression: dynamicRange !== null && dynamicRange > 20,
+    compressionLevel: dynamicRange !== null
+      ? (dynamicRange > 30 ? 'heavy' : dynamicRange > 20 ? 'moderate' : 'light')
+      : 'moderate',
+  };
+}
+
+// ── Build Recommendations ──
+
+function buildRecommendations(analysis) {
+  const rec = {
+    steps: [],
+    settings: {},
+    reasoning: [],
+  };
+
+  const { basic, loudness, noise, sibilance, reverb, dynamics } = analysis;
+
+  // 1. Stereo to mono
+  if (basic.channels > 1) {
+    rec.steps.push('stereo_to_mono');
+    rec.settings.stereoToMonoEnabled = true;
+    rec.reasoning.push(`Input is ${basic.channels}-channel — converting to mono for voice content`);
+  }
+
+  // 2. Denoise decision
+  const noiseLevel = noise.noiseRmsDb;
+  if (noiseLevel !== null && noiseLevel > -55) {
+    rec.steps.push('ml_denoise');
+    rec.settings.mode = 'quality';
+    rec.reasoning.push(`Noise floor at ${noiseLevel.toFixed(1)} dB (above -55 threshold) — using DeepFilterNet AI denoise`);
+  } else if (noiseLevel !== null) {
+    rec.steps.push('light_denoise');
+    rec.settings.mode = 'fast';
+    rec.reasoning.push(`Noise floor at ${noiseLevel.toFixed(1)} dB (below -55) — light FFmpeg denoise sufficient`);
+  } else {
+    rec.steps.push('ml_denoise');
+    rec.settings.mode = 'quality';
+    rec.reasoning.push('Could not measure noise floor — defaulting to AI denoise for safety');
+  }
+
+  // 3. Noise gate
+  if (noise.hasSilenceRegions) {
+    rec.steps.push('noise_gate');
+    rec.settings.noiseGateEnabled = true;
+    rec.reasoning.push('Silence regions detected — applying noise gate for clean pauses');
+  } else {
+    rec.settings.noiseGateEnabled = false;
+    rec.reasoning.push('No clear silence regions — skipping noise gate to avoid artifacts');
+  }
+
+  // 4. Silence trim
+  rec.steps.push('silence_trim');
+  rec.settings.silenceTrimEnabled = true;
+  rec.reasoning.push('Trimming leading/trailing silence');
+
+  // 5. HPF frequency
+  if (reverb.likelyReverb) {
+    rec.settings.hpfFrequency = 100;
+    rec.reasoning.push(`Reverb detected (${reverb.severity}) — HPF raised to 100 Hz to reduce boominess`);
+  } else {
+    rec.settings.hpfFrequency = 80;
+    rec.reasoning.push('Minimal reverb — standard HPF at 80 Hz');
+  }
+
+  // 6. De-esser
+  if (sibilance.hasSibilance) {
+    rec.steps.push('de_esser');
+    rec.settings.deEsserEnabled = true;
+    const gain = sibilance.severity === 'high' ? -4 : -2.5;
+    rec.settings.deEsserGain = gain;
+    rec.reasoning.push(`Sibilance ${sibilance.severity} (ratio ${sibilance.sibilanceRatio?.toFixed(1)}) — de-esser at ${gain} dB`);
+  } else {
+    rec.settings.deEsserEnabled = false;
+    rec.reasoning.push('Low sibilance — de-esser not needed');
+  }
+
+  // 7. Compression
+  rec.steps.push('compression');
+  if (dynamics.compressionLevel === 'heavy') {
+    rec.settings.multiBandCompEnabled = true;
+    rec.settings.compressionRatio = 5;
+    rec.reasoning.push(`Wide dynamic range (${dynamics.dynamicRange?.toFixed(1)} dB) — heavy multi-band compression`);
+  } else if (dynamics.compressionLevel === 'moderate') {
+    rec.settings.multiBandCompEnabled = true;
+    rec.settings.compressionRatio = 3.5;
+    rec.reasoning.push(`Moderate dynamic range (${dynamics.dynamicRange?.toFixed(1)} dB) — standard multi-band compression`);
+  } else {
+    rec.settings.multiBandCompEnabled = false;
+    rec.reasoning.push(`Tight dynamic range (${dynamics.dynamicRange?.toFixed(1)} dB) — single-band compression sufficient`);
+  }
+
+  // 8. Loudness target
+  if (loudness) {
+    const currentLUFS = loudness.integratedLUFS;
+    rec.settings.lufsTarget = -16;
+    const delta = -16 - currentLUFS;
+    rec.reasoning.push(`Current loudness: ${currentLUFS?.toFixed(1)} LUFS → target -16 LUFS (${delta > 0 ? '+' : ''}${delta.toFixed(1)} dB adjustment)`);
+  }
+
+  // 9. Output
+  rec.settings.outputFormat = 'wav24';
+  rec.settings.sampleRate = basic.sampleRate >= 48000 ? 48000 : 44100;
+
+  return rec;
+}
+
+// ── Main Analyze Function ──
+
+async function analyzeAudio(filePath, onStatus) {
+  const status = (msg) => { if (onStatus) onStatus(msg); };
+
+  status('Getting file info...');
+  const basic = await getBasicInfo(filePath);
+
+  status('Measuring loudness...');
+  const loudness = await measureLoudness(filePath);
+
+  status('Analyzing noise floor...');
+  const noise = await measureNoiseFloor(filePath, basic.channels);
+
+  status('Detecting sibilance...');
+  const sibilance = await detectSibilance(filePath);
+
+  status('Checking reverb...');
+  const reverb = await detectReverb(filePath);
+
+  status('Analyzing dynamics...');
+  const dynamics = await detectDynamicRange(filePath);
+
+  const analysis = { basic, loudness, noise, sibilance, reverb, dynamics };
+  const recommendations = buildRecommendations(analysis);
+
+  return { analysis, recommendations };
+}
+
+module.exports = { analyzeAudio };

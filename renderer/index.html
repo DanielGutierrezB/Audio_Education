@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; media-src 'self' file:">
   <title>AudioPro</title>
   <link rel="stylesheet" href="styles/app.css">
 </head>
@@ -214,61 +214,56 @@
 
       <!-- ── Preview View ── -->
       <section class="view" id="view-preview" role="tabpanel" hidden>
-        <div class="view-empty" id="preview-empty">
-          <div class="view-empty-icon">&#9654;</div>
-          <p>No processed files yet</p>
-          <p class="text-muted">Process files in <strong>Processing</strong> first, then come back to compare.</p>
+
+        <!-- Processed files list -->
+        <div class="preview-file-list" id="preview-file-list">
+          <div class="preview-file-list-empty" id="preview-list-empty">
+            <span class="text-muted">No processed files yet &mdash; process files first</span>
+          </div>
         </div>
 
-        <div class="preview-content" id="preview-content" hidden>
-
-          <!-- Top bar: file selector + A/B toggle -->
-          <div class="preview-topbar">
-            <label for="preview-file-select" class="preview-select-label">File</label>
-            <select id="preview-file-select" title="Choose a file to preview"></select>
-            <span class="preview-topbar-spacer"></span>
-            <div class="ab-toggle">
-              <button class="ab-btn active" id="ab-original" title="Listen to original recording (A)">Original</button>
-              <button class="ab-btn" id="ab-processed" title="Listen to processed audio (A to toggle)">Processed</button>
-            </div>
+        <!-- A/B toggle bar -->
+        <div class="preview-topbar" id="preview-topbar" hidden>
+          <div class="ab-toggle">
+            <button class="ab-btn active" id="ab-original" title="Listen to original recording (A)">Original</button>
+            <button class="ab-btn" id="ab-processed" title="Listen to processed audio (A to toggle)">Processed</button>
           </div>
+        </div>
 
-          <!-- Waveform — full width, tall -->
-          <div class="preview-waveform-section">
-            <div class="preview-waveform-wrap" id="preview-waveform-wrap">
-              <canvas id="preview-waveform"></canvas>
-              <div class="preview-waveform-loading" id="preview-loading" hidden>Loading waveform&hellip;</div>
-            </div>
+        <!-- Waveform — full width, takes remaining space -->
+        <div class="preview-waveform-section">
+          <div class="preview-waveform-wrap" id="preview-waveform-wrap">
+            <canvas id="preview-waveform"></canvas>
+            <div class="preview-waveform-loading" id="preview-loading" hidden>Loading waveform&hellip;</div>
           </div>
+        </div>
 
-          <!-- Transport controls -->
-          <div class="preview-transport">
-            <div class="transport-time">
-              <span id="preview-current-time" class="time-mono">0:00</span>
-              <span class="time-sep">/</span>
-              <span id="preview-total-time" class="time-mono">0:00</span>
-            </div>
-            <div class="transport-buttons">
-              <button class="btn-transport" id="btn-skip-back" title="Skip back 5 seconds (&#8592;)">
-                &#9664;&#9664; 5s
-              </button>
-              <button class="btn-transport btn-transport-play" id="btn-play-main" title="Play / Pause (Space)">
-                &#9654;
-              </button>
-              <button class="btn-transport" id="btn-stop-main" title="Stop and return to start (S)">
-                &#9632;
-              </button>
-              <button class="btn-transport" id="btn-skip-fwd" title="Skip forward 5 seconds (&#8594;)">
-                5s &#9654;&#9654;
-              </button>
-            </div>
-            <div class="transport-volume">
-              <span class="volume-icon" title="Volume">&#128266;</span>
-              <input type="range" id="preview-volume" class="volume-slider"
-                min="0" max="1" step="0.01" value="1" title="Volume" aria-label="Volume">
-            </div>
+        <!-- Transport controls -->
+        <div class="preview-transport">
+          <div class="transport-time">
+            <span id="preview-current-time" class="time-mono">0:00</span>
+            <span class="time-sep">/</span>
+            <span id="preview-total-time" class="time-mono">0:00</span>
           </div>
-
+          <div class="transport-buttons">
+            <button class="btn-transport" id="btn-skip-back" title="Skip back 5 seconds (&#8592;)">
+              &#9664;&#9664; 5s
+            </button>
+            <button class="btn-transport btn-transport-play" id="btn-play-main" title="Play / Pause (Space)">
+              &#9654;
+            </button>
+            <button class="btn-transport" id="btn-stop-main" title="Stop and return to start (S)">
+              &#9632;
+            </button>
+            <button class="btn-transport" id="btn-skip-fwd" title="Skip forward 5 seconds (&#8594;)">
+              5s &#9654;&#9654;
+            </button>
+          </div>
+          <div class="transport-volume">
+            <span class="volume-icon" title="Volume">&#128266;</span>
+            <input type="range" id="preview-volume" class="volume-slider"
+              min="0" max="1" step="0.01" value="1" title="Volume" aria-label="Volume">
+          </div>
         </div>
 
         <audio id="audio-player" preload="none"></audio>

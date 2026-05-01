@@ -18,7 +18,7 @@
   "build": {
     "appId": "com.platzi.audiopro",
     "productName": "AudioPro",
-    "icon": "build/icons/512x512.png",
+    "icon": "build/icon.icns",
     "files": [
       "main.js",
       "preload.js",
@@ -30,22 +30,37 @@
       {
         "from": "bin/",
         "to": "bin",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "mac": {
       "category": "public.app-category.music",
       "darkModeSupport": true,
       "target": [
-        { "target": "dmg", "arch": ["arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
       ]
     },
     "dmg": {
       "title": "AudioPro ${version}",
       "background": null,
       "contents": [
-        { "x": 130, "y": 220 },
-        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
       ]
     }
   }

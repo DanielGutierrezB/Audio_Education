@@ -702,9 +702,9 @@ btnProcessAll.addEventListener('click', () => {
 });
 
 // ── Preview ──
-const previewEmpty   = document.getElementById('preview-empty');
-const previewContent = document.getElementById('preview-content');
-const previewSelect  = document.getElementById('preview-file-select');
+const previewFileList = document.getElementById('preview-file-list');
+const previewListEmpty = document.getElementById('preview-list-empty');
+const previewTopbar   = document.getElementById('preview-topbar');
 const audioPlayer    = document.getElementById('audio-player');
 const abOriginal     = document.getElementById('ab-original');
 const abProcessed    = document.getElementById('ab-processed');
@@ -733,47 +733,57 @@ let waveformImageData = null;
 // RAF handle
 let rafId = null;
 
+// Preview file entries: [{ filePath, outputPath, name, folder }]
+const previewFiles = [];
+
 function addToPreviewSelector(filePath, outputPath) {
-  previewEmpty.hidden = true;
-  previewContent.hidden = false;
+  previewTopbar.hidden = false;
+  if (previewListEmpty) previewListEmpty.hidden = true;
 
-  // Check if already in selector
-  for (const opt of previewSelect.options) {
-    if (opt.value === filePath) { opt.dataset.outputPath = outputPath; return; }
-  }
+  // Check if already added
+  const existing = previewFiles.find(f => f.filePath === filePath);
+  if (existing) { existing.outputPath = outputPath; return; }
 
-  const opt = document.createElement('option');
-  opt.value = filePath;
-  opt.textContent = filePath.split('/').pop();
-  opt.dataset.outputPath = outputPath;
-  previewSelect.appendChild(opt);
+  const name = filePath.split('/').pop();
+  const parts = filePath.split('/');
+  const folder = parts.length >= 2 ? parts[parts.length - 2] : '';
+  previewFiles.push({ filePath, outputPath, name, folder });
 
-  if (previewSelect.options.length === 1) loadPreviewFile(filePath, outputPath);
+  const item = document.createElement('div');
+  item.className = 'preview-file-item';
+  item.dataset.filePath = filePath;
+  item.dataset.outputPath = outputPath;
+  item.innerHTML = `<span class="preview-file-icon">✓</span>`
+    + `<span class="preview-file-name">${name}</span>`
+    + (folder ? `<span class="preview-file-folder">${folder}</span>` : '');
+  item.addEventListener('click', () => selectPreviewItem(item));
+  previewFileList.appendChild(item);
+
+  if (previewFiles.length === 1) selectPreviewItem(item);
+}
+
+function selectPreviewItem(item) {
+  // Deselect all
+  previewFileList.querySelectorAll('.preview-file-item').forEach(el => el.classList.remove('active'));
+  item.classList.add('active');
+  loadPreviewFile(item.dataset.filePath, item.dataset.outputPath);
 }
 
 function selectPreviewFile(filePath) {
-  for (let i = 0; i < previewSelect.options.length; i++) {
-    if (previewSelect.options[i].value === filePath) {
-      previewSelect.selectedIndex = i;
-      const opt = previewSelect.options[i];
-      loadPreviewFile(opt.value, opt.dataset.outputPath);
-      return;
-    }
-  }
+  const item = previewFileList.querySelector(`.preview-file-item[data-file-path="${CSS.escape(filePath)}"]`);
+  if (item) selectPreviewItem(item);
 }
 
-previewSelect.addEventListener('change', () => {
-  const opt = previewSelect.selectedOptions[0];
-  if (opt) loadPreviewFile(opt.value, opt.dataset.outputPath);
-});
+let currentPreviewOriginal = null;
+let currentPreviewOutput = null;
 
 async function loadPreviewFile(filePath, outputPath) {
   cancelAnimationFrame(rafId);
   audioPlayer.pause();
   audioPlayer.src = '';
 
-  previewSelect._originalPath = filePath;
-  previewSelect._outputPath = outputPath;
+  currentPreviewOriginal = filePath;
+  currentPreviewOutput = outputPath;
 
   currentTimeEl.textContent = '0:00';
   totalTimeEl.textContent = '0:00';
@@ -799,8 +809,8 @@ async function switchAB(mode) {
   abOriginal.classList.toggle('active', mode === 'original');
   abProcessed.classList.toggle('active', mode === 'processed');
 
-  const filePath   = previewSelect._originalPath;
-  const outputPath = previewSelect._outputPath;
+  const filePath   = currentPreviewOriginal;
+  const outputPath = currentPreviewOutput;
   if (!filePath) return;
 
   const src = mode === 'original' ? filePath : outputPath;
@@ -844,7 +854,14 @@ async function loadWaveform(filePath) {
   waveformImageData = null;
 
   sizePreviewCanvas();
-  const numPeaks = previewCanvas.width;
+  let numPeaks = previewCanvas.width;
+  // Canvas may be 0-width if the view isn't visible yet — retry after a frame
+  if (numPeaks < 10) {
+    await new Promise(r => requestAnimationFrame(r));
+    sizePreviewCanvas();
+    numPeaks = previewCanvas.width;
+  }
+  if (numPeaks < 10) numPeaks = 800; // fallback
 
   let peaks = waveformCache.get(filePath);
   if (!peaks && window.api) {
@@ -1042,9 +1059,8 @@ const resizeObserver = new ResizeObserver(() => {
   if (activeView?.id === 'view-preview' && waveformImageData) {
     sizePreviewCanvas();
     // Reload waveform for current file
-    const opt = previewSelect.selectedOptions[0];
-    if (opt) {
-      const src = previewMode === 'original' ? opt.value : opt.dataset.outputPath;
+    if (currentPreviewOriginal) {
+      const src = previewMode === 'original' ? currentPreviewOriginal : currentPreviewOutput;
       if (src) loadWaveform(src);
     }
   }

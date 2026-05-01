@@ -13,4 +13,13 @@ contextBridge.exposeInMainWorld('api', {
   ffprobe: {
     getMetadata: (filePath) => ipcRenderer.invoke('ffprobe:metadata', filePath),
   },
+  pipeline: {
+    start: (files) => ipcRenderer.invoke('pipeline:start', files),
+    cancel: () => ipcRenderer.invoke('pipeline:cancel'),
+    onEvent: (cb) => {
+      const handler = (_, event) => cb(event);
+      ipcRenderer.on('pipeline:event', handler);
+      return () => ipcRenderer.removeListener('pipeline:event', handler);
+    },
+  },
 });

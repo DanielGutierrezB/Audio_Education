@@ -225,8 +225,135 @@ queueContainer.addEventListener('drop', async e => {
   if (paths.length) await processFolderPaths(paths);
 });
 
+// ── Progress bar refs ──
+const progressSection  = document.getElementById('progress-section');
+const progressFilename = document.getElementById('progress-filename');
+const progressStep     = document.getElementById('progress-step');
+const progressFill     = document.getElementById('progress-fill');
+const progressPercent  = document.getElementById('progress-percent');
+const progressEta      = document.getElementById('progress-eta');
+
+// ── Processing state ──
+let processing = false;
+let unsubPipeline = null;
+
+function formatEta(seconds) {
+  if (seconds == null || isNaN(seconds) || seconds < 0) return '—';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function setProgress(pct, step, stepIndex, stepTotal, filename, eta) {
+  progressFill.style.width = `${pct}%`;
+  progressPercent.textContent = `${pct}%`;
+  progressStep.textContent = `Step ${stepIndex}/${stepTotal} · ${step}`;
+  if (filename) progressFilename.textContent = filename;
+  progressEta.textContent = `ETA: ${formatEta(eta)}`;
+}
+
+function patchFileStatus(filePath, status) {
+  for (const el of queueList.querySelectorAll('.file-item')) {
+    if (el.dataset.filePath === filePath) {
+      const span = el.querySelector('.file-status');
+      span.className = `file-status status-${status}`;
+      span.textContent = statusLabel(status);
+      return;
+    }
+  }
+}
+
+function startProcessing() {
+  if (processing || !window.api) return;
+  processing = true;
+
+  // Collect all files from queue
+  const files = [];
+  for (const [, group] of queue) {
+    for (const file of group.files) {
+      if (file.status !== 'done') files.push({ path: file.path, duration: file.duration });
+    }
+  }
+  if (!files.length) { processing = false; return; }
+
+  btnProcessAll.textContent = 'Cancel';
+  btnProcessAll.classList.replace('btn-accent', 'btn-secondary');
+  btnAddFolders.disabled = true;
+
+  progressSection.hidden = false;
+  setProgress(0, 'Starting…', 1, 3, files[0].path.split('/').pop(), null);
+
+  unsubPipeline = window.api.pipeline.onEvent(handlePipelineEvent);
+
+  window.api.pipeline.start(files).catch(err => {
+    console.error('Pipeline start error:', err);
+    finishProcessing();
+  });
+}
+
+function cancelProcessing() {
+  if (!processing || !window.api) return;
+  window.api.pipeline.cancel();
+  finishProcessing();
+}
+
+function finishProcessing() {
+  processing = false;
+  if (unsubPipeline) { unsubPipeline(); unsubPipeline = null; }
+
+  btnProcessAll.textContent = '▶ Process All';
+  btnProcessAll.classList.replace('btn-secondary', 'btn-accent');
+  btnAddFolders.disabled = false;
+
+  progressSection.hidden = true;
+}
+
+function handlePipelineEvent(event) {
+  const filename = event.file ? event.file.split('/').pop() : '';
+
+  switch (event.type) {
+    case 'file:start':
+      patchFileStatus(event.file, 'processing');
+      break;
+
+    case 'progress':
+      setProgress(event.pct, event.step, event.stepIndex, event.stepTotal, filename, event.eta);
+      break;
+
+    case 'file:done':
+      patchFileStatus(event.file, 'done');
+      // update queue state
+      for (const [, group] of queue) {
+        const f = group.files.find(f => f.path === event.file);
+        if (f) f.status = 'done';
+      }
+      break;
+
+    case 'file:error':
+      patchFileStatus(event.file, 'error');
+      for (const [, group] of queue) {
+        const f = group.files.find(f => f.path === event.file);
+        if (f) f.status = 'error';
+      }
+      break;
+
+    case 'batch:done':
+      finishProcessing();
+      break;
+
+    case 'error':
+      console.error('Pipeline error:', event.error);
+      finishProcessing();
+      break;
+  }
+}
+
 // ── Event listeners ──
 btnAddFolders.addEventListener('click', addFoldersViaDialog);
+btnProcessAll.addEventListener('click', () => {
+  if (processing) cancelProcessing();
+  else startProcessing();
+});
 
 // ── Init ──
 loadPrefs();

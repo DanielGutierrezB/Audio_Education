@@ -1,8 +1,9 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const Store = require('electron-store');
+const pipeline = require('./src/pipeline');
 
 const store = new Store({
   defaults: {
@@ -74,6 +75,49 @@ ipcMain.handle('folders:scan', (_, folderPath) => {
       });
   } catch {
     return [];
+  }
+});
+
+// ── Pipeline ──
+
+let pipelineState = null;
+
+ipcMain.handle('pipeline:start', (event, files) => {
+  if (pipelineState?.running) return { error: 'Already processing' };
+
+  const win = BrowserWindow.fromWebContents(event.sender);
+
+  pipelineState = { running: true, cancelled: false, currentProc: null };
+
+  const emit = (type, data) => {
+    if (!win.isDestroyed()) win.webContents.send('pipeline:event', { type, ...data });
+  };
+
+  pipeline.processQueue(files, {
+    emit,
+    isCancelled: () => pipelineState?.cancelled ?? false,
+    setCurrent: proc => { if (pipelineState) pipelineState.currentProc = proc; },
+  }).catch(err => {
+    emit('error', { error: err.message });
+  }).finally(() => {
+    const state = pipelineState;
+    pipelineState = null;
+    if (!state?.cancelled && Notification.isSupported()) {
+      const done = files.length;
+      new Notification({
+        title: 'AudioPro',
+        body: `Processing complete — ${done} file${done !== 1 ? 's' : ''} saved to Audio_Pro/`,
+      }).show();
+    }
+  });
+
+  return { ok: true };
+});
+
+ipcMain.handle('pipeline:cancel', () => {
+  if (pipelineState) {
+    pipelineState.cancelled = true;
+    pipelineState.currentProc?.kill();
   }
 });
 

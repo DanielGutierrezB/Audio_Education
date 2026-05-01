@@ -9,15 +9,18 @@ const os = require('os');
 
 const DENOISE_CHAIN = 'afftdn=nf=-25:tn=1';
 
-function buildEqChain(hpfFreq) {
+function buildEqChain(hpfFreq, deEsser) {
   const f = hpfFreq ?? 80;
-  return [
+  const filters = [
     `highpass=f=${f}:poles=2`,
     'equalizer=f=300:width_type=o:width=1.5:g=-2',
     'equalizer=f=2500:width_type=o:width=1.5:g=2',
-    'equalizer=f=6000:width_type=h:width=4000:g=-3',
     'equalizer=f=12000:width_type=o:width=2:g=1',
-  ].join(',');
+  ];
+  if (deEsser !== false) {
+    filters.splice(3, 0, 'equalizer=f=6000:width_type=h:width=4000:g=-3');
+  }
+  return filters.join(',');
 }
 
 const DYNAMICS_CHAIN = [
@@ -172,7 +175,7 @@ function calcEta(startMs, done, total) {
 async function processQueue(files, { emit, isCancelled, setCurrent, settings = {} }) {
   const denoise = settings.mode !== 'fast';
   const STEP_TOTAL = denoise ? 4 : 3;
-  const eqChain = buildEqChain(settings.hpfFrequency);
+  const eqChain = buildEqChain(settings.hpfFrequency, settings.deEsserEnabled);
   const loudnormBase = buildLoudnormBase(settings.lufsTarget);
 
   const total = files.length;

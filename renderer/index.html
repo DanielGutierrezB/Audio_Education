@@ -32,7 +32,7 @@
       <section class="view active" id="view-processing" role="tabpanel">
         <div class="toolbar">
           <button class="btn btn-secondary" id="btn-add-folders"
-            title="Open a native folder dialog to add folders containing WAV files">
+            title="Open a native folder dialog to add folders containing WAV files (or drag folders onto the list below)">
             <span class="btn-icon">+</span> Add Folders
           </button>
           <button class="btn btn-accent" id="btn-process-all" disabled
@@ -41,9 +41,49 @@
           </button>
           <span class="toolbar-spacer"></span>
           <span class="queue-summary" id="queue-summary"></span>
-          <div class="mode-toggle" title="Quality: includes afftdn noise reduction (~30s extra per file). Fast: skip denoising for quick turnaround.">
+          <div class="mode-toggle" title="Quality: includes afftdn noise reduction. Fast: skip denoising for quicker turnaround.">
             <button class="mode-btn" id="mode-quality" data-mode="quality">Quality</button>
             <button class="mode-btn" id="mode-fast" data-mode="fast">Fast</button>
+          </div>
+          <button class="btn btn-icon-only" id="btn-settings"
+            title="Open audio processing settings (LUFS target, HPF frequency, de-esser)"
+            aria-expanded="false">&#9881;</button>
+        </div>
+
+        <!-- Settings panel (collapsed by default) -->
+        <div class="settings-panel" id="settings-panel" hidden>
+          <div class="settings-grid">
+            <label class="settings-label" for="set-lufs"
+              title="Target integrated loudness. -14 LUFS for streaming platforms (Spotify, YouTube), -16 LUFS for podcasts, -20 LUFS for headroom-heavy broadcasts.">
+              LUFS Target
+            </label>
+            <div class="settings-control-row">
+              <input type="range" id="set-lufs" min="-20" max="-14" step="1" value="-16"
+                title="Drag to set target loudness. -14 = streaming, -16 = podcast standard, -20 = broadcast.">
+              <span class="settings-value" id="lufs-value">-16 LUFS</span>
+            </div>
+
+            <label class="settings-label" for="set-hpf"
+              title="High-pass filter cutoff. Removes everything below this frequency. 60 Hz for music-adjacent content, 80 Hz for voice (default), 120 Hz for very clean microphones.">
+              HPF Frequency
+            </label>
+            <div class="settings-control-row">
+              <input type="range" id="set-hpf" min="60" max="120" step="5" value="80"
+                title="Drag to set the high-pass filter cutoff frequency in Hz.">
+              <span class="settings-value" id="hpf-value">80 Hz</span>
+            </div>
+
+            <label class="settings-label" for="set-deesser"
+              title="De-esser reduces harsh sibilance (S, Sh, Ch sounds) in the 5-7 kHz range. Disable if the voice sounds too dull.">
+              De-esser
+            </label>
+            <div class="settings-control-row">
+              <label class="toggle" title="Toggle de-esser on or off">
+                <input type="checkbox" id="set-deesser" checked>
+                <span class="toggle-track"></span>
+              </label>
+              <span class="settings-value" id="deesser-value">On</span>
+            </div>
           </div>
         </div>
 
@@ -62,7 +102,7 @@
             <span class="progress-filename" id="progress-filename">filename.wav</span>
             <span class="progress-step" id="progress-step">Step 1/4 &middot; Analysis</span>
           </div>
-          <div class="progress-track" title="Current processing progress">
+          <div class="progress-track" title="Current file processing progress">
             <div class="progress-fill" id="progress-fill"></div>
           </div>
           <div class="progress-footer">
@@ -84,7 +124,7 @@
         <div class="preview-content" id="preview-content" hidden>
           <div class="preview-selector-bar">
             <label for="preview-file-select" class="preview-select-label">File:</label>
-            <select id="preview-file-select" title="Choose a processed file to compare"></select>
+            <select id="preview-file-select" title="Choose a processed file to preview"></select>
           </div>
 
           <div class="preview-panels">
@@ -116,7 +156,6 @@
           </div>
         </div>
 
-        <!-- Hidden audio elements -->
         <audio id="audio-original" preload="none"></audio>
         <audio id="audio-processed" preload="none"></audio>
       </section>
@@ -129,7 +168,7 @@
             <p class="about-tagline">Drop files, get podcast quality.</p>
           </div>
 
-          <div class="pipeline-diagram">
+          <div class="pipeline-diagram" title="The four-step processing pipeline AudioPro runs on every file">
             <div class="pipe-node pipe-node-analysis">
               <span class="pipe-icon">&#128270;</span>
               <span class="pipe-label">Analysis</span>
@@ -170,7 +209,7 @@
               <div class="step-number">2</div>
               <div class="step-body">
                 <h3>Denoise — afftdn <span class="step-time">Quality mode only</span></h3>
-                <p>FFmpeg's adaptive frequency-domain noise filter. Targets a noise floor of &minus;25dB with temporal smoothing enabled. Removes background hum, fan noise, and room noise while preserving voice character. Skip with <em>Fast</em> mode.</p>
+                <p>FFmpeg's adaptive frequency-domain noise filter (<code>afftdn=nf=-25:tn=1</code>). Targets a noise floor of &minus;25&nbsp;dB with temporal smoothing enabled. Removes background hum, fan noise, and room noise while preserving voice character. Skip with <em>Fast</em> mode for quicker processing.</p>
               </div>
             </div>
 
@@ -178,7 +217,7 @@
               <div class="step-number">3</div>
               <div class="step-body">
                 <h3>EQ &amp; Filters <span class="step-time">~5s</span></h3>
-                <p>High-pass filter removes rumble (configurable 60&ndash;120Hz). Parametric EQ boosts presence at 2.5kHz (+2dB), tames muddiness at 300Hz (&minus;2dB), softens sibilance at 6kHz (&minus;3dB), and adds air at 12kHz (+1dB). Two-pass loudness normalization to your target LUFS.</p>
+                <p>High-pass filter removes rumble (configurable 60&ndash;120&nbsp;Hz). Parametric EQ: presence boost at 2.5&nbsp;kHz (+2&nbsp;dB), mud cut at 300&nbsp;Hz (&minus;2&nbsp;dB), air shelf at 12&nbsp;kHz (+1&nbsp;dB). Optional de-esser at 6&nbsp;kHz (&minus;3&nbsp;dB). Two-pass loudness normalization locked to your LUFS target.</p>
               </div>
             </div>
 
@@ -186,7 +225,7 @@
               <div class="step-number">4</div>
               <div class="step-body">
                 <h3>Dynamics &amp; Output <span class="step-time">~5s</span></h3>
-                <p>3:1 compressor (threshold &minus;20dB) controls dynamic range. Hard limiter at &minus;1dBTP prevents clipping. Loudness normalization to target LUFS &mdash; the podcast/streaming standard. Output: WAV 24-bit 48kHz saved to <code>Audio_Pro/</code> next to the source folder.</p>
+                <p>3:1 compressor (threshold &minus;20&nbsp;dBFS) controls dynamic range. Hard limiter at &minus;1&nbsp;dBTP prevents digital clipping. Final output: WAV 24-bit 48&nbsp;kHz saved to <code>Audio_Pro/</code> next to the source folder.</p>
               </div>
             </div>
           </div>

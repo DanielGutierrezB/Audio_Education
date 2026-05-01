@@ -38,6 +38,7 @@ let prefs = {};
 async function loadPrefs() {
   if (window.api) prefs = await window.api.store.getAll();
   applyMode(prefs.processingMode ?? 'quality');
+  applySettingsUI(prefs);
 }
 
 // ── Helpers ──
@@ -376,6 +377,48 @@ function handlePipelineEvent(event) {
       break;
   }
 }
+
+// ── Settings panel ──
+const btnSettings   = document.getElementById('btn-settings');
+const settingsPanel = document.getElementById('settings-panel');
+const setLufs       = document.getElementById('set-lufs');
+const setHpf        = document.getElementById('set-hpf');
+const setDeEsser    = document.getElementById('set-deesser');
+const lufsValue     = document.getElementById('lufs-value');
+const hpfValue      = document.getElementById('hpf-value');
+const deEsserValue  = document.getElementById('deesser-value');
+
+btnSettings.addEventListener('click', () => {
+  const open = !settingsPanel.hidden;
+  settingsPanel.hidden = open;
+  btnSettings.setAttribute('aria-expanded', String(!open));
+});
+
+function applySettingsUI(p) {
+  setLufs.value = p.lufsTarget ?? -16;
+  lufsValue.textContent = `${setLufs.value} LUFS`;
+  setHpf.value = p.hpfFrequency ?? 80;
+  hpfValue.textContent = `${setHpf.value} Hz`;
+  setDeEsser.checked = p.deEsserEnabled !== false;
+  deEsserValue.textContent = setDeEsser.checked ? 'On' : 'Off';
+}
+
+setLufs.addEventListener('input', () => {
+  const v = parseInt(setLufs.value);
+  lufsValue.textContent = `${v} LUFS`;
+  if (window.api) window.api.store.set('lufsTarget', v);
+});
+
+setHpf.addEventListener('input', () => {
+  const v = parseInt(setHpf.value);
+  hpfValue.textContent = `${v} Hz`;
+  if (window.api) window.api.store.set('hpfFrequency', v);
+});
+
+setDeEsser.addEventListener('change', () => {
+  deEsserValue.textContent = setDeEsser.checked ? 'On' : 'Off';
+  if (window.api) window.api.store.set('deEsserEnabled', setDeEsser.checked);
+});
 
 // ── Event listeners ──
 btnAddFolders.addEventListener('click', addFoldersViaDialog);

@@ -5,6 +5,7 @@ const { spawn } = require('child_process');
 const Store = require('electron-store');
 const pipeline = require('./src/pipeline');
 const binPaths = require('./src/bin-paths');
+const logger = require('./src/logger');
 
 const VALID_STORE_KEYS = new Set([
   'processingMode', 'lufsTarget', 'hpfFrequency', 'deEsserEnabled',
@@ -52,6 +53,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  logger.init();
+  logger.push('bin', `ffmpeg: ${binPaths.ffmpeg()}`);
+  logger.push('bin', `ffprobe: ${binPaths.ffprobe()}`);
+  logger.push('bin', `deep-filter: ${binPaths.deepFilter()}`);
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -69,6 +74,12 @@ app.on('before-quit', () => {
   }
 });
 
+// ── Logger IPC ──
+ipcMain.handle('log:getFormatted', () => logger.formatForClipboard());
+ipcMain.handle('log:push', (_, category, message, data) => {
+  logger.push(category ?? 'renderer', message, data);
+});
+
 ipcMain.handle('store:get', (_, key) => store.get(key));
 ipcMain.handle('store:set', (_, key, value) => {
   if (typeof key !== 'string' || !VALID_STORE_KEYS.has(key)) return;
@@ -82,6 +93,7 @@ ipcMain.handle('folders:open', async (event) => {
     title: 'Select folders containing WAV files',
     properties: ['openDirectory', 'multiSelections'],
   });
+  if (!result.canceled) logger.push('files', `Folders selected: ${result.filePaths.length}`, result.filePaths);
   return result.canceled ? [] : result.filePaths;
 });
 
@@ -145,8 +157,24 @@ ipcMain.handle('pipeline:start', (event, files) => {
 
   pipelineState = { running: true, cancelled: false, currentProc: null };
 
+  logger.push('pipeline', `Starting batch: ${files.length} files`, {
+    mode: settings.mode,
+    lufsTarget: settings.lufsTarget,
+    outputFormat: settings.outputFormat,
+    sampleRate: settings.sampleRate,
+  });
+
   const emit = (type, data) => {
     if (!win.isDestroyed()) win.webContents.send('pipeline:event', { type, ...data });
+    // Log significant pipeline events
+    if (type === 'file:start') logger.push('pipeline', `▶ Processing: ${data.file}`, `${data.index + 1}/${data.total}`);
+    if (type === 'file:done') logger.push('pipeline', `✓ Done: ${data.file}`, `→ ${data.outputPath}`);
+    if (type === 'file:error') logger.push('pipeline', `✗ Error: ${data.file}`, data.error);
+    if (type === 'analysis') logger.push('analysis', `Analysis: ${data.file}`, data.recommendations?.reasoning);
+    if (type === 'progress' && data.stepIndex !== undefined && data.pct <= 3) {
+      logger.push('pipeline', `  Step ${data.stepIndex}/${data.stepTotal}: ${data.step}`, path.basename(data.file));
+    }
+    if (type === 'batch:done') logger.push('pipeline', `Batch complete: ${data.done}/${data.total} files`);
   };
 
   pipeline.processQueue(files, {
@@ -155,6 +183,7 @@ ipcMain.handle('pipeline:start', (event, files) => {
     setCurrent: proc => { if (pipelineState) pipelineState.currentProc = proc; },
     settings,
   }).catch(err => {
+    logger.push('pipeline', `Batch error: ${err.message}`);
     emit('error', { error: err.message });
   }).finally(() => {
     const state = pipelineState;
@@ -173,6 +202,7 @@ ipcMain.handle('pipeline:start', (event, files) => {
 
 ipcMain.handle('pipeline:cancel', () => {
   if (pipelineState) {
+    logger.push('pipeline', 'Processing cancelled by user');
     pipelineState.cancelled = true;
     pipelineState.currentProc?.kill();
   }
@@ -180,6 +210,7 @@ ipcMain.handle('pipeline:cancel', () => {
 
 ipcMain.handle('audio:peaks', (_, filePath, numPeaks) => {
   if (typeof filePath !== 'string' || !filePath) return null;
+  logger.push('waveform', `Generating peaks: ${path.basename(filePath)} (${numPeaks} points)`);
   return new Promise(resolve => {
     const timer = setTimeout(() => resolve(null), 30_000);
     const done = (val) => { clearTimeout(timer); resolve(val); };
@@ -218,9 +249,9 @@ ipcMain.handle('audio:peaks', (_, filePath, numPeaks) => {
         }
         done(peaks);
       });
-      proc.on('error', () => done(null));
+      proc.on('error', (err) => { logger.push('waveform', `ffmpeg error: ${err.message}`); done(null); });
     });
-    probeProc.on('error', () => done(null));
+    probeProc.on('error', (err) => { logger.push('waveform', `ffprobe error: ${err.message}`); done(null); });
   });
 });
 

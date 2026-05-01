@@ -1,6 +1,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  log: {
+    getFormatted: () => ipcRenderer.invoke('log:getFormatted'),
+    push: (category, message, data) => ipcRenderer.invoke('log:push', category, message, data),
+  },
   store: {
     get: (key) => ipcRenderer.invoke('store:get', key),
     set: (key, value) => ipcRenderer.invoke('store:set', key, value),

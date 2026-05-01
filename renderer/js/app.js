@@ -605,8 +605,9 @@ function handlePipelineEvent(event) {
       patchFileStatus(event.file, 'error');
       for (const [, group] of queue) {
         const f = group.files.find(f => f.path === event.file);
-        if (f) f.status = 'error';
+        if (f) { f.status = 'error'; f.errorMsg = event.error; }
       }
+      window.api?.log.push('renderer', `File error displayed: ${filename}`, event.error);
       break;
 
     case 'analysis':
@@ -619,6 +620,7 @@ function handlePipelineEvent(event) {
 
     case 'error':
       console.error('Pipeline error:', event.error);
+      window.api?.log.push('renderer', 'Pipeline global error', event.error);
       finishProcessing();
       break;
   }
@@ -692,6 +694,24 @@ btnAddFolders.addEventListener('click', addFoldersViaDialog);
 btnAddFiles.addEventListener('click', addFilesViaDialog);
 btnClearAll.addEventListener('click', clearAll);
 btnRemoveDone.addEventListener('click', removeCompleted);
+
+// ── Copy Log button ──
+const btnCopyLog = document.getElementById('btn-copy-log');
+btnCopyLog.addEventListener('click', async () => {
+  try {
+    const log = await window.api.log.getFormatted();
+    await navigator.clipboard.writeText(log);
+    // Flash the button to confirm
+    btnCopyLog.textContent = '\u2713';
+    btnCopyLog.style.color = 'var(--accent)';
+    setTimeout(() => {
+      btnCopyLog.textContent = '\uD83D\uDCCB';
+      btnCopyLog.style.color = '';
+    }, 1500);
+  } catch (err) {
+    console.error('Failed to copy log:', err);
+  }
+});
 
 document.getElementById('btn-empty-folders').addEventListener('click', addFoldersViaDialog);
 document.getElementById('btn-empty-files').addEventListener('click', addFilesViaDialog);

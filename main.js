@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Notification, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -11,8 +11,13 @@ const store = new Store({
     lufsTarget: -16,
     hpfFrequency: 80,
     deEsserEnabled: true,
-    parallelFiles: 1,
-    customEqPresets: [],
+    noiseGateEnabled: true,
+    stereoToMonoEnabled: true,
+    silenceTrimEnabled: true,
+    breathReductionEnabled: false,
+    multiBandCompEnabled: true,
+    outputFormat: 'wav24',
+    sampleRate: 48000,
     showNotifications: true,
   },
 });
@@ -20,9 +25,9 @@ const store = new Store({
 function createWindow() {
   const win = new BrowserWindow({
     width: 960,
-    height: 600,
-    minWidth: 720,
-    minHeight: 450,
+    height: 640,
+    minWidth: 760,
+    minHeight: 520,
     titleBarStyle: 'hiddenInset',
     vibrancy: 'under-window',
     visualEffectState: 'active',
@@ -40,7 +45,6 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
-
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -61,6 +65,26 @@ ipcMain.handle('folders:open', async (event) => {
     properties: ['openDirectory', 'multiSelections'],
   });
   return result.canceled ? [] : result.filePaths;
+});
+
+ipcMain.handle('files:open', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(win, {
+    title: 'Select WAV files',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'WAV Files', extensions: ['wav'] }],
+  });
+  if (result.canceled) return [];
+  return result.filePaths.map(filePath => {
+    try {
+      const { size } = fs.statSync(filePath);
+      return { path: filePath, name: path.basename(filePath), size };
+    } catch { return null; }
+  }).filter(Boolean);
+});
+
+ipcMain.handle('shell:openPath', (_, filePath) => {
+  shell.showItemInFolder(filePath);
 });
 
 ipcMain.handle('folders:scan', (_, folderPath) => {
@@ -87,10 +111,17 @@ ipcMain.handle('pipeline:start', (event, files) => {
 
   const win = BrowserWindow.fromWebContents(event.sender);
   const settings = {
-    mode: store.get('processingMode'),
-    lufsTarget: store.get('lufsTarget'),
-    hpfFrequency: store.get('hpfFrequency'),
-    deEsserEnabled: store.get('deEsserEnabled'),
+    mode:                  store.get('processingMode'),
+    lufsTarget:            store.get('lufsTarget'),
+    hpfFrequency:          store.get('hpfFrequency'),
+    deEsserEnabled:        store.get('deEsserEnabled'),
+    noiseGateEnabled:      store.get('noiseGateEnabled'),
+    stereoToMonoEnabled:   store.get('stereoToMonoEnabled'),
+    silenceTrimEnabled:    store.get('silenceTrimEnabled'),
+    breathReductionEnabled:store.get('breathReductionEnabled'),
+    multiBandCompEnabled:  store.get('multiBandCompEnabled'),
+    outputFormat:          store.get('outputFormat'),
+    sampleRate:            store.get('sampleRate'),
   };
 
   pipelineState = { running: true, cancelled: false, currentProc: null };
@@ -109,7 +140,7 @@ ipcMain.handle('pipeline:start', (event, files) => {
   }).finally(() => {
     const state = pipelineState;
     pipelineState = null;
-    if (!state?.cancelled && Notification.isSupported()) {
+    if (!state?.cancelled && store.get('showNotifications') && Notification.isSupported()) {
       const done = files.length;
       new Notification({
         title: 'AudioPro',
@@ -174,10 +205,7 @@ ipcMain.handle('audio:peaks', (_, filePath, numPeaks) => {
 ipcMain.handle('ffprobe:metadata', (_, filePath) => {
   return new Promise(resolve => {
     const proc = spawn('ffprobe', [
-      '-v', 'quiet',
-      '-print_format', 'json',
-      '-show_format',
-      filePath,
+      '-v', 'quiet', '-print_format', 'json', '-show_format', filePath,
     ]);
     let out = '';
     proc.stdout.on('data', chunk => { out += chunk; });

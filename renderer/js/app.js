@@ -4,18 +4,23 @@
 const tabs           = document.querySelectorAll('.tab');
 const views          = document.querySelectorAll('.view');
 const btnAddFolders  = document.getElementById('btn-add-folders');
+const btnAddFiles    = document.getElementById('btn-add-files');
 const btnProcessAll  = document.getElementById('btn-process-all');
+const btnClearAll    = document.getElementById('btn-clear-all');
+const btnRemoveDone  = document.getElementById('btn-remove-completed');
 const queueEmpty     = document.getElementById('queue-empty');
 const queueList      = document.getElementById('queue-list');
 const queueSummary   = document.getElementById('queue-summary');
-const queueContainer = document.querySelector('.queue-container');
+const queueContainer = document.getElementById('queue-container');
 const badgeDone      = document.getElementById('badge-done');
 
 // ── State ──
-// Map<folderPath, { files: Array<{ path, name, size, duration, status }> }>
+// Map<folderPath, { files: Array<{ path, name, size, duration, status }>, collapsed: bool }>
 const queue = new Map();
-// Map<originalFilePath, outputPath> — populated on file:done
+// Map<originalPath, outputPath>
 const completedFiles = new Map();
+// Set of selected file paths
+const selectedFiles = new Set();
 
 // ── Tab navigation ──
 tabs.forEach(tab => {
@@ -30,6 +35,7 @@ tabs.forEach(tab => {
       v.classList.toggle('active', isTarget);
       v.hidden = !isTarget;
     });
+    if (target === 'preview') sizePreviewCanvas();
   });
 });
 
@@ -56,9 +62,23 @@ function formatSize(bytes) {
   return `${Math.round(bytes / 1024)} KB`;
 }
 
-function statusLabel(status) {
-  const map = { queued: 'Queued', processing: 'Processing…', done: 'Done ✓', error: 'Error ✗' };
-  return map[status] ?? status;
+function formatAudioTime(sec) {
+  if (!sec || isNaN(sec)) return '0:00';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function formatEta(seconds) {
+  if (seconds == null || isNaN(seconds) || seconds < 0) return '—';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function statusIcon(status) {
+  const map = { queued: '⏳', processing: '🔄', done: '✅', error: '❌' };
+  return map[status] ?? '⏳';
 }
 
 // ── Mode toggle ──
@@ -73,10 +93,12 @@ function applyMode(mode) {
 modeQuality.addEventListener('click', () => {
   applyMode('quality');
   if (window.api) window.api.store.set('processingMode', 'quality');
+  updateQueueSummary();
 });
 modeFast.addEventListener('click', () => {
   applyMode('fast');
   if (window.api) window.api.store.set('processingMode', 'fast');
+  updateQueueSummary();
 });
 
 // ── Queue management ──
@@ -84,6 +106,12 @@ async function addFoldersViaDialog() {
   if (!window.api) return;
   const paths = await window.api.folders.open();
   if (paths.length) await processFolderPaths(paths);
+}
+
+async function addFilesViaDialog() {
+  if (!window.api) return;
+  const files = await window.api.files.open();
+  if (files.length) addIndividualFiles(files);
 }
 
 async function processFolderPaths(folderPaths) {
@@ -94,12 +122,31 @@ async function processFolderPaths(folderPaths) {
     if (!wavFiles.length) continue;
     queue.set(fp, {
       files: wavFiles.map(f => ({ ...f, duration: null, status: 'queued' })),
+      collapsed: false,
     });
     added.push(fp);
   }
   if (!added.length) return;
   renderQueue();
   for (const fp of added) loadFolderMetadata(fp);
+}
+
+function addIndividualFiles(fileInfos) {
+  // Group by parent directory
+  for (const fi of fileInfos) {
+    const dir = fi.path.substring(0, fi.path.lastIndexOf('/'));
+    if (!queue.has(dir)) {
+      queue.set(dir, { files: [], collapsed: false });
+    }
+    const group = queue.get(dir);
+    if (!group.files.find(f => f.path === fi.path)) {
+      group.files.push({ ...fi, duration: null, status: 'queued' });
+    }
+  }
+  renderQueue();
+  for (const fi of fileInfos) {
+    loadSingleFileMeta(fi.path);
+  }
 }
 
 async function loadFolderMetadata(folderPath) {
@@ -110,12 +157,74 @@ async function loadFolderMetadata(folderPath) {
     if (meta?.duration != null) {
       file.duration = meta.duration;
       patchFileDuration(file);
+      updateQueueSummary();
+    }
+  }
+}
+
+async function loadSingleFileMeta(filePath) {
+  if (!window.api) return;
+  const meta = await window.api.ffprobe.getMetadata(filePath);
+  if (meta?.duration != null) {
+    for (const [, group] of queue) {
+      const f = group.files.find(f => f.path === filePath);
+      if (f) {
+        f.duration = meta.duration;
+        patchFileDuration(f);
+        updateQueueSummary();
+        return;
+      }
     }
   }
 }
 
 function removeFolder(folderPath) {
+  for (const fp of queue.get(folderPath)?.files ?? []) {
+    selectedFiles.delete(fp.path);
+  }
   queue.delete(folderPath);
+  renderQueue();
+}
+
+function removeFile(filePath) {
+  selectedFiles.delete(filePath);
+  for (const [fp, group] of queue) {
+    const idx = group.files.findIndex(f => f.path === filePath);
+    if (idx !== -1) {
+      group.files.splice(idx, 1);
+      if (group.files.length === 0) queue.delete(fp);
+      break;
+    }
+  }
+  renderQueue();
+}
+
+function moveFile(filePath, direction) {
+  for (const [, group] of queue) {
+    const idx = group.files.findIndex(f => f.path === filePath);
+    if (idx === -1) continue;
+    const newIdx = idx + direction;
+    if (newIdx < 0 || newIdx >= group.files.length) return;
+    [group.files[idx], group.files[newIdx]] = [group.files[newIdx], group.files[idx]];
+    renderQueue();
+    return;
+  }
+}
+
+function clearAll() {
+  queue.clear();
+  selectedFiles.clear();
+  renderQueue();
+}
+
+function removeCompleted() {
+  for (const [fp, group] of queue) {
+    group.files = group.files.filter(f => {
+      if (f.status === 'done') { selectedFiles.delete(f.path); return false; }
+      return true;
+    });
+    if (group.files.length === 0) queue.delete(fp);
+  }
   renderQueue();
 }
 
@@ -125,10 +234,14 @@ function renderQueue() {
   queueEmpty.hidden = hasFiles;
   queueList.hidden = !hasFiles;
   btnProcessAll.disabled = !hasFiles;
+  btnClearAll.hidden = !hasFiles;
+
+  const hasDone = hasFiles && [...queue.values()].some(g => g.files.some(f => f.status === 'done'));
+  btnRemoveDone.hidden = !hasDone;
 
   if (!hasFiles) {
     queueList.innerHTML = '';
-    queueSummary.textContent = '';
+    updateQueueSummary();
     return;
   }
 
@@ -137,11 +250,41 @@ function renderQueue() {
     queueList.appendChild(buildFolderGroup(fp, group));
   }
 
-  let total = 0;
-  for (const g of queue.values()) total += g.files.length;
-  const f = total === 1 ? 'file' : 'files';
-  const d = queue.size === 1 ? 'folder' : 'folders';
-  queueSummary.textContent = `${total} ${f} in ${queue.size} ${d}`;
+  updateQueueSummary();
+}
+
+function updateQueueSummary() {
+  let totalFiles = 0;
+  let totalBytes = 0;
+  let totalDuration = 0;
+
+  for (const [, group] of queue) {
+    for (const f of group.files) {
+      totalFiles++;
+      totalBytes += f.size ?? 0;
+      if (f.duration) totalDuration += f.duration;
+    }
+  }
+
+  if (totalFiles === 0) {
+    queueSummary.textContent = '';
+    return;
+  }
+
+  const selCount = selectedFiles.size;
+  const sizeStr = totalBytes >= 1024 * 1024
+    ? `${(totalBytes / (1024 * 1024)).toFixed(1)} MB`
+    : `${Math.round(totalBytes / 1024)} KB`;
+
+  // Rough estimate: quality ≈ 0.75× realtime, fast ≈ 0.12× realtime
+  const mode = modeQuality.classList.contains('active') ? 'quality' : 'fast';
+  const mul = mode === 'quality' ? 0.75 : 0.12;
+  const estSec = totalDuration > 0 ? Math.round(totalDuration * mul) : null;
+  const estStr = estSec != null ? ` · ~${formatEta(estSec)} est.` : '';
+
+  const selStr = selCount > 0 ? `${selCount} of ${totalFiles} selected · ` : `${totalFiles} file${totalFiles !== 1 ? 's' : ''} · `;
+
+  queueSummary.textContent = `${selStr}${sizeStr}${estStr}`;
 }
 
 function buildFolderGroup(folderPath, group) {
@@ -152,6 +295,10 @@ function buildFolderGroup(folderPath, group) {
   const header = document.createElement('div');
   header.className = 'folder-group-header';
 
+  const chevron = document.createElement('span');
+  chevron.className = 'folder-chevron' + (group.collapsed ? '' : ' open');
+  chevron.textContent = '▶';
+
   const icon = document.createElement('span');
   icon.className = 'folder-icon';
   icon.textContent = '📁';
@@ -159,7 +306,9 @@ function buildFolderGroup(folderPath, group) {
   const pathSpan = document.createElement('span');
   pathSpan.className = 'folder-path';
   pathSpan.title = folderPath;
-  pathSpan.textContent = folderPath;
+  // Show only last two path components
+  const parts = folderPath.split('/');
+  pathSpan.textContent = parts.slice(-2).join('/');
 
   const count = document.createElement('span');
   count.className = 'folder-count';
@@ -169,13 +318,21 @@ function buildFolderGroup(folderPath, group) {
   removeBtn.className = 'btn-remove-folder';
   removeBtn.title = 'Remove this folder from the queue';
   removeBtn.textContent = '✕';
-  removeBtn.addEventListener('click', () => removeFolder(folderPath));
+  removeBtn.addEventListener('click', (e) => { e.stopPropagation(); removeFolder(folderPath); });
 
-  header.append(icon, pathSpan, count, removeBtn);
+  header.append(chevron, icon, pathSpan, count, removeBtn);
+
+  header.addEventListener('click', () => {
+    group.collapsed = !group.collapsed;
+    chevron.classList.toggle('open', !group.collapsed);
+    fileList.hidden = group.collapsed;
+  });
+
   wrap.appendChild(header);
 
   const fileList = document.createElement('div');
   fileList.className = 'file-list';
+  fileList.hidden = group.collapsed;
   for (const file of group.files) fileList.appendChild(buildFileItem(file));
   wrap.appendChild(fileList);
 
@@ -184,8 +341,25 @@ function buildFolderGroup(folderPath, group) {
 
 function buildFileItem(file) {
   const item = document.createElement('div');
-  item.className = 'file-item';
+  item.className = 'file-item' + (selectedFiles.has(file.path) ? ' selected' : '');
   item.dataset.filePath = file.path;
+
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.className = 'file-checkbox';
+  cb.checked = selectedFiles.has(file.path);
+  cb.addEventListener('change', (e) => {
+    e.stopPropagation();
+    if (cb.checked) selectedFiles.add(file.path);
+    else selectedFiles.delete(file.path);
+    item.classList.toggle('selected', cb.checked);
+    updateQueueSummary();
+  });
+
+  const statusEl = document.createElement('span');
+  statusEl.className = `file-status-icon status-${file.status}`;
+  statusEl.textContent = statusIcon(file.status);
+  statusEl.title = file.status;
 
   const name = document.createElement('span');
   name.className = 'file-name';
@@ -200,22 +374,86 @@ function buildFileItem(file) {
   size.className = 'file-meta';
   size.textContent = formatSize(file.size);
 
-  const status = document.createElement('span');
-  status.className = `file-status status-${file.status}`;
-  status.textContent = statusLabel(file.status);
+  const removeBtn = document.createElement('button');
+  removeBtn.className = 'btn-remove-file';
+  removeBtn.title = 'Remove this file';
+  removeBtn.textContent = '✕';
+  removeBtn.addEventListener('click', (e) => { e.stopPropagation(); removeFile(file.path); });
 
-  item.append(name, dur, size, status);
+  item.append(cb, statusEl, name, dur, size, removeBtn);
+
+  // Click to select for preview (if done)
+  item.addEventListener('click', () => {
+    if (file.status === 'done' && completedFiles.has(file.path)) {
+      const outputPath = completedFiles.get(file.path);
+      // Switch to preview tab and load file
+      const previewTab = document.querySelector('[data-tab="preview"]');
+      if (previewTab) previewTab.click();
+      selectPreviewFile(file.path);
+    }
+  });
+
+  // Right-click context menu
+  item.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, file.path);
+  });
+
   return item;
 }
 
 function patchFileDuration(file) {
-  for (const el of queueList.querySelectorAll('.file-item')) {
-    if (el.dataset.filePath === file.path) {
-      el.querySelector('.file-duration').textContent = formatDuration(file.duration);
-      return;
-    }
+  const el = queueList.querySelector(`.file-item[data-file-path="${CSS.escape(file.path)}"]`);
+  if (el) el.querySelector('.file-duration').textContent = formatDuration(file.duration);
+}
+
+function patchFileStatus(filePath, status) {
+  const el = queueList.querySelector(`.file-item[data-file-path="${CSS.escape(filePath)}"]`);
+  if (el) {
+    const icon = el.querySelector('.file-status-icon');
+    icon.className = `file-status-icon status-${status}`;
+    icon.textContent = statusIcon(status);
+    icon.title = status;
   }
 }
+
+// ── Context menu ──
+const ctxMenu = document.getElementById('ctx-menu');
+let ctxMenuFile = null;
+
+function showContextMenu(x, y, filePath) {
+  ctxMenuFile = filePath;
+  ctxMenu.hidden = false;
+  const mw = ctxMenu.offsetWidth || 160;
+  const mh = ctxMenu.offsetHeight || 120;
+  const left = Math.min(x, window.innerWidth - mw - 4);
+  const top = Math.min(y, window.innerHeight - mh - 4);
+  ctxMenu.style.left = `${left}px`;
+  ctxMenu.style.top = `${top}px`;
+}
+
+function hideContextMenu() {
+  ctxMenu.hidden = true;
+  ctxMenuFile = null;
+}
+
+document.addEventListener('click', hideContextMenu);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideContextMenu(); });
+
+ctxMenu.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn || !ctxMenuFile) return;
+  const action = btn.dataset.action;
+  const fp = ctxMenuFile;
+  hideContextMenu();
+
+  if (action === 'remove') removeFile(fp);
+  else if (action === 'move-up') moveFile(fp, -1);
+  else if (action === 'move-down') moveFile(fp, 1);
+  else if (action === 'open-finder') {
+    if (window.api) window.api.shell.openPath(fp);
+  }
+});
 
 // ── Drag & drop ──
 queueContainer.addEventListener('dragover', e => {
@@ -248,7 +486,7 @@ queueContainer.addEventListener('drop', async e => {
   if (paths.length) await processFolderPaths(paths);
 });
 
-// ── Progress bar refs ──
+// ── Progress bar ──
 const progressSection  = document.getElementById('progress-section');
 const progressFilename = document.getElementById('progress-filename');
 const progressStep     = document.getElementById('progress-step');
@@ -260,30 +498,12 @@ const progressEta      = document.getElementById('progress-eta');
 let processing = false;
 let unsubPipeline = null;
 
-function formatEta(seconds) {
-  if (seconds == null || isNaN(seconds) || seconds < 0) return '—';
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${String(s).padStart(2, '0')}`;
-}
-
 function setProgress(pct, step, stepIndex, stepTotal, filename, eta) {
   progressFill.style.width = `${pct}%`;
   progressPercent.textContent = `${pct}%`;
   progressStep.textContent = `Step ${stepIndex}/${stepTotal} · ${step}`;
   if (filename) progressFilename.textContent = filename;
   progressEta.textContent = `ETA: ${formatEta(eta)}`;
-}
-
-function patchFileStatus(filePath, status) {
-  for (const el of queueList.querySelectorAll('.file-item')) {
-    if (el.dataset.filePath === filePath) {
-      const span = el.querySelector('.file-status');
-      span.className = `file-status status-${status}`;
-      span.textContent = statusLabel(status);
-      return;
-    }
-  }
 }
 
 function updateDoneBadge() {
@@ -307,6 +527,7 @@ function startProcessing() {
   btnProcessAll.textContent = 'Cancel';
   btnProcessAll.classList.replace('btn-accent', 'btn-secondary');
   btnAddFolders.disabled = true;
+  btnAddFiles.disabled = true;
 
   progressSection.hidden = false;
   setProgress(0, 'Starting…', 1, 4, files[0].path.split('/').pop(), null);
@@ -332,8 +553,10 @@ function finishProcessing() {
   btnProcessAll.textContent = '▶ Process All';
   btnProcessAll.classList.replace('btn-secondary', 'btn-accent');
   btnAddFolders.disabled = false;
+  btnAddFiles.disabled = false;
 
   progressSection.hidden = true;
+  renderQueue();
 }
 
 function handlePipelineEvent(event) {
@@ -342,6 +565,10 @@ function handlePipelineEvent(event) {
   switch (event.type) {
     case 'file:start':
       patchFileStatus(event.file, 'processing');
+      for (const [, group] of queue) {
+        const f = group.files.find(f => f.path === event.file);
+        if (f) f.status = 'processing';
+      }
       break;
 
     case 'progress':
@@ -357,6 +584,7 @@ function handlePipelineEvent(event) {
       completedFiles.set(event.file, event.outputPath);
       updateDoneBadge();
       addToPreviewSelector(event.file, event.outputPath);
+      btnRemoveDone.hidden = false;
       break;
 
     case 'file:error':
@@ -381,12 +609,19 @@ function handlePipelineEvent(event) {
 // ── Settings panel ──
 const btnSettings   = document.getElementById('btn-settings');
 const settingsPanel = document.getElementById('settings-panel');
-const setLufs       = document.getElementById('set-lufs');
-const setHpf        = document.getElementById('set-hpf');
-const setDeEsser    = document.getElementById('set-deesser');
-const lufsValue     = document.getElementById('lufs-value');
-const hpfValue      = document.getElementById('hpf-value');
-const deEsserValue  = document.getElementById('deesser-value');
+
+const setLufs          = document.getElementById('set-lufs');
+const setHpf           = document.getElementById('set-hpf');
+const setDeEsser       = document.getElementById('set-deesser');
+const setNoiseGate     = document.getElementById('set-noisegate');
+const setSilenceTrim   = document.getElementById('set-silencetrim');
+const setBreathRed     = document.getElementById('set-breathreduction');
+const setStereoMono    = document.getElementById('set-stereomono');
+const setMBC           = document.getElementById('set-mbc');
+const setFormat        = document.getElementById('set-format');
+const setSampleRate    = document.getElementById('set-samplerate');
+const lufsValue        = document.getElementById('lufs-value');
+const hpfValue         = document.getElementById('hpf-value');
 
 btnSettings.addEventListener('click', () => {
   const open = !settingsPanel.hidden;
@@ -400,55 +635,87 @@ function applySettingsUI(p) {
   setHpf.value = p.hpfFrequency ?? 80;
   hpfValue.textContent = `${setHpf.value} Hz`;
   setDeEsser.checked = p.deEsserEnabled !== false;
-  deEsserValue.textContent = setDeEsser.checked ? 'On' : 'Off';
+  setNoiseGate.checked = p.noiseGateEnabled !== false;
+  setSilenceTrim.checked = p.silenceTrimEnabled !== false;
+  setBreathRed.checked = p.breathReductionEnabled === true;
+  setStereoMono.checked = p.stereoToMonoEnabled !== false;
+  setMBC.checked = p.multiBandCompEnabled !== false;
+  setFormat.value = p.outputFormat ?? 'wav24';
+  setSampleRate.value = String(p.sampleRate ?? 48000);
+}
+
+function savePref(key, value) {
+  if (window.api) window.api.store.set(key, value);
 }
 
 setLufs.addEventListener('input', () => {
   const v = parseInt(setLufs.value);
   lufsValue.textContent = `${v} LUFS`;
-  if (window.api) window.api.store.set('lufsTarget', v);
+  savePref('lufsTarget', v);
 });
 
 setHpf.addEventListener('input', () => {
   const v = parseInt(setHpf.value);
   hpfValue.textContent = `${v} Hz`;
-  if (window.api) window.api.store.set('hpfFrequency', v);
+  savePref('hpfFrequency', v);
 });
 
-setDeEsser.addEventListener('change', () => {
-  deEsserValue.textContent = setDeEsser.checked ? 'On' : 'Off';
-  if (window.api) window.api.store.set('deEsserEnabled', setDeEsser.checked);
-});
+setDeEsser.addEventListener('change', () => savePref('deEsserEnabled', setDeEsser.checked));
+setNoiseGate.addEventListener('change', () => savePref('noiseGateEnabled', setNoiseGate.checked));
+setSilenceTrim.addEventListener('change', () => savePref('silenceTrimEnabled', setSilenceTrim.checked));
+setBreathRed.addEventListener('change', () => savePref('breathReductionEnabled', setBreathRed.checked));
+setStereoMono.addEventListener('change', () => savePref('stereoToMonoEnabled', setStereoMono.checked));
+setMBC.addEventListener('change', () => savePref('multiBandCompEnabled', setMBC.checked));
+setFormat.addEventListener('change', () => savePref('outputFormat', setFormat.value));
+setSampleRate.addEventListener('change', () => savePref('sampleRate', parseInt(setSampleRate.value)));
 
-// ── Event listeners ──
+// ── Event listeners — toolbar / empty state ──
 btnAddFolders.addEventListener('click', addFoldersViaDialog);
+btnAddFiles.addEventListener('click', addFilesViaDialog);
+btnClearAll.addEventListener('click', clearAll);
+btnRemoveDone.addEventListener('click', removeCompleted);
+
+document.getElementById('btn-empty-folders').addEventListener('click', addFoldersViaDialog);
+document.getElementById('btn-empty-files').addEventListener('click', addFilesViaDialog);
+
 btnProcessAll.addEventListener('click', () => {
   if (processing) cancelProcessing();
   else startProcessing();
 });
 
 // ── Preview ──
-const previewEmpty    = document.getElementById('preview-empty');
-const previewContent  = document.getElementById('preview-content');
-const previewSelect   = document.getElementById('preview-file-select');
-const audioOriginal   = document.getElementById('audio-original');
-const audioProcessed  = document.getElementById('audio-processed');
-const btnPlayOriginal = document.getElementById('play-original');
-const btnPlayProcessed = document.getElementById('play-processed');
-const timeOriginal    = document.getElementById('time-original');
-const timeProcessed   = document.getElementById('time-processed');
-const waveformOriginal  = document.getElementById('waveform-original');
-const waveformProcessed = document.getElementById('waveform-processed');
-const loadingOriginal   = document.getElementById('loading-original');
-const loadingProcessed  = document.getElementById('loading-processed');
+const previewEmpty   = document.getElementById('preview-empty');
+const previewContent = document.getElementById('preview-content');
+const previewSelect  = document.getElementById('preview-file-select');
+const audioPlayer    = document.getElementById('audio-player');
+const abOriginal     = document.getElementById('ab-original');
+const abProcessed    = document.getElementById('ab-processed');
+const btnPlayMain    = document.getElementById('btn-play-main');
+const btnStopMain    = document.getElementById('btn-stop-main');
+const btnSkipBack    = document.getElementById('btn-skip-back');
+const btnSkipFwd     = document.getElementById('btn-skip-fwd');
+const currentTimeEl  = document.getElementById('preview-current-time');
+const totalTimeEl    = document.getElementById('preview-total-time');
+const previewCanvas  = document.getElementById('preview-waveform');
+const previewLoading = document.getElementById('preview-loading');
+const volumeSlider   = document.getElementById('preview-volume');
 
-let currentPreviewFile = null;
-// Map<filePath, { original: Float32Array|null, processed: Float32Array|null }>
+let previewMode = 'original'; // 'original' | 'processed'
+// Map<filePath, peaks[]>
 const waveformCache = new Map();
+// Stored waveform image (without playhead) for repaint
+let waveformImageData = null;
+// RAF handle
+let rafId = null;
 
 function addToPreviewSelector(filePath, outputPath) {
   previewEmpty.hidden = true;
   previewContent.hidden = false;
+
+  // Check if already in selector
+  for (const opt of previewSelect.options) {
+    if (opt.value === filePath) { opt.dataset.outputPath = outputPath; return; }
+  }
 
   const opt = document.createElement('option');
   opt.value = filePath;
@@ -456,8 +723,17 @@ function addToPreviewSelector(filePath, outputPath) {
   opt.dataset.outputPath = outputPath;
   previewSelect.appendChild(opt);
 
-  if (previewSelect.options.length === 1) {
-    loadPreviewFile(filePath, outputPath);
+  if (previewSelect.options.length === 1) loadPreviewFile(filePath, outputPath);
+}
+
+function selectPreviewFile(filePath) {
+  for (let i = 0; i < previewSelect.options.length; i++) {
+    if (previewSelect.options[i].value === filePath) {
+      previewSelect.selectedIndex = i;
+      const opt = previewSelect.options[i];
+      loadPreviewFile(opt.value, opt.dataset.outputPath);
+      return;
+    }
   }
 }
 
@@ -467,162 +743,296 @@ previewSelect.addEventListener('change', () => {
 });
 
 async function loadPreviewFile(filePath, outputPath) {
-  currentPreviewFile = filePath;
+  cancelAnimationFrame(rafId);
+  audioPlayer.pause();
+  audioPlayer.src = '';
 
-  stopAudio(audioOriginal, btnPlayOriginal);
-  stopAudio(audioProcessed, btnPlayProcessed);
+  previewSelect._originalPath = filePath;
+  previewSelect._outputPath = outputPath;
 
-  audioOriginal.src = `file://${filePath}`;
-  audioProcessed.src = `file://${outputPath}`;
-  timeOriginal.textContent = '0:00';
-  timeProcessed.textContent = '0:00';
+  currentTimeEl.textContent = '0:00';
+  totalTimeEl.textContent = '0:00';
+  btnPlayMain.textContent = '▶';
 
-  await Promise.all([
-    drawWaveformForFile('waveform-original', 'loading-original', filePath),
-    drawWaveformForFile('waveform-processed', 'loading-processed', outputPath),
-  ]);
+  const src = previewMode === 'original' ? filePath : outputPath;
+  audioPlayer.src = `file://${src}`;
+  audioPlayer.load();
+
+  await loadWaveform(src);
 }
 
-async function drawWaveformForFile(canvasId, loadingId, filePath) {
-  const canvas = document.getElementById(canvasId);
-  const loading = document.getElementById(loadingId);
+async function switchAB(mode) {
+  if (mode === previewMode) return;
 
-  loading.hidden = false;
-  canvas.style.opacity = '0';
+  const wasPlaying = !audioPlayer.paused;
+  const savedTime = audioPlayer.currentTime;
 
-  sizeCanvas(canvas);
-  const numPeaks = canvas.width;
+  audioPlayer.pause();
+  cancelAnimationFrame(rafId);
 
-  let peaks = waveformCache.get(filePath)?.[canvasId];
+  previewMode = mode;
+  abOriginal.classList.toggle('active', mode === 'original');
+  abProcessed.classList.toggle('active', mode === 'processed');
+
+  const filePath   = previewSelect._originalPath;
+  const outputPath = previewSelect._outputPath;
+  if (!filePath) return;
+
+  const src = mode === 'original' ? filePath : outputPath;
+  audioPlayer.src = `file://${src}`;
+  audioPlayer.load();
+
+  // Load waveform and wait for metadata in parallel
+  await Promise.all([
+    loadWaveform(src),
+    new Promise(resolve => {
+      if (audioPlayer.readyState >= 1) return resolve();
+      audioPlayer.addEventListener('loadedmetadata', resolve, { once: true });
+    }),
+  ]);
+
+  if (isFinite(audioPlayer.duration)) {
+    audioPlayer.currentTime = Math.min(savedTime, audioPlayer.duration);
+  }
+  drawPlayheadAt(audioPlayer.currentTime);
+  if (wasPlaying) audioPlayer.play().catch(() => {});
+}
+
+abOriginal.addEventListener('click', () => switchAB('original'));
+abProcessed.addEventListener('click', () => switchAB('processed'));
+
+// ── Waveform ──
+function sizePreviewCanvas() {
+  const wrap = previewCanvas.parentElement;
+  const dpr = window.devicePixelRatio || 1;
+  const w = wrap.clientWidth || 600;
+  const h = wrap.clientHeight || 160;
+  previewCanvas.width = Math.round(w * dpr);
+  previewCanvas.height = Math.round(h * dpr);
+  previewCanvas.style.width = w + 'px';
+  previewCanvas.style.height = h + 'px';
+}
+
+async function loadWaveform(filePath) {
+  previewLoading.hidden = false;
+  previewCanvas.style.opacity = '0';
+  waveformImageData = null;
+
+  sizePreviewCanvas();
+  const numPeaks = previewCanvas.width;
+
+  let peaks = waveformCache.get(filePath);
   if (!peaks && window.api) {
     peaks = await window.api.audio.peaks(filePath, numPeaks);
-    const cached = waveformCache.get(filePath) ?? {};
-    cached[canvasId] = peaks;
-    waveformCache.set(filePath, cached);
+    if (peaks) waveformCache.set(filePath, peaks);
   }
 
-  loading.hidden = true;
-  canvas.style.opacity = '1';
+  previewLoading.hidden = true;
+  previewCanvas.style.opacity = '1';
 
-  if (peaks) drawPeaks(canvas, peaks);
+  if (peaks) {
+    drawWaveform(peaks);
+    drawPlayheadAt(audioPlayer.currentTime);
+  }
 }
 
-function sizeCanvas(canvas) {
-  const wrap = canvas.parentElement;
-  const dpr = window.devicePixelRatio || 1;
-  const w = wrap.clientWidth || 400;
-  canvas.width = Math.round(w * dpr);
-  canvas.height = Math.round(72 * dpr);
-  canvas.style.width = w + 'px';
-  canvas.style.height = '72px';
-}
-
-function drawPeaks(canvas, peaks) {
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width;
-  const H = canvas.height;
+function drawWaveform(peaks) {
+  const ctx = previewCanvas.getContext('2d');
+  const W = previewCanvas.width;
+  const H = previewCanvas.height;
   const mid = H / 2;
 
   ctx.clearRect(0, 0, W, H);
 
-  const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, 'rgba(74,143,232,0.9)');
-  grad.addColorStop(1, 'rgba(74,143,232,0.4)');
-  ctx.strokeStyle = grad;
-  ctx.lineWidth = Math.max(1, W / peaks.length);
-
-  const step = peaks.length / W;
-  ctx.beginPath();
-  for (let x = 0; x < W; x++) {
-    const idx = Math.floor(x * step);
-    const v = peaks[idx] ?? 0;
-    ctx.moveTo(x + 0.5, mid - v * mid * 0.95);
-    ctx.lineTo(x + 0.5, mid + v * mid * 0.95);
-  }
-  ctx.stroke();
-
-  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  // Center line
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0, mid);
   ctx.lineTo(W, mid);
   ctx.stroke();
-}
 
-function drawPlayhead(canvas, audio) {
-  if (!audio.duration) return;
-  const ctx = canvas.getContext('2d');
-  const x = Math.floor(audio.currentTime / audio.duration * canvas.width);
-  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(x, 0);
-  ctx.lineTo(x, canvas.height);
-  ctx.stroke();
-}
+  // Gradient fill
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, 'rgba(74,143,232,0.95)');
+  grad.addColorStop(0.5, 'rgba(74,143,232,0.75)');
+  grad.addColorStop(1, 'rgba(74,143,232,0.35)');
+  ctx.fillStyle = grad;
 
-function setupAudioPlayer(audio, playBtn, timeEl, canvas) {
-  let rafId = null;
-  let imageData = null;
+  const barW = Math.max(1, W / peaks.length);
+  const step = peaks.length / W;
 
-  function tick() {
-    if (imageData) ctx().putImageData(imageData, 0, 0);
-    drawPlayhead(canvas, audio);
-    timeEl.textContent = formatAudioTime(audio.currentTime);
-    if (!audio.paused) rafId = requestAnimationFrame(tick);
+  for (let x = 0; x < W; x++) {
+    const idx = Math.floor(x * step);
+    const v = (peaks[idx] ?? 0) * 0.95;
+    const barH = Math.max(1, v * mid * 2);
+    ctx.fillRect(x, mid - v * mid, barW, barH);
   }
 
-  function ctx() { return canvas.getContext('2d'); }
-
-  audio.addEventListener('loadedmetadata', () => {
-    timeEl.textContent = `0:00 / ${formatAudioTime(audio.duration)}`;
-  });
-
-  audio.addEventListener('play', () => {
-    imageData = ctx().getImageData(0, 0, canvas.width, canvas.height);
-    cancelAnimationFrame(rafId);
-    rafId = requestAnimationFrame(tick);
-    playBtn.textContent = '⏸';
-    playBtn.title = 'Pause';
-  });
-
-  audio.addEventListener('pause', () => {
-    cancelAnimationFrame(rafId);
-    if (imageData) ctx().putImageData(imageData, 0, 0);
-    playBtn.textContent = '▶';
-    playBtn.title = playBtn.id === 'play-original' ? 'Play original audio' : 'Play processed audio';
-  });
-
-  audio.addEventListener('ended', () => {
-    cancelAnimationFrame(rafId);
-    if (imageData) ctx().putImageData(imageData, 0, 0);
-    playBtn.textContent = '▶';
-    audio.currentTime = 0;
-    timeEl.textContent = `0:00 / ${formatAudioTime(audio.duration)}`;
-  });
-
-  playBtn.addEventListener('click', () => {
-    if (audio.paused) audio.play().catch(() => {});
-    else audio.pause();
-  });
+  // Save image without playhead
+  waveformImageData = ctx.getImageData(0, 0, W, H);
 }
 
-function stopAudio(audio, playBtn) {
-  audio.pause();
-  audio.currentTime = 0;
-  audio.src = '';
-  playBtn.textContent = '▶';
+function drawPlayheadAt(currentTime) {
+  if (!audioPlayer.duration || !waveformImageData) return;
+  const ctx = previewCanvas.getContext('2d');
+  ctx.putImageData(waveformImageData, 0, 0);
+  const x = (currentTime / audioPlayer.duration) * previewCanvas.width;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, 0);
+  ctx.lineTo(x, previewCanvas.height);
+  ctx.stroke();
+
+  // Playhead knob
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(x, previewCanvas.height / 2, 4, 0, Math.PI * 2);
+  ctx.fill();
 }
 
-function formatAudioTime(sec) {
-  if (!sec || isNaN(sec)) return '0:00';
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${String(s).padStart(2, '0')}`;
+function startPlayheadLoop() {
+  cancelAnimationFrame(rafId);
+  function tick() {
+    drawPlayheadAt(audioPlayer.currentTime);
+    currentTimeEl.textContent = formatAudioTime(audioPlayer.currentTime);
+    if (!audioPlayer.paused) rafId = requestAnimationFrame(tick);
+  }
+  rafId = requestAnimationFrame(tick);
 }
 
-setupAudioPlayer(audioOriginal, btnPlayOriginal, timeOriginal, waveformOriginal);
-setupAudioPlayer(audioProcessed, btnPlayProcessed, timeProcessed, waveformProcessed);
+// ── Waveform seek ──
+let isScrubbing = false;
+
+function seekFromEvent(e) {
+  if (!audioPlayer.duration) return;
+  const rect = previewCanvas.getBoundingClientRect();
+  const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+  audioPlayer.currentTime = (x / rect.width) * audioPlayer.duration;
+  drawPlayheadAt(audioPlayer.currentTime);
+  currentTimeEl.textContent = formatAudioTime(audioPlayer.currentTime);
+}
+
+previewCanvas.addEventListener('mousedown', (e) => {
+  isScrubbing = true;
+  seekFromEvent(e);
+});
+document.addEventListener('mousemove', (e) => {
+  if (isScrubbing) seekFromEvent(e);
+});
+document.addEventListener('mouseup', () => { isScrubbing = false; });
+
+// ── Transport controls ──
+function stopAudio() {
+  cancelAnimationFrame(rafId);
+  audioPlayer.pause();
+  audioPlayer.currentTime = 0;
+  audioPlayer.src = '';
+  btnPlayMain.textContent = '▶';
+  currentTimeEl.textContent = '0:00';
+}
+
+function togglePlayPause() {
+  if (audioPlayer.paused) {
+    audioPlayer.play().catch(() => {});
+  } else {
+    audioPlayer.pause();
+  }
+}
+
+audioPlayer.addEventListener('play', () => {
+  btnPlayMain.textContent = '⏸';
+  startPlayheadLoop();
+});
+
+audioPlayer.addEventListener('pause', () => {
+  cancelAnimationFrame(rafId);
+  btnPlayMain.textContent = '▶';
+  drawPlayheadAt(audioPlayer.currentTime);
+});
+
+audioPlayer.addEventListener('ended', () => {
+  cancelAnimationFrame(rafId);
+  btnPlayMain.textContent = '▶';
+  audioPlayer.currentTime = 0;
+  drawPlayheadAt(0);
+  currentTimeEl.textContent = '0:00';
+});
+
+audioPlayer.addEventListener('loadedmetadata', () => {
+  totalTimeEl.textContent = formatAudioTime(audioPlayer.duration);
+  currentTimeEl.textContent = '0:00';
+});
+
+audioPlayer.addEventListener('timeupdate', () => {
+  if (audioPlayer.paused) {
+    currentTimeEl.textContent = formatAudioTime(audioPlayer.currentTime);
+  }
+});
+
+btnPlayMain.addEventListener('click', togglePlayPause);
+
+btnStopMain.addEventListener('click', () => {
+  cancelAnimationFrame(rafId);
+  audioPlayer.pause();
+  audioPlayer.currentTime = 0;
+  btnPlayMain.textContent = '▶';
+  drawPlayheadAt(0);
+  currentTimeEl.textContent = '0:00';
+});
+
+btnSkipBack.addEventListener('click', () => {
+  audioPlayer.currentTime = Math.max(0, audioPlayer.currentTime - 5);
+  drawPlayheadAt(audioPlayer.currentTime);
+});
+
+btnSkipFwd.addEventListener('click', () => {
+  audioPlayer.currentTime = Math.min(audioPlayer.duration || 0, audioPlayer.currentTime + 5);
+  drawPlayheadAt(audioPlayer.currentTime);
+});
+
+volumeSlider.addEventListener('input', () => {
+  audioPlayer.volume = parseFloat(volumeSlider.value);
+});
+
+// ── Keyboard shortcuts (preview tab only) ──
+document.addEventListener('keydown', (e) => {
+  if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+  const activeView = document.querySelector('.view.active');
+  if (!activeView || activeView.id !== 'view-preview') return;
+
+  if (e.key === ' ') {
+    e.preventDefault();
+    togglePlayPause();
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    audioPlayer.currentTime = Math.max(0, audioPlayer.currentTime - 5);
+    drawPlayheadAt(audioPlayer.currentTime);
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    audioPlayer.currentTime = Math.min(audioPlayer.duration || 0, audioPlayer.currentTime + 5);
+    drawPlayheadAt(audioPlayer.currentTime);
+  } else if (e.key === 'a' || e.key === 'A') {
+    e.preventDefault();
+    switchAB(previewMode === 'original' ? 'processed' : 'original');
+  }
+});
+
+// ── Window resize — re-size waveform canvas ──
+const resizeObserver = new ResizeObserver(() => {
+  const activeView = document.querySelector('.view.active');
+  if (activeView?.id === 'view-preview' && waveformImageData) {
+    sizePreviewCanvas();
+    // Reload waveform for current file
+    const opt = previewSelect.selectedOptions[0];
+    if (opt) {
+      const src = previewMode === 'original' ? opt.value : opt.dataset.outputPath;
+      if (src) loadWaveform(src);
+    }
+  }
+});
+resizeObserver.observe(document.getElementById('preview-waveform-wrap'));
 
 // ── Init ──
 loadPrefs();

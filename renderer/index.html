@@ -13,15 +13,12 @@
     <header class="titlebar">
       <div class="titlebar-drag">
         <nav class="tabs" role="tablist">
-          <button class="tab active" data-tab="processing" role="tab" aria-selected="true"
-            title="Manage folders and process audio files">
+          <button class="tab active" data-tab="processing" role="tab" aria-selected="true">
             Processing
             <span class="tab-badge" id="badge-done" hidden></span>
           </button>
-          <button class="tab" data-tab="preview" role="tab" aria-selected="false"
-            title="Compare original vs processed audio side by side">Preview</button>
-          <button class="tab" data-tab="about" role="tab" aria-selected="false"
-            title="About AudioPro and the processing pipeline">About</button>
+          <button class="tab" data-tab="preview" role="tab" aria-selected="false">Preview</button>
+          <button class="tab" data-tab="about" role="tab" aria-selected="false">About</button>
         </nav>
       </div>
     </header>
@@ -30,70 +27,152 @@
 
       <!-- ── Processing View ── -->
       <section class="view active" id="view-processing" role="tabpanel">
+
         <div class="toolbar">
           <button class="btn btn-secondary" id="btn-add-folders"
-            title="Open a native folder dialog to add folders containing WAV files (or drag folders onto the list below)">
-            <span class="btn-icon">+</span> Add Folders
+            title="Add folders — scans for all WAV files inside">
+            <span class="btn-icon">+</span> Folders
+          </button>
+          <button class="btn btn-secondary" id="btn-add-files"
+            title="Add individual WAV files">
+            <span class="btn-icon">+</span> Files
           </button>
           <button class="btn btn-accent" id="btn-process-all" disabled
-            title="Start processing all queued WAV files through the full pipeline">
+            title="Process all queued files through the full pipeline">
             &#9654; Process All
           </button>
           <span class="toolbar-spacer"></span>
           <span class="queue-summary" id="queue-summary"></span>
-          <div class="mode-toggle" title="Quality: includes afftdn noise reduction. Fast: skip denoising for quicker turnaround.">
+          <button class="btn btn-secondary btn-sm" id="btn-remove-completed" hidden
+            title="Remove completed files from the queue">Remove Done</button>
+          <button class="btn btn-secondary btn-sm" id="btn-clear-all" hidden
+            title="Remove all files from the queue">Clear All</button>
+          <div class="mode-toggle" title="Quality: includes denoising. Fast: skip denoising.">
             <button class="mode-btn" id="mode-quality" data-mode="quality">Quality</button>
             <button class="mode-btn" id="mode-fast" data-mode="fast">Fast</button>
           </div>
-          <button class="btn btn-icon-only" id="btn-settings"
-            title="Open audio processing settings (LUFS target, HPF frequency, de-esser)"
-            aria-expanded="false">&#9881;</button>
+          <button class="btn-icon-only" id="btn-settings"
+            title="Processing settings" aria-expanded="false">&#9881;</button>
         </div>
 
-        <!-- Settings panel (collapsed by default) -->
+        <!-- Settings panel — grouped by category -->
         <div class="settings-panel" id="settings-panel" hidden>
-          <div class="settings-grid">
-            <label class="settings-label" for="set-lufs"
-              title="Target integrated loudness. -14 LUFS for streaming platforms (Spotify, YouTube), -16 LUFS for podcasts, -20 LUFS for headroom-heavy broadcasts.">
-              LUFS Target
-            </label>
-            <div class="settings-control-row">
-              <input type="range" id="set-lufs" min="-20" max="-14" step="1" value="-16"
-                title="Drag to set target loudness. -14 = streaming, -16 = podcast standard, -20 = broadcast.">
-              <span class="settings-value" id="lufs-value">-16 LUFS</span>
+          <div class="settings-categories">
+
+            <div class="settings-category">
+              <div class="settings-cat-title">Output</div>
+              <div class="settings-row">
+                <span class="settings-label" title="Output file format. WAV 24-bit is best quality, FLAC saves space.">Format</span>
+                <select class="settings-select" id="set-format">
+                  <option value="wav24">WAV 24-bit</option>
+                  <option value="wav16">WAV 16-bit</option>
+                  <option value="flac">FLAC</option>
+                </select>
+              </div>
+              <div class="settings-row">
+                <span class="settings-label" title="Sample rate. 48 kHz is standard for video/podcasts. 44.1 kHz for music.">Sample Rate</span>
+                <select class="settings-select" id="set-samplerate">
+                  <option value="48000">48 kHz</option>
+                  <option value="44100">44.1 kHz</option>
+                </select>
+              </div>
+              <div class="settings-row">
+                <span class="settings-label" title="Target integrated loudness. -16 LUFS = podcast standard. -14 LUFS = streaming platforms.">LUFS Target</span>
+                <div class="range-row">
+                  <input type="range" id="set-lufs" min="-20" max="-14" step="1" value="-16">
+                  <span class="range-value" id="lufs-value">-16 LUFS</span>
+                </div>
+              </div>
             </div>
 
-            <label class="settings-label" for="set-hpf"
-              title="High-pass filter cutoff. Removes everything below this frequency. 60 Hz for music-adjacent content, 80 Hz for voice (default), 120 Hz for very clean microphones.">
-              HPF Frequency
-            </label>
-            <div class="settings-control-row">
-              <input type="range" id="set-hpf" min="60" max="120" step="5" value="80"
-                title="Drag to set the high-pass filter cutoff frequency in Hz.">
-              <span class="settings-value" id="hpf-value">80 Hz</span>
+            <div class="settings-category">
+              <div class="settings-cat-title">Noise Reduction</div>
+              <div class="settings-row">
+                <span class="settings-label" title="FFmpeg's frequency-domain denoiser removes background hum, fan noise, and room noise. Only runs in Quality mode.">Denoise (afftdn)</span>
+                <span class="settings-auto">Quality only</span>
+              </div>
+              <div class="settings-row">
+                <span class="settings-label" title="Adaptive noise gate: closes the audio signal during very quiet passages to eliminate low-level background noise between words.">Noise Gate</span>
+                <label class="toggle">
+                  <input type="checkbox" id="set-noisegate" checked>
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
+              <div class="settings-row">
+                <span class="settings-label" title="Automatically removes leading and trailing silence from each file. Cleans up dead air at the start and end of recordings.">Silence Trim</span>
+                <label class="toggle">
+                  <input type="checkbox" id="set-silencetrim" checked>
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
+              <div class="settings-row">
+                <span class="settings-label" title="Gently attenuates breath sounds between sentences by ~6 dB. Subtle — use when breaths are audible and distracting.">Breath Reduction</span>
+                <label class="toggle">
+                  <input type="checkbox" id="set-breathreduction">
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
             </div>
 
-            <label class="settings-label" for="set-deesser"
-              title="De-esser reduces harsh sibilance (S, Sh, Ch sounds) in the 5-7 kHz range. Disable if the voice sounds too dull.">
-              De-esser
-            </label>
-            <div class="settings-control-row">
-              <label class="toggle" title="Toggle de-esser on or off">
-                <input type="checkbox" id="set-deesser" checked>
-                <span class="toggle-track"></span>
-              </label>
-              <span class="settings-value" id="deesser-value">On</span>
+            <div class="settings-category">
+              <div class="settings-cat-title">EQ</div>
+              <div class="settings-row">
+                <span class="settings-label" title="Converts stereo recordings to mono. Recommended for educational content — voice is always mono and saves file size.">Stereo → Mono</span>
+                <label class="toggle">
+                  <input type="checkbox" id="set-stereomono" checked>
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
+              <div class="settings-row">
+                <span class="settings-label" title="High-pass filter removes low-frequency rumble below this frequency. 80 Hz is ideal for voice. Lower for music-adjacent content.">HPF Frequency</span>
+                <div class="range-row">
+                  <input type="range" id="set-hpf" min="60" max="120" step="5" value="80">
+                  <span class="range-value" id="hpf-value">80 Hz</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <span class="settings-label" title="De-esser reduces harsh sibilance (S, Sh, Ch sounds) in the 6 kHz range. Disable if voice sounds too dull.">De-esser</span>
+                <label class="toggle">
+                  <input type="checkbox" id="set-deesser" checked>
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
             </div>
+
+            <div class="settings-category">
+              <div class="settings-cat-title">Dynamics</div>
+              <div class="settings-row">
+                <span class="settings-label" title="3-band compressor: separate compression for low (0-300 Hz), mid (300-3500 Hz), and high (3500+ Hz) frequencies. Gives more control than a single compressor.">Multi-band Comp</span>
+                <label class="toggle">
+                  <input type="checkbox" id="set-mbc" checked>
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
+              <div class="settings-row settings-row-note">
+                <span class="settings-note">Low: 5:1 · Mid: 3:1 · High: 2:1</span>
+              </div>
+              <div class="settings-row settings-row-note">
+                <span class="settings-note">Limiter at −1 dBTP always active</span>
+              </div>
+            </div>
+
           </div>
         </div>
 
-        <div class="queue-container">
+        <div class="queue-container" id="queue-container">
+          <!-- Empty state -->
           <div class="queue-empty" id="queue-empty">
-            <div class="drop-zone-icon">&#128193;</div>
-            <p class="drop-zone-label">Drop folders here</p>
-            <p class="text-muted">or click <strong>Add Folders</strong> to get started</p>
-            <p class="text-muted small">Accepts WAV files &mdash; outputs 24-bit 48kHz podcast quality</p>
+            <div class="queue-empty-icon">&#127897;</div>
+            <h2 class="queue-empty-title">Ready to enhance your audio</h2>
+            <p class="queue-empty-sub">Drop folders here to get started</p>
+            <div class="queue-empty-actions">
+              <button class="btn btn-accent" id="btn-empty-folders">+ Add Folders</button>
+              <button class="btn btn-secondary" id="btn-empty-files">+ Add Files</button>
+            </div>
+            <p class="queue-empty-hint">WAV files &rarr; podcast-quality 24-bit output in <code>Audio_Pro/</code></p>
           </div>
+
+          <!-- File list -->
           <div class="queue-list" id="queue-list" hidden></div>
         </div>
 
@@ -102,7 +181,7 @@
             <span class="progress-filename" id="progress-filename">filename.wav</span>
             <span class="progress-step" id="progress-step">Step 1/4 &middot; Analysis</span>
           </div>
-          <div class="progress-track" title="Current file processing progress">
+          <div class="progress-track">
             <div class="progress-fill" id="progress-fill"></div>
           </div>
           <div class="progress-footer">
@@ -117,47 +196,61 @@
         <div class="view-empty" id="preview-empty">
           <div class="view-empty-icon">&#9654;</div>
           <p>No processed files yet</p>
-          <p class="text-muted">Process files in the <strong>Processing</strong> tab first,<br>
-            then return here to compare original vs processed audio.</p>
+          <p class="text-muted">Process files in <strong>Processing</strong> first, then come back to compare.</p>
         </div>
 
         <div class="preview-content" id="preview-content" hidden>
-          <div class="preview-selector-bar">
-            <label for="preview-file-select" class="preview-select-label">File:</label>
-            <select id="preview-file-select" title="Choose a processed file to preview"></select>
-          </div>
 
-          <div class="preview-panels">
-            <div class="preview-panel" id="panel-original">
-              <div class="panel-header">
-                <span class="panel-label">Original</span>
-                <button class="btn-play-panel" id="play-original" title="Play original audio">&#9654;</button>
-                <span class="time-display" id="time-original">0:00</span>
-              </div>
-              <div class="waveform-wrap">
-                <canvas class="waveform" id="waveform-original"></canvas>
-                <div class="waveform-loading" id="loading-original">Loading waveform…</div>
-              </div>
-            </div>
-
-            <div class="preview-divider"></div>
-
-            <div class="preview-panel" id="panel-processed">
-              <div class="panel-header">
-                <span class="panel-label">Processed</span>
-                <button class="btn-play-panel" id="play-processed" title="Play processed audio">&#9654;</button>
-                <span class="time-display" id="time-processed">0:00</span>
-              </div>
-              <div class="waveform-wrap">
-                <canvas class="waveform" id="waveform-processed"></canvas>
-                <div class="waveform-loading" id="loading-processed">Loading waveform…</div>
-              </div>
+          <!-- Top bar: file selector + A/B toggle -->
+          <div class="preview-topbar">
+            <label for="preview-file-select" class="preview-select-label">File</label>
+            <select id="preview-file-select" title="Choose a file to preview"></select>
+            <span class="preview-topbar-spacer"></span>
+            <div class="ab-toggle">
+              <button class="ab-btn active" id="ab-original" title="Listen to original recording">Original</button>
+              <button class="ab-btn" id="ab-processed" title="Listen to processed audio (press A to toggle)">Processed</button>
             </div>
           </div>
+
+          <!-- Waveform — full width, tall -->
+          <div class="preview-waveform-section">
+            <div class="preview-waveform-wrap" id="preview-waveform-wrap">
+              <canvas id="preview-waveform"></canvas>
+              <div class="preview-waveform-loading" id="preview-loading" hidden>Loading waveform&hellip;</div>
+            </div>
+          </div>
+
+          <!-- Transport controls -->
+          <div class="preview-transport">
+            <div class="transport-time">
+              <span id="preview-current-time" class="time-mono">0:00</span>
+              <span class="time-sep">/</span>
+              <span id="preview-total-time" class="time-mono">0:00</span>
+            </div>
+            <div class="transport-buttons">
+              <button class="btn-transport" id="btn-skip-back" title="Skip back 5 seconds (Left arrow)">
+                &#9664;&#9664; 5s
+              </button>
+              <button class="btn-transport btn-transport-play" id="btn-play-main" title="Play / Pause (Space)">
+                &#9654;
+              </button>
+              <button class="btn-transport" id="btn-stop-main" title="Stop and return to start">
+                &#9632;
+              </button>
+              <button class="btn-transport" id="btn-skip-fwd" title="Skip forward 5 seconds (Right arrow)">
+                5s &#9654;&#9654;
+              </button>
+            </div>
+            <div class="transport-volume">
+              <span class="volume-icon">&#128266;</span>
+              <input type="range" id="preview-volume" class="volume-slider"
+                min="0" max="1" step="0.01" value="1" title="Volume">
+            </div>
+          </div>
+
         </div>
 
-        <audio id="audio-original" preload="none"></audio>
-        <audio id="audio-processed" preload="none"></audio>
+        <audio id="audio-player" preload="none"></audio>
       </section>
 
       <!-- ── About View ── -->
@@ -168,29 +261,29 @@
             <p class="about-tagline">Drop files, get podcast quality.</p>
           </div>
 
-          <div class="pipeline-diagram" title="The four-step processing pipeline AudioPro runs on every file">
-            <div class="pipe-node pipe-node-analysis">
+          <div class="pipeline-diagram">
+            <div class="pipe-node">
               <span class="pipe-icon">&#128270;</span>
               <span class="pipe-label">Analysis</span>
-              <span class="pipe-sub">FFprobe · ~2s</span>
+              <span class="pipe-sub">FFprobe</span>
             </div>
             <div class="pipe-arrow">&#8594;</div>
-            <div class="pipe-node pipe-node-denoise">
+            <div class="pipe-node">
               <span class="pipe-icon">&#127925;</span>
-              <span class="pipe-label">Denoise</span>
-              <span class="pipe-sub">afftdn · Quality</span>
+              <span class="pipe-label">Pre-process</span>
+              <span class="pipe-sub">Mono · Denoise · Gate · Trim</span>
             </div>
             <div class="pipe-arrow">&#8594;</div>
-            <div class="pipe-node pipe-node-eq">
+            <div class="pipe-node">
               <span class="pipe-icon">&#9000;</span>
-              <span class="pipe-label">EQ + Dynamics</span>
-              <span class="pipe-sub">FFmpeg · ~5s</span>
+              <span class="pipe-label">EQ Measure</span>
+              <span class="pipe-sub">Loudnorm 2-pass</span>
             </div>
             <div class="pipe-arrow">&#8594;</div>
-            <div class="pipe-node pipe-node-render">
+            <div class="pipe-node">
               <span class="pipe-icon">&#128190;</span>
               <span class="pipe-label">Render</span>
-              <span class="pipe-sub">WAV 24-bit 48kHz</span>
+              <span class="pipe-sub">EQ · MBC · Loudnorm</span>
             </div>
           </div>
 
@@ -200,32 +293,32 @@
             <div class="pipeline-step">
               <div class="step-number">1</div>
               <div class="step-body">
-                <h3>Analysis <span class="step-time">~2s</span></h3>
-                <p>Detects format, sample rate, bit depth, channels, and duration using FFprobe. Results inform every subsequent step automatically — no manual configuration needed.</p>
+                <h3>Analysis</h3>
+                <p>FFprobe detects format, sample rate, bit depth, channels, and duration. Results inform every subsequent step automatically.</p>
               </div>
             </div>
 
             <div class="pipeline-step">
               <div class="step-number">2</div>
               <div class="step-body">
-                <h3>Denoise — afftdn <span class="step-time">Quality mode only</span></h3>
-                <p>FFmpeg's adaptive frequency-domain noise filter (<code>afftdn=nf=-25:tn=1</code>). Targets a noise floor of &minus;25&nbsp;dB with temporal smoothing enabled. Removes background hum, fan noise, and room noise while preserving voice character. Skip with <em>Fast</em> mode for quicker processing.</p>
+                <h3>Pre-process</h3>
+                <p><strong>Stereo→Mono:</strong> Mixes channels to mono (voice is always mono). <strong>Denoise (afftdn):</strong> Frequency-domain noise reduction, noise floor &minus;25&nbsp;dB. Quality mode only. <strong>Noise Gate:</strong> Closes signal during silent passages to eliminate background hum. <strong>Silence Trim:</strong> Removes leading and trailing silence.</p>
               </div>
             </div>
 
             <div class="pipeline-step">
               <div class="step-number">3</div>
               <div class="step-body">
-                <h3>EQ &amp; Filters <span class="step-time">~5s</span></h3>
-                <p>High-pass filter removes rumble (configurable 60&ndash;120&nbsp;Hz). Parametric EQ: presence boost at 2.5&nbsp;kHz (+2&nbsp;dB), mud cut at 300&nbsp;Hz (&minus;2&nbsp;dB), air shelf at 12&nbsp;kHz (+1&nbsp;dB). Optional de-esser at 6&nbsp;kHz (&minus;3&nbsp;dB). Two-pass loudness normalization locked to your LUFS target.</p>
+                <h3>EQ Measure</h3>
+                <p>Applies the full EQ and dynamics chain in measurement mode to gather loudness statistics for the two-pass <code>loudnorm</code> algorithm. HPF removes rumble. Presence boost at 2.5&nbsp;kHz, mud cut at 300&nbsp;Hz, air shelf at 12&nbsp;kHz, optional de-esser at 6&nbsp;kHz.</p>
               </div>
             </div>
 
             <div class="pipeline-step">
               <div class="step-number">4</div>
               <div class="step-body">
-                <h3>Dynamics &amp; Output <span class="step-time">~5s</span></h3>
-                <p>3:1 compressor (threshold &minus;20&nbsp;dBFS) controls dynamic range. Hard limiter at &minus;1&nbsp;dBTP prevents digital clipping. Final output: WAV 24-bit 48&nbsp;kHz saved to <code>Audio_Pro/</code> next to the source folder.</p>
+                <h3>Render</h3>
+                <p>EQ chain → <strong>Multi-band compressor</strong> (3 independent bands: low 5:1, mid 3:1, high 2:1) → Hard limiter at &minus;1&nbsp;dBTP → Loudness normalization to your LUFS target. Output: WAV 24-bit 48&nbsp;kHz (or configured format) in <code>Audio_Pro/</code> next to the source folder.</p>
               </div>
             </div>
           </div>
@@ -238,6 +331,16 @@
 
     </main>
   </div>
+
+  <!-- Context menu (right-click on file items) -->
+  <div class="ctx-menu" id="ctx-menu" hidden>
+    <button class="ctx-item" data-action="remove">Remove file</button>
+    <button class="ctx-item" data-action="move-up">Move up</button>
+    <button class="ctx-item" data-action="move-down">Move down</button>
+    <div class="ctx-separator"></div>
+    <button class="ctx-item" data-action="open-finder">Open in Finder</button>
+  </div>
+
   <script src="js/app.js"></script>
 </body>
 </html>

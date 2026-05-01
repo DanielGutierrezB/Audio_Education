@@ -191,7 +191,7 @@ async function detectDynamicRange(filePath) {
   const peakMatch = stderr.match(/Peak level dB:\s*([\-\d.]+)/);
   const rmsMatch = stderr.match(/RMS level dB:\s*([\-\d.]+)/);
   const rmsPeakMatch = stderr.match(/RMS peak dB:\s*([\-\d.]+)/);
-  const rmsTroughMatch = stderr.match(/RMS trough dB:\s*([\-\d.]+)/);
+  const rmsTroughMatch = stderr.match(/RMS through dB:\s*([\-\d.]+)/);
 
   const peak = peakMatch ? parseNumber(peakMatch[1]) : null;
   const rms = rmsMatch ? parseNumber(rmsMatch[1]) : null;
@@ -290,14 +290,17 @@ function buildRecommendations(analysis) {
   if (dynamics.compressionLevel === 'heavy') {
     rec.settings.multiBandCompEnabled = true;
     rec.settings.compressionRatio = 5;
-    rec.reasoning.push(`Wide dynamic range (${dynamics.dynamicRange?.toFixed(1)} dB) — heavy multi-band compression`);
+    const drStr = dynamics.dynamicRange != null ? `${dynamics.dynamicRange.toFixed(1)} dB` : 'wide';
+    rec.reasoning.push(`Wide dynamic range (${drStr}) — heavy multi-band compression`);
   } else if (dynamics.compressionLevel === 'moderate') {
     rec.settings.multiBandCompEnabled = true;
     rec.settings.compressionRatio = 3.5;
-    rec.reasoning.push(`Moderate dynamic range (${dynamics.dynamicRange?.toFixed(1)} dB) — standard multi-band compression`);
+    const drStr = dynamics.dynamicRange != null ? `${dynamics.dynamicRange.toFixed(1)} dB` : 'moderate';
+    rec.reasoning.push(`Moderate dynamic range (${drStr}) — standard multi-band compression`);
   } else {
     rec.settings.multiBandCompEnabled = false;
-    rec.reasoning.push(`Tight dynamic range (${dynamics.dynamicRange?.toFixed(1)} dB) — single-band compression sufficient`);
+    const drStr = dynamics.dynamicRange != null ? `${dynamics.dynamicRange.toFixed(1)} dB` : 'tight';
+    rec.reasoning.push(`Tight dynamic range (${drStr}) — single-band compression sufficient`);
   }
 
   // 8. Loudness target

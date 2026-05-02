@@ -2,6 +2,7 @@ node_modules/
 dist/
 out/
 bin/
+python-runtime/
 build/icons/
 *.dmg
 *.pkg

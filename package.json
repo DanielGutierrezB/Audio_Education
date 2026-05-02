@@ -6,6 +6,8 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --mac --arm64",
+    "build:python": "bash scripts/build-python-runtime.sh",
+    "build:full": "npm run build:python && npm run build",
     "build:icon": "rsvg-convert -w 512 -h 512 build/icon.svg -o build/icons/512x512.png || convert build/icon.svg build/icons/512x512.png"
   },
   "dependencies": {
@@ -33,7 +35,21 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "python-runtime/",
+        "to": "python-runtime",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/tests/**",
+          "!**/test/**"
+        ]
       }
+    ],
+    "asarUnpack": [
+      "src/python/**"
     ],
     "mac": {
       "category": "public.app-category.music",

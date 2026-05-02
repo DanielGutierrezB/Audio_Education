@@ -23,24 +23,39 @@ import math
 import sys
 
 
-# Presets are tuned for QUALITY first, with speed as a secondary concern.
-# Each preset has a base (nfe=128, the upstream maximum, max quality) and a
-# 'fast' variant (nfe=64, ~1.7x faster, very similar diffusion output).
+# Resemble Enhance presets, tuned to be CONSERVATIVE for studio recordings.
+# Aggressive regeneration on already-decent audio adds chunk-boundary
+# artefacts (perceived as flanger). For most teaching/podcast material the
+# 'subtle' or 'light' presets are the safe choice.
 #
-# nfe controls the number of diffusion sampler steps. Lower = faster but the
-# diffusion output diverges more from the maximum-quality reference.
-# midpoint solver is what upstream uses by default and is the most stable.
+# Parameters:
+#   lambd:  1.0 = pure denoise / preservation, 0.0 = full neural regeneration.
+#           Anything below ~0.7 starts to noticeably alter timbre on clean voice.
+#   tau:    0..1 stochasticity / temperature; 0.3-0.5 is more stable.
+#   nfe:    diffusion sampler steps. Higher = more consistent between chunks
+#           (less flanger), slower. 128 is upstream max.
+#   solver: 'midpoint' is the upstream-recommended stable solver.
 PRESETS = {
-    # Quality presets (upstream nfe=128, recommended default)
-    "light":      {"lambd": 0.9, "tau": 0.5, "nfe": 128, "solver": "midpoint"},
-    "balanced":   {"lambd": 0.7, "tau": 0.5, "nfe": 128, "solver": "midpoint"},
-    "broadcast":  {"lambd": 0.4, "tau": 0.5, "nfe": 128, "solver": "midpoint"},  # default; ~60% regen
-    "aggressive": {"lambd": 0.2, "tau": 0.7, "nfe": 128, "solver": "midpoint"},
-    # Fast presets (nfe=64; ~1.7x speed, near-identical diffusion output)
-    "light_fast":      {"lambd": 0.9, "tau": 0.5, "nfe": 64, "solver": "midpoint"},
-    "balanced_fast":   {"lambd": 0.7, "tau": 0.5, "nfe": 64, "solver": "midpoint"},
-    "broadcast_fast":  {"lambd": 0.4, "tau": 0.5, "nfe": 64, "solver": "midpoint"},
-    "aggressive_fast": {"lambd": 0.2, "tau": 0.7, "nfe": 64, "solver": "midpoint"},
+    # NEW default. Maximum fidelity — barely touches the voice, just neural
+    # denoise. Lowest tau = lowest stochasticity = lowest chunk-boundary
+    # artefacts. Use this for clean studio recordings.
+    "ultra_subtle": {"lambd": 0.98, "tau": 0.15, "nfe": 128, "solver": "midpoint"},
+    # Mostly preserves the original voice, just cleans + very light polish.
+    "subtle":     {"lambd": 0.97, "tau": 0.20, "nfe": 128, "solver": "midpoint"},
+    # Slightly more enhancement, still very faithful to the original timbre.
+    "light":      {"lambd": 0.90, "tau": 0.30, "nfe": 128, "solver": "midpoint"},
+    # Balanced — noticeable cleanup, mild timbre shift.
+    "balanced":   {"lambd": 0.78, "tau": 0.40, "nfe": 128, "solver": "midpoint"},
+    # Heavy regeneration. Use ONLY on degraded recordings (calls, heavy noise).
+    # On clean voice this introduces perceptible chunk-boundary artefacts.
+    "strong":     {"lambd": 0.60, "tau": 0.45, "nfe": 128, "solver": "midpoint"},
+    # Fast variants (nfe=64): ~1.7x faster, slightly less consistent between
+    # chunks. Avoid for clean voice; only worthwhile for batch on rough audio.
+    "ultra_subtle_fast": {"lambd": 0.98, "tau": 0.15, "nfe": 64, "solver": "midpoint"},
+    "subtle_fast":   {"lambd": 0.97, "tau": 0.20, "nfe": 64, "solver": "midpoint"},
+    "light_fast":    {"lambd": 0.90, "tau": 0.30, "nfe": 64, "solver": "midpoint"},
+    "balanced_fast": {"lambd": 0.78, "tau": 0.40, "nfe": 64, "solver": "midpoint"},
+    "strong_fast":   {"lambd": 0.60, "tau": 0.45, "nfe": 64, "solver": "midpoint"},
 }
 
 
@@ -64,7 +79,7 @@ def main():
     output_path = sys.argv[2]
     opts = parse_kv(sys.argv[3:])
 
-    preset_name = opts.get("preset", "broadcast")
+    preset_name = opts.get("preset", "ultra_subtle")
     if preset_name not in PRESETS:
         print(f"Error: unknown preset '{preset_name}'. "
               f"Valid: {', '.join(PRESETS)}", file=sys.stderr)

@@ -153,17 +153,21 @@
               <div class="settings-row">
                 <span class="settings-label" title="How much the model regenerates the voice. Light = mostly clean. Broadcast = ~60% regenerated (Adobe-style). Aggressive = heavy regeneration.">Strength</span>
                 <select class="settings-select" id="set-enhance-preset">
-                  <optgroup label="— Quality (recommended) —">
-                    <option value="light">Light · 90% original</option>
-                    <option value="balanced">Balanced · 70% original</option>
-                    <option value="broadcast" selected>Broadcast · 60% regeneration</option>
-                    <option value="aggressive">Aggressive · 80% regeneration</option>
+                  <optgroup label="— Conservative (recommended for clean voice) —">
+                    <option value="ultra_subtle" selected>Ultra Subtle · max fidelity, minimal artefacts</option>
+                    <option value="subtle">Subtle · just cleans, preserves voice</option>
+                    <option value="light">Light · mild polish</option>
                   </optgroup>
-                  <optgroup label="— Fast (~1.7x faster, near-identical) —">
+                  <optgroup label="— Regenerative —">
+                    <option value="balanced">Balanced · noticeable cleanup</option>
+                    <option value="strong">Strong · only for degraded audio</option>
+                  </optgroup>
+                  <optgroup label="— Fast (~1.7x faster) —">
+                    <option value="ultra_subtle_fast">Ultra Subtle · fast</option>
+                    <option value="subtle_fast">Subtle · fast</option>
                     <option value="light_fast">Light · fast</option>
                     <option value="balanced_fast">Balanced · fast</option>
-                    <option value="broadcast_fast">Broadcast · fast</option>
-                    <option value="aggressive_fast">Aggressive · fast</option>
+                    <option value="strong_fast">Strong · fast</option>
                   </optgroup>
                 </select>
               </div>

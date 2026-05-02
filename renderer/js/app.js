@@ -669,7 +669,7 @@ function applySettingsUI(p) {
   setStereoMono.checked = p.stereoToMonoEnabled !== false;
   setMBC.checked = p.multiBandCompEnabled !== false;
   if (setEnhance) setEnhance.checked = p.enhanceEnabled === true;
-  if (setEnhancePreset) setEnhancePreset.value = p.enhancePreset ?? 'broadcast';
+  if (setEnhancePreset) setEnhancePreset.value = p.enhancePreset ?? 'ultra_subtle';
   setFormat.value = p.outputFormat ?? 'wav24';
   setSampleRate.value = String(p.sampleRate ?? 48000);
 }

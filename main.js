@@ -17,10 +17,12 @@ const VALID_STORE_KEYS = new Set([
 ]);
 
 const VALID_ENHANCE_PRESETS = new Set([
-  // Quality (default = nfe=128, upstream max)
-  'light', 'balanced', 'broadcast', 'aggressive',
-  // Fast variants (nfe=64, ~1.7x speedup, near-identical output)
-  'light_fast', 'balanced_fast', 'broadcast_fast', 'aggressive_fast',
+  // Conservative (recommended)
+  'ultra_subtle', 'subtle', 'light',
+  // Regenerative
+  'balanced', 'strong',
+  // Fast variants (nfe=64, ~1.7x speedup)
+  'ultra_subtle_fast', 'subtle_fast', 'light_fast', 'balanced_fast', 'strong_fast',
 ]);
 
 const store = new Store({
@@ -41,7 +43,7 @@ const store = new Store({
     tpTarget: -1,
     // Speech Regeneration defaults (off by default; auto-enabled by Smart Analyze)
     enhanceEnabled: false,
-    enhancePreset: 'broadcast',
+    enhancePreset: 'ultra_subtle',
   },
 });
 

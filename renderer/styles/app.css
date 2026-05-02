@@ -1,30 +1,52 @@
+/* ── Motion Design System tokens (imported from key visual) ──
+   Imported via @import would require network on first paint; the font face is
+   declared inline so the renderer works offline-first.
+*/
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 100 1000;
+  font-display: swap;
+  src: local('DM Sans'), local('DMSans-Regular');
+}
+
 /* ── Reset & base ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:           rgba(18, 18, 20, 0.88);
-  --bg-surface:   rgba(28, 28, 31, 0.90);
-  --bg-elevated:  rgba(40, 40, 44, 0.95);
-  --bg-input:     rgba(50, 50, 55, 0.80);
+  /* Motion DS palette */
+  --bg:           #1a1d23;        /* bg-primary */
+  --bg-surface:   #2d323a;        /* bg-card    */
+  --bg-sidebar:   #22262e;        /* bg-sidebar */
+  --bg-elevated:  #2d323a;
+  --bg-input:     #1a1d23;
+  --bg-deep:      #13161b;        /* stage / preview backgrounds */
 
-  --text:         #f0f0f2;
-  --text-2:       #9898a4;
-  --text-3:       #55555f;
+  --text:         #ffffff;
+  --text-2:       rgba(255, 255, 255, 0.55);
+  --text-3:       rgba(255, 255, 255, 0.35);
 
-  --accent:       #4a8fe8;
-  --accent-hover: #5a9df5;
-  --accent-dim:   rgba(74, 143, 232, 0.18);
+  --accent:       #0ae98d;        /* Platzi green */
+  --accent-hover: #4aeadc;        /* gradient end */
+  --accent-dim:   rgba(10, 233, 141, 0.08);
+  --accent-glow:  rgba(10, 233, 141, 0.15);
 
-  --success:      #4ab87e;
+  --success:      #0ae98d;
   --warning:      #e8a84a;
   --error:        #e84a5a;
 
-  --border:       rgba(255, 255, 255, 0.07);
-  --border-focus: rgba(74, 143, 232, 0.6);
+  --border:       rgba(255, 255, 255, 0.08);
+  --border-hover: rgba(10, 233, 141, 0.15);
+  --border-focus: rgba(10, 233, 141, 0.6);
 
-  --radius-sm:    6px;
-  --radius:       10px;
-  --radius-lg:    14px;
+  --radius-sm:    8px;
+  --radius:       12px;
+  --radius-lg:    16px;
+
+  --shadow-card:  0 8px 24px rgba(10, 233, 141, 0.08);
+  --shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.2);
+
+  --padding-card: 24px;
 
   --titlebar-h:   44px;
   --toolbar-h:    52px;
@@ -33,13 +55,35 @@
 html, body { width: 100%; height: 100%; overflow: hidden; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
   font-size: 13px;
   line-height: 1.5;
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
   user-select: none;
+}
+
+/* ── Motion DS: glass-card + section helpers (used by settings panel) ── */
+.glass-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--padding-card);
+  box-shadow: var(--shadow-card);
+  transition: border-color .2s, box-shadow .2s;
+}
+.glass-card:hover {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-hover);
+}
+
+.accent-gradient-text {
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  color: transparent;
 }
 
 /* ── App shell ── */

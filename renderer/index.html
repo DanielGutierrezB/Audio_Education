@@ -3,8 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; media-src 'self' file:">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self'; media-src 'self' file: blob: data:; img-src 'self' data: blob:; connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com">
   <title>AudioPro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,100..1000&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles/app.css">
 </head>
 <body>
@@ -87,6 +90,14 @@
                   <span class="range-value" id="lufs-value">-16 LUFS</span>
                 </div>
               </div>
+              <div class="settings-row">
+                <span class="settings-label" title="True Peak ceiling in dBTP. -1.0 = broadcast standard. -2.0 = extra headroom for re-encoding.">True Peak</span>
+                <div class="range-row">
+                  <input type="range" id="set-tp" min="-3" max="-0.5" step="0.1" value="-1.0"
+                    aria-label="True peak target">
+                  <span class="range-value" id="tp-value">-1.0 dBTP</span>
+                </div>
+              </div>
             </div>
 
             <div class="settings-category">
@@ -124,6 +135,40 @@
                   <input type="checkbox" id="set-breathreduction">
                   <span class="toggle-track"></span>
                 </label>
+              </div>
+            </div>
+
+            <div class="settings-category">
+              <div class="settings-cat-title">Speech Regeneration</div>
+              <div class="settings-row">
+                <label class="settings-label" for="set-enhance"
+                  title="Resemble Enhance — AI speech regeneration via diffusion model. Similar to Adobe Podcast Enhance. Off by default; auto-enabled by Smart Analyze for heavily degraded audio. Slow on CPU (~1.5x realtime). Requires: pip install resemble-enhance soundfile">
+                  Enable
+                </label>
+                <label class="toggle">
+                  <input type="checkbox" id="set-enhance">
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
+              <div class="settings-row">
+                <span class="settings-label" title="How much the model regenerates the voice. Light = mostly clean. Broadcast = ~60% regenerated (Adobe-style). Aggressive = heavy regeneration.">Strength</span>
+                <select class="settings-select" id="set-enhance-preset">
+                  <optgroup label="— Quality (recommended) —">
+                    <option value="light">Light · 90% original</option>
+                    <option value="balanced">Balanced · 70% original</option>
+                    <option value="broadcast" selected>Broadcast · 60% regeneration</option>
+                    <option value="aggressive">Aggressive · 80% regeneration</option>
+                  </optgroup>
+                  <optgroup label="— Fast (~1.7x faster, near-identical) —">
+                    <option value="light_fast">Light · fast</option>
+                    <option value="balanced_fast">Balanced · fast</option>
+                    <option value="broadcast_fast">Broadcast · fast</option>
+                    <option value="aggressive_fast">Aggressive · fast</option>
+                  </optgroup>
+                </select>
+              </div>
+              <div class="settings-row settings-row-note">
+                <span class="settings-note">CPU only on macOS (MPS bug). First run downloads ~680 MB.</span>
               </div>
             </div>
 

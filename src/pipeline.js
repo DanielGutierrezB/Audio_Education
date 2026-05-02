@@ -57,14 +57,31 @@ function buildEqChain(settings) {
   return filters.join(',');
 }
 
-const LIMITER = 'alimiter=level_in=1:limit=0.891:level_out=1:attack=5:release=50';
+// True peak ceiling. Default = -1 dBTP (broadcast standard, conservative).
+// The loudnorm and the limiter MUST agree on this number; previously
+// loudnorm targeted -1.5 while the limiter was already at -1.0, so loudness
+// could quietly hit -1.0 before the limiter took over (±0.5 dB inconsistency).
+const DEFAULT_TP_DBTP = -1.0;
 
-function buildSingleBandComp() {
-  return `acompressor=threshold=0.06:ratio=3:attack=15:release=150:makeup=2.5,${LIMITER}`;
+function _dbtpToLinear(dbtp) {
+  return Math.pow(10, dbtp / 20);
 }
 
-function buildLoudnormBase(lufsTarget) {
-  return `I=${lufsTarget ?? -16}:TP=-1.5:LRA=11`;
+function buildLimiter(tpTarget) {
+  // Aim a hair below the requested ceiling so resampling/dither headroom
+  // doesn't push us over the user-visible target.
+  const safety = (tpTarget ?? DEFAULT_TP_DBTP) - 0.2;
+  const limit = _dbtpToLinear(safety);
+  return `alimiter=level_in=1:limit=${limit.toFixed(6)}:level_out=1:attack=5:release=50`;
+}
+
+function buildSingleBandComp(tpTarget) {
+  return `acompressor=threshold=0.06:ratio=3:attack=15:release=150:makeup=2.5,${buildLimiter(tpTarget)}`;
+}
+
+function buildLoudnormBase(lufsTarget, tpTarget) {
+  const tp = tpTarget ?? DEFAULT_TP_DBTP;
+  return `I=${lufsTarget ?? -16}:TP=${tp}:LRA=11`;
 }
 
 function parseLoudnormStats(stderr) {
@@ -179,6 +196,138 @@ async function analyzeFile(filePath, setCurrent) {
   };
 }
 
+// ── Resemble Enhance speech regeneration ──
+
+function findPython() {
+  // Honour explicit env var first
+  if (process.env.AUDIOPRO_PYTHON && fs.existsSync(process.env.AUDIOPRO_PYTHON)) {
+    return process.env.AUDIOPRO_PYTHON;
+  }
+  // Try common interpreters in order of preference
+  const candidates = [
+    '/opt/homebrew/bin/python3.12',
+    '/opt/homebrew/bin/python3.11',
+    '/opt/homebrew/bin/python3.10',
+    '/opt/homebrew/bin/python3',
+    '/usr/local/bin/python3.12',
+    '/usr/local/bin/python3',
+    'python3.12',
+    'python3',
+  ];
+  for (const c of candidates) {
+    if (c.startsWith('/')) {
+      if (fs.existsSync(c)) return c;
+    } else {
+      // PATH-relative — trust it; spawn will fail if missing
+      return c;
+    }
+  }
+  return 'python3';
+}
+
+async function runResembleEnhance(inputPath, outputPath, settings, setCurrent, onLog, onProgress) {
+  const py = findPython();
+  const script = path.join(__dirname, 'python', 'enhance.py');
+  const preset = settings.enhancePreset ?? 'broadcast';
+  const args = [
+    script, inputPath, outputPath,
+    `preset=${preset}`,
+    `device=${settings.enhanceDevice ?? 'cpu'}`,
+  ];
+  // Allow per-file overrides
+  if (settings.enhanceLambd != null) args.push(`lambd=${settings.enhanceLambd}`);
+  if (settings.enhanceTau   != null) args.push(`tau=${settings.enhanceTau}`);
+  if (settings.enhanceNfe   != null) args.push(`nfe=${settings.enhanceNfe}`);
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn(py, args);
+    if (setCurrent) setCurrent(proc);
+    let stderr = '';
+
+    // Parse RE:progress lines. Two formats supported:
+    //   'RE:progress <cur>/<total>'                  (legacy, single bar)
+    //   'RE:progress <label> <cur>/<total>'          (current; label = chunk|diffusion)
+    //
+    // We track chunk and diffusion separately and combine them so the bar moves
+    // smoothly: each chunk = 1/chunkTotal of the bar, the inner diffusion
+    // contributes the fractional part within the current chunk.
+    let chunkCur = 0, chunkTot = 0;
+    let diffCur = 0, diffTot = 0;
+
+    function emitCombined() {
+      if (!onProgress) return;
+      let frac;
+      if (chunkTot > 0) {
+        const inner = diffTot > 0 ? Math.min(diffCur / diffTot, 1) : 0;
+        frac = Math.min((chunkCur + inner) / chunkTot, 1);
+      } else if (diffTot > 0) {
+        frac = Math.min(diffCur / diffTot, 1);
+      } else {
+        return;
+      }
+      onProgress(frac);
+    }
+
+    function parseProgress(text) {
+      if (!onProgress) return;
+      const lines = text.split(/\r?\n/);
+      for (const line of lines) {
+        let m = line.match(/^RE:progress\s+(chunk|diffusion)\s+(\d+)\s*\/\s*(\d+)/);
+        if (m) {
+          const label = m[1];
+          const cur = parseInt(m[2], 10);
+          const tot = parseInt(m[3], 10);
+          if (label === 'chunk') {
+            chunkCur = cur;
+            chunkTot = tot;
+            // Reset inner diffusion bar each new chunk
+            diffCur = 0;
+          } else {
+            diffCur = cur;
+            diffTot = tot;
+          }
+          emitCombined();
+          continue;
+        }
+        // Legacy fallback
+        m = line.match(/^RE:progress\s+(\d+)\s*\/\s*(\d+)/);
+        if (m) {
+          const cur = parseInt(m[1], 10);
+          const tot = parseInt(m[2], 10);
+          if (tot > 0) onProgress(Math.min(cur / tot, 1));
+        }
+      }
+    }
+
+    proc.stdout.on('data', chunk => {
+      const t = chunk.toString();
+      parseProgress(t);
+      if (onLog) onLog(t);
+    });
+    proc.stderr.on('data', chunk => {
+      const t = chunk.toString();
+      stderr += t;
+      if (onLog) onLog(t);
+    });
+    proc.on('close', code => {
+      if (setCurrent) setCurrent(null);
+      if (code === 0) return resolve();
+      // Map exit codes to clearer messages
+      if (code === 2) {
+        return reject(new Error('Resemble Enhance not installed. Run: pip install resemble-enhance soundfile torch'));
+      }
+      if (code === 3) {
+        return reject(new Error('Resemble produced near-silent output (model/device bug). Try CPU or a different preset.'));
+      }
+      reject(new Error(`Resemble Enhance failed (exit ${code}): ${stderr.slice(-300).trim()}`));
+    });
+    proc.on('error', err => {
+      if (setCurrent) setCurrent(null);
+      reject(err);
+    });
+  });
+}
+
 // ── DeepFilterNet denoise ──
 
 async function runDeepFilterNet(inputPath, outputPath, setCurrent) {
@@ -235,8 +384,8 @@ async function preprocessFile(inputPath, outputPath, settings, duration, onProgr
 
 // ── Loudness measure pass ──
 
-async function measureLoudness(filePath, duration, eqChain, loudnormBase, onProgress, setCurrent) {
-  const chain = `${eqChain},${buildSingleBandComp()},loudnorm=${loudnormBase}:print_format=json`;
+async function measureLoudness(filePath, duration, eqChain, loudnormBase, onProgress, setCurrent, tpTarget) {
+  const chain = `${eqChain},${buildSingleBandComp(tpTarget)},loudnorm=${loudnormBase}:print_format=json`;
   const stderr = await run('ffmpeg', [
     '-y', '-i', filePath,
     '-af', chain,
@@ -251,6 +400,8 @@ async function renderFile(inputPath, outputPath, stats, eqChain, loudnormBase, s
   const loudnorm = buildLoudnormFilter(stats, loudnormBase);
   const codecArgs = buildOutputCodecArgs(settings);
   const useMBC = settings.multiBandCompEnabled !== false;
+  const tpTarget = settings.tpTarget;
+  const LIMITER = buildLimiter(tpTarget);
 
   if (useMBC) {
     // Multi-band compressor via filter_complex
@@ -348,13 +499,18 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
 
       const duration = analysis.basic.duration ?? file.duration ?? null;
       const useMLDenoise = fileSettings.mode !== 'fast';
-      const STEP_TOTAL = useMLDenoise ? 6 : 5;
+      // Speech regeneration is OFF by default. UI/settings opt-in via
+      // settings.enhanceEnabled. Auto mode could turn it on for very degraded
+      // audio in the future — left to recommendations.
+      const useEnhance = fileSettings.enhanceEnabled === true;
+      const STEP_TOTAL = (useMLDenoise ? 1 : 0) + (useEnhance ? 1 : 0) + 4;
       let stepIdx = 2;
       let pipelineInput = file.path;
 
-      // Build chains from per-file settings
+      // Build chains from per-file settings. Both loudnorm and the limiter
+      // share the same true-peak target so they can't disagree.
       const eqChain = buildEqChain(fileSettings);
-      const loudnormBase = buildLoudnormBase(fileSettings.lufsTarget);
+      const loudnormBase = buildLoudnormBase(fileSettings.lufsTarget, fileSettings.tpTarget);
 
       // Step 2 — DeepFilterNet ML Denoise (if recommended)
       if (useMLDenoise) {
@@ -372,6 +528,59 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
           console.warn(`DeepFilterNet failed, falling back to FFmpeg: ${dfnErr.message}`);
           // Force FFmpeg denoise in pre-process
           fileSettings.mode = 'fast';
+        }
+
+        if (isCancelled()) break;
+        stepIdx++;
+      }
+
+      // Step — Resemble Enhance (Speech Regeneration)
+      if (useEnhance) {
+        const presetLabel = fileSettings.enhancePreset ?? 'broadcast';
+        emit('progress', {
+          file: file.path,
+          step: `Speech Regeneration (Resemble — ${presetLabel})`,
+          stepIndex: stepIdx, stepTotal: STEP_TOTAL,
+          pct: 14, eta: calcEta(t0, done, total),
+        });
+
+        const enhTempPath = path.join(
+          os.tmpdir(),
+          `audiopro_enh_${crypto.randomBytes(8).toString('hex')}_${path.basename(file.path)}`,
+        );
+
+        try {
+          await runResembleEnhance(pipelineInput, enhTempPath, fileSettings, setCurrent,
+            (logLine) => {
+              // Log to stderr-style channel via emit; UI can ignore
+              emit('log', { file: file.path, source: 'resemble', message: logLine.trim() });
+            },
+            (frac) => {
+              if (isCancelled()) return;
+              // Map Resemble's 0..1 progress into 14% → 24% of the global bar
+              emit('progress', {
+                file: file.path,
+                step: `Speech Regeneration (${presetLabel}) ${Math.round(frac * 100)}%`,
+                stepIndex: stepIdx, stepTotal: STEP_TOTAL,
+                pct: Math.round(14 + frac * 10),
+                eta: calcEta(t0, done + 0.05 + frac * 0.10, total),
+              });
+            },
+          );
+          // Clean up previous DFN temp now that we have the next stage
+          if (dfnTempPath && pipelineInput === dfnTempPath) {
+            try { fs.unlinkSync(dfnTempPath); } catch { /* ignore */ }
+            dfnTempPath = null;
+          }
+          pipelineInput = enhTempPath;
+          // Stash the new temp under dfnTempPath so the existing finally{} cleans it.
+          // (Keeping the cleanup logic single-source.)
+          dfnTempPath = enhTempPath;
+        } catch (enhErr) {
+          console.warn(`Resemble Enhance failed, continuing without regeneration: ${enhErr.message}`);
+          emit('log', { file: file.path, source: 'resemble', message: `WARN: ${enhErr.message}` });
+          // Clean up the (likely partial) output
+          try { fs.unlinkSync(enhTempPath); } catch { /* ignore */ }
         }
 
         if (isCancelled()) break;
@@ -414,7 +623,7 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
             pct: Math.round(42 + frac * 20),
             eta: calcEta(t0, done + 0.3 + frac * 0.2, total),
           });
-        }, setCurrent);
+        }, setCurrent, fileSettings.tpTarget);
 
       if (isCancelled()) break;
       stepIdx++;

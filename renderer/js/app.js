@@ -631,6 +631,7 @@ const btnSettings   = document.getElementById('btn-settings');
 const settingsPanel = document.getElementById('settings-panel');
 
 const setLufs          = document.getElementById('set-lufs');
+const setTp            = document.getElementById('set-tp');
 const setHpf           = document.getElementById('set-hpf');
 const setDeEsser       = document.getElementById('set-deesser');
 const setNoiseGate     = document.getElementById('set-noisegate');
@@ -638,9 +639,12 @@ const setSilenceTrim   = document.getElementById('set-silencetrim');
 const setBreathRed     = document.getElementById('set-breathreduction');
 const setStereoMono    = document.getElementById('set-stereomono');
 const setMBC           = document.getElementById('set-mbc');
+const setEnhance       = document.getElementById('set-enhance');
+const setEnhancePreset = document.getElementById('set-enhance-preset');
 const setFormat        = document.getElementById('set-format');
 const setSampleRate    = document.getElementById('set-samplerate');
 const lufsValue        = document.getElementById('lufs-value');
+const tpValue          = document.getElementById('tp-value');
 const hpfValue         = document.getElementById('hpf-value');
 
 btnSettings.addEventListener('click', () => {
@@ -652,6 +656,10 @@ btnSettings.addEventListener('click', () => {
 function applySettingsUI(p) {
   setLufs.value = p.lufsTarget ?? -16;
   lufsValue.textContent = `${setLufs.value} LUFS`;
+  if (setTp) {
+    setTp.value = p.tpTarget ?? -1.0;
+    tpValue.textContent = `${Number(setTp.value).toFixed(1)} dBTP`;
+  }
   setHpf.value = p.hpfFrequency ?? 80;
   hpfValue.textContent = `${setHpf.value} Hz`;
   setDeEsser.checked = p.deEsserEnabled !== false;
@@ -660,6 +668,8 @@ function applySettingsUI(p) {
   setBreathRed.checked = p.breathReductionEnabled === true;
   setStereoMono.checked = p.stereoToMonoEnabled !== false;
   setMBC.checked = p.multiBandCompEnabled !== false;
+  if (setEnhance) setEnhance.checked = p.enhanceEnabled === true;
+  if (setEnhancePreset) setEnhancePreset.value = p.enhancePreset ?? 'broadcast';
   setFormat.value = p.outputFormat ?? 'wav24';
   setSampleRate.value = String(p.sampleRate ?? 48000);
 }
@@ -674,6 +684,14 @@ setLufs.addEventListener('input', () => {
   savePref('lufsTarget', v);
 });
 
+if (setTp) {
+  setTp.addEventListener('input', () => {
+    const v = parseFloat(setTp.value);
+    tpValue.textContent = `${v.toFixed(1)} dBTP`;
+    savePref('tpTarget', v);
+  });
+}
+
 setHpf.addEventListener('input', () => {
   const v = parseInt(setHpf.value);
   hpfValue.textContent = `${v} Hz`;
@@ -686,6 +704,12 @@ setSilenceTrim.addEventListener('change', () => savePref('silenceTrimEnabled', s
 setBreathRed.addEventListener('change', () => savePref('breathReductionEnabled', setBreathRed.checked));
 setStereoMono.addEventListener('change', () => savePref('stereoToMonoEnabled', setStereoMono.checked));
 setMBC.addEventListener('change', () => savePref('multiBandCompEnabled', setMBC.checked));
+if (setEnhance) {
+  setEnhance.addEventListener('change', () => savePref('enhanceEnabled', setEnhance.checked));
+}
+if (setEnhancePreset) {
+  setEnhancePreset.addEventListener('change', () => savePref('enhancePreset', setEnhancePreset.value));
+}
 setFormat.addEventListener('change', () => savePref('outputFormat', setFormat.value));
 setSampleRate.addEventListener('change', () => savePref('sampleRate', parseInt(setSampleRate.value)));
 

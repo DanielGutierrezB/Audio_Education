@@ -8,10 +8,19 @@ const binPaths = require('./src/bin-paths');
 const logger = require('./src/logger');
 
 const VALID_STORE_KEYS = new Set([
-  'processingMode', 'lufsTarget', 'hpfFrequency', 'deEsserEnabled',
+  'processingMode', 'lufsTarget', 'tpTarget', 'hpfFrequency', 'deEsserEnabled',
   'noiseGateEnabled', 'stereoToMonoEnabled', 'silenceTrimEnabled',
   'breathReductionEnabled', 'multiBandCompEnabled', 'outputFormat',
   'sampleRate', 'showNotifications',
+  // Speech Regeneration (Resemble Enhance)
+  'enhanceEnabled', 'enhancePreset',
+]);
+
+const VALID_ENHANCE_PRESETS = new Set([
+  // Quality (default = nfe=128, upstream max)
+  'light', 'balanced', 'broadcast', 'aggressive',
+  // Fast variants (nfe=64, ~1.7x speedup, near-identical output)
+  'light_fast', 'balanced_fast', 'broadcast_fast', 'aggressive_fast',
 ]);
 
 const store = new Store({
@@ -28,6 +37,11 @@ const store = new Store({
     outputFormat: 'wav24',
     sampleRate: 48000,
     showNotifications: true,
+    // True peak ceiling in dBTP. -1 dBTP is the broadcast standard.
+    tpTarget: -1,
+    // Speech Regeneration defaults (off by default; auto-enabled by Smart Analyze)
+    enhanceEnabled: false,
+    enhancePreset: 'broadcast',
   },
 });
 
@@ -89,12 +103,20 @@ ipcMain.handle('store:set', (_, key, value) => {
   if (typeof key !== 'string' || !VALID_STORE_KEYS.has(key)) return;
   // Type-validate values to prevent store corruption
   const BOOL_KEYS = new Set(['deEsserEnabled', 'noiseGateEnabled', 'stereoToMonoEnabled',
-    'silenceTrimEnabled', 'breathReductionEnabled', 'multiBandCompEnabled', 'showNotifications']);
-  const STRING_KEYS = new Set(['processingMode', 'outputFormat']);
+    'silenceTrimEnabled', 'breathReductionEnabled', 'multiBandCompEnabled', 'showNotifications',
+    'enhanceEnabled']);
+  const STRING_KEYS = new Set(['processingMode', 'outputFormat', 'enhancePreset']);
   const INT_KEYS = new Set(['lufsTarget', 'hpfFrequency', 'sampleRate']);
+  // tpTarget can be a fractional dB value, so it's its own thing.
+  const FLOAT_KEYS = new Set(['tpTarget']);
   if (BOOL_KEYS.has(key) && typeof value !== 'boolean') return;
   if (STRING_KEYS.has(key) && typeof value !== 'string') return;
   if (INT_KEYS.has(key) && (typeof value !== 'number' || !Number.isFinite(value))) return;
+  if (FLOAT_KEYS.has(key) && (typeof value !== 'number' || !Number.isFinite(value))) return;
+  // Sanity bounds for true peak (any value > 0 dBTP is wrong; -10 is way too low)
+  if (key === 'tpTarget' && (value > 0 || value < -10)) return;
+  // Whitelist enhance preset values
+  if (key === 'enhancePreset' && !VALID_ENHANCE_PRESETS.has(value)) return;
   store.set(key, value);
 });
 ipcMain.handle('store:getAll', () => store.store);
@@ -170,6 +192,7 @@ ipcMain.handle('pipeline:start', (event, files) => {
   const settings = {
     mode:                  store.get('processingMode'),
     lufsTarget:            store.get('lufsTarget'),
+    tpTarget:              store.get('tpTarget'),
     hpfFrequency:          store.get('hpfFrequency'),
     deEsserEnabled:        store.get('deEsserEnabled'),
     noiseGateEnabled:      store.get('noiseGateEnabled'),
@@ -177,6 +200,8 @@ ipcMain.handle('pipeline:start', (event, files) => {
     silenceTrimEnabled:    store.get('silenceTrimEnabled'),
     breathReductionEnabled:store.get('breathReductionEnabled'),
     multiBandCompEnabled:  store.get('multiBandCompEnabled'),
+    enhanceEnabled:        store.get('enhanceEnabled'),
+    enhancePreset:         store.get('enhancePreset'),
     outputFormat:          store.get('outputFormat'),
     sampleRate:            store.get('sampleRate'),
   };

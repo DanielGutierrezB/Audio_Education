@@ -195,7 +195,9 @@ async function detectDynamicRange(filePath) {
   const peakMatch = stderr.match(/Peak level dB:\s*([\-\d.]+)/);
   const rmsMatch = stderr.match(/RMS level dB:\s*([\-\d.]+)/);
   const rmsPeakMatch = stderr.match(/RMS peak dB:\s*([\-\d.]+)/);
-  const rmsTroughMatch = stderr.match(/RMS through dB:\s*([\-\d.]+)/);
+  // FFmpeg's astats reports "RMS trough dB" (the typo "through" was a bug;
+  // before this fix, rmsTrough was always null and dynamicRange was unusable).
+  const rmsTroughMatch = stderr.match(/RMS trough dB:\s*([\-\d.]+)/);
 
   const peak = peakMatch ? parseNumber(peakMatch[1]) : null;
   const rms = rmsMatch ? parseNumber(rmsMatch[1]) : null;
@@ -307,7 +309,36 @@ function buildRecommendations(analysis) {
     rec.reasoning.push(`Tight dynamic range (${drStr}) — single-band compression sufficient`);
   }
 
-  // 8. Loudness target
+  // 8b. Speech Regeneration (Resemble Enhance) recommendation
+  // Off by default; only suggest it when the audio is clearly degraded so we
+  // don't waste 30s+ on already-clean recordings. The user can always force it
+  // via settings.
+  const noisyEnough  = noise.noiseRmsDb !== null && noise.noiseRmsDb > -50;
+  const reverby      = reverb.likelyReverb && reverb.severity !== 'minimal';
+  const wideDynamics = dynamics.dynamicRange !== null && dynamics.dynamicRange > 28;
+  const veryQuiet    = loudness && loudness.integratedLUFS !== null && loudness.integratedLUFS < -28;
+  const heavyArtifacts = noisyEnough && reverby;
+
+  if (heavyArtifacts || (reverby && wideDynamics) || veryQuiet) {
+    rec.steps.push('speech_regeneration');
+    rec.settings.enhanceEnabled = true;
+    // Pick a preset based on how degraded the audio is
+    if (heavyArtifacts) {
+      rec.settings.enhancePreset = 'aggressive';
+      rec.reasoning.push('Audio is noisy AND reverby — Resemble Enhance: aggressive (heavy regeneration)');
+    } else if (reverby) {
+      rec.settings.enhancePreset = 'broadcast';
+      rec.reasoning.push(`Reverb ${reverb.severity} detected — Resemble Enhance: broadcast (60% regeneration)`);
+    } else {
+      rec.settings.enhancePreset = 'balanced';
+      rec.reasoning.push('Voice level very low / unclear — Resemble Enhance: balanced (70% original)');
+    }
+  } else {
+    rec.settings.enhanceEnabled = false;
+    rec.reasoning.push('Audio is clean enough — skipping speech regeneration (saves ~30-60s/min)');
+  }
+
+  // 9. Loudness target
   if (loudness) {
     const currentLUFS = loudness.integratedLUFS;
     rec.settings.lufsTarget = -16;
@@ -315,7 +346,7 @@ function buildRecommendations(analysis) {
     rec.reasoning.push(`Current loudness: ${currentLUFS?.toFixed(1)} LUFS → target -16 LUFS (${delta > 0 ? '+' : ''}${delta.toFixed(1)} dB adjustment)`);
   }
 
-  // 9. Output
+  // 10. Output
   rec.settings.outputFormat = 'wav24';
   rec.settings.sampleRate = basic.sampleRate >= 48000 ? 48000 : 44100;
 

@@ -9,6 +9,7 @@ const logger = require('./src/logger');
 
 const VALID_STORE_KEYS = new Set([
   'processingMode', 'lufsTarget', 'tpTarget', 'hpfFrequency', 'deEsserEnabled',
+  'aiDenoiseEnabled',
   'noiseGateEnabled', 'stereoToMonoEnabled', 'silenceTrimEnabled',
   'breathReductionEnabled', 'multiBandCompEnabled', 'outputFormat',
   'sampleRate', 'showNotifications',
@@ -16,13 +17,14 @@ const VALID_STORE_KEYS = new Set([
   'enhanceEnabled', 'enhancePreset',
 ]);
 
+// 3 user-facing levels. Internal preset names map: Suave→ultra_subtle,
+// Medio→light, Fuerte→strong. Other preset values are accepted for
+// backwards compatibility with older saved settings, but the UI only
+// exposes the three above.
 const VALID_ENHANCE_PRESETS = new Set([
-  // Conservative (recommended)
-  'ultra_subtle', 'subtle', 'light',
-  // Regenerative
-  'balanced', 'strong',
-  // Fast variants (nfe=64, ~1.7x speedup)
-  'ultra_subtle_fast', 'subtle_fast', 'light_fast', 'balanced_fast', 'strong_fast',
+  'ultra_subtle', 'light', 'strong',
+  // Legacy values — still accepted, never offered:
+  'subtle', 'balanced',
 ]);
 
 const store = new Store({
@@ -31,6 +33,7 @@ const store = new Store({
     lufsTarget: -16,
     hpfFrequency: 80,
     deEsserEnabled: true,
+    aiDenoiseEnabled: true,
     noiseGateEnabled: true,
     stereoToMonoEnabled: true,
     silenceTrimEnabled: true,
@@ -104,7 +107,7 @@ ipcMain.handle('store:get', (_, key) => store.get(key));
 ipcMain.handle('store:set', (_, key, value) => {
   if (typeof key !== 'string' || !VALID_STORE_KEYS.has(key)) return;
   // Type-validate values to prevent store corruption
-  const BOOL_KEYS = new Set(['deEsserEnabled', 'noiseGateEnabled', 'stereoToMonoEnabled',
+  const BOOL_KEYS = new Set(['deEsserEnabled', 'aiDenoiseEnabled', 'noiseGateEnabled', 'stereoToMonoEnabled',
     'silenceTrimEnabled', 'breathReductionEnabled', 'multiBandCompEnabled', 'showNotifications',
     'enhanceEnabled']);
   const STRING_KEYS = new Set(['processingMode', 'outputFormat', 'enhancePreset']);
@@ -197,6 +200,7 @@ ipcMain.handle('pipeline:start', (event, files) => {
     tpTarget:              store.get('tpTarget'),
     hpfFrequency:          store.get('hpfFrequency'),
     deEsserEnabled:        store.get('deEsserEnabled'),
+    aiDenoiseEnabled:      store.get('aiDenoiseEnabled'),
     noiseGateEnabled:      store.get('noiseGateEnabled'),
     stereoToMonoEnabled:   store.get('stereoToMonoEnabled'),
     silenceTrimEnabled:    store.get('silenceTrimEnabled'),

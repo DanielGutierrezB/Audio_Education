@@ -103,8 +103,14 @@
             <div class="settings-category">
               <div class="settings-cat-title">Noise Reduction</div>
               <div class="settings-row">
-                <span class="settings-label" title="Quality: DeepFilterNet AI neural denoise. Fast: FFmpeg afftdn denoise. Auto: chosen per file.">Denoise</span>
-                <span class="settings-auto">Mode-dependent</span>
+                <label class="settings-label" for="set-aidenoise"
+                  title="AI Denoise (DeepFilterNet3). When OFF, AudioPro uses FFmpeg's afftdn instead.">
+                  AI Denoise
+                </label>
+                <label class="toggle">
+                  <input type="checkbox" id="set-aidenoise" checked>
+                  <span class="toggle-track"></span>
+                </label>
               </div>
               <div class="settings-row">
                 <label class="settings-label" for="set-noisegate"
@@ -151,24 +157,11 @@
                 </label>
               </div>
               <div class="settings-row">
-                <span class="settings-label" title="How much the model regenerates the voice. Light = mostly clean. Broadcast = ~60% regenerated (Adobe-style). Aggressive = heavy regeneration.">Strength</span>
+                <span class="settings-label" title="How much Resemble Enhance regenerates the voice. Suave = clean voice (max fidelity). Medio = some noise/reverb. Fuerte = severely degraded audio (calls, broken mics, heavy reverb).">Regeneration</span>
                 <select class="settings-select" id="set-enhance-preset">
-                  <optgroup label="— Conservative (recommended for clean voice) —">
-                    <option value="ultra_subtle" selected>Ultra Subtle · max fidelity, minimal artefacts</option>
-                    <option value="subtle">Subtle · just cleans, preserves voice</option>
-                    <option value="light">Light · mild polish</option>
-                  </optgroup>
-                  <optgroup label="— Regenerative —">
-                    <option value="balanced">Balanced · noticeable cleanup</option>
-                    <option value="strong">Strong · only for degraded audio</option>
-                  </optgroup>
-                  <optgroup label="— Fast (~1.7x faster) —">
-                    <option value="ultra_subtle_fast">Ultra Subtle · fast</option>
-                    <option value="subtle_fast">Subtle · fast</option>
-                    <option value="light_fast">Light · fast</option>
-                    <option value="balanced_fast">Balanced · fast</option>
-                    <option value="strong_fast">Strong · fast</option>
-                  </optgroup>
+                  <option value="ultra_subtle" selected>Suave · voz limpia, máxima fidelidad</option>
+                  <option value="light">Medio · algo de ruido o reverb</option>
+                  <option value="strong">Fuerte · voz muy deteriorada</option>
                 </select>
               </div>
               <div class="settings-row settings-row-note">

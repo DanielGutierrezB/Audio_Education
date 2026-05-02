@@ -634,6 +634,7 @@ const setLufs          = document.getElementById('set-lufs');
 const setTp            = document.getElementById('set-tp');
 const setHpf           = document.getElementById('set-hpf');
 const setDeEsser       = document.getElementById('set-deesser');
+const setAiDenoise     = document.getElementById('set-aidenoise');
 const setNoiseGate     = document.getElementById('set-noisegate');
 const setSilenceTrim   = document.getElementById('set-silencetrim');
 const setBreathRed     = document.getElementById('set-breathreduction');
@@ -663,6 +664,7 @@ function applySettingsUI(p) {
   setHpf.value = p.hpfFrequency ?? 80;
   hpfValue.textContent = `${setHpf.value} Hz`;
   setDeEsser.checked = p.deEsserEnabled !== false;
+  if (setAiDenoise) setAiDenoise.checked = p.aiDenoiseEnabled !== false;
   setNoiseGate.checked = p.noiseGateEnabled !== false;
   setSilenceTrim.checked = p.silenceTrimEnabled !== false;
   setBreathRed.checked = p.breathReductionEnabled === true;
@@ -699,6 +701,7 @@ setHpf.addEventListener('input', () => {
 });
 
 setDeEsser.addEventListener('change', () => savePref('deEsserEnabled', setDeEsser.checked));
+if (setAiDenoise) setAiDenoise.addEventListener('change', () => savePref('aiDenoiseEnabled', setAiDenoise.checked));
 setNoiseGate.addEventListener('change', () => savePref('noiseGateEnabled', setNoiseGate.checked));
 setSilenceTrim.addEventListener('change', () => savePref('silenceTrimEnabled', setSilenceTrim.checked));
 setBreathRed.addEventListener('change', () => savePref('breathReductionEnabled', setBreathRed.checked));
@@ -910,16 +913,21 @@ async function loadWaveform(filePath) {
   previewCanvas.style.opacity = '0';
   waveformImageData = null;
 
-  sizePreviewCanvas();
-  let numPeaks = previewCanvas.width;
-  // Canvas may be 0-width if the view isn't visible yet — retry after a frame
-  if (numPeaks < 10) {
-    await new Promise(r => requestAnimationFrame(r));
-    if (loadId !== waveformLoadId) return; // Cancelled
+  // Wait until the canvas wrapper has a real layout. When the user clicks
+  // the Preview tab, the view starts hidden, gets unhidden, and only after
+  // the next layout pass does it have non-zero dimensions. Drawing before
+  // that means the canvas is sized 0×0 and the bars never appear.
+  let numPeaks = 0;
+  for (let attempt = 0; attempt < 8; attempt++) {
     sizePreviewCanvas();
     numPeaks = previewCanvas.width;
+    const wrap = previewCanvas.parentElement;
+    if (numPeaks >= 10 && wrap.clientWidth > 0 && wrap.clientHeight > 0) break;
+    // Yield to the browser so layout / style application can complete.
+    await new Promise(r => requestAnimationFrame(r));
+    if (loadId !== waveformLoadId) return; // Cancelled
   }
-  if (numPeaks < 10) numPeaks = 800; // fallback
+  if (numPeaks < 10) numPeaks = 800; // last-resort fallback
 
   let peaks = waveformCache.get(filePath);
   if (!peaks && window.api) {
@@ -929,11 +937,21 @@ async function loadWaveform(filePath) {
   }
 
   previewLoading.hidden = true;
-  previewCanvas.style.opacity = '1';
 
   if (peaks) {
+    // One final size check before painting — the user may have resized the
+    // window during the async peak generation, in which case we'd paint to
+    // the wrong dimensions and end up with a blank canvas.
+    sizePreviewCanvas();
+    console.log('[waveform] painting', { peaks: peaks.length, w: previewCanvas.width, h: previewCanvas.height });
     drawWaveform(peaks);
     drawPlayheadAt(audioPlayer.currentTime);
+    // Reveal the canvas only AFTER the bars are painted, so the fade-in
+    // never lands on an empty canvas.
+    previewCanvas.style.opacity = '1';
+  } else {
+    console.warn('[waveform] no peaks returned by audio:peaks');
+    previewCanvas.style.opacity = '1';
   }
 }
 
@@ -963,9 +981,22 @@ function drawWaveform(peaks) {
   const barW = Math.max(1, W / peaks.length);
   const step = peaks.length / W;
 
+  // Normalise the peaks so the loudest sample maps to ~95% of the canvas
+  // height. Without this, very quiet recordings (low headroom, or files
+  // already attenuated upstream) produce a 1-pixel-tall flatline that's
+  // basically invisible.
+  let maxPeak = 0;
+  for (let i = 0; i < peaks.length; i++) {
+    const p = peaks[i] ?? 0;
+    if (p > maxPeak) maxPeak = p;
+  }
+  // If everything is silence, leave the bars at 0; otherwise scale so the
+  // loudest peak sits just under the canvas top.
+  const normScale = maxPeak > 0 ? (0.95 / maxPeak) : 0;
+
   for (let x = 0; x < W; x++) {
     const idx = Math.floor(x * step);
-    const v = (peaks[idx] ?? 0) * 0.95;
+    const v = (peaks[idx] ?? 0) * normScale;
     const barH = Math.max(1, v * mid * 2);
     ctx.fillRect(x, mid - v * mid, barW, barH);
   }

@@ -36,18 +36,39 @@ function buildEqChain(settings) {
   const deEsser = settings.deEsserEnabled !== false;
   const breathReduction = settings.breathReductionEnabled === true;
 
+  // Adaptive body boost — the analyzer can shift this based on f0.
+  const bodyHz = Math.round(settings.bodyBoostHz ?? 800);
+
+  // Dynamic resonant-peak notches discovered by voice-profile.js. Each
+  // entry is {freq, q, prominenceDb}. We attenuate by min(prominence-2, 6) dB
+  // so very sharp resonances get cut more aggressively, but we never go
+  // below −6 dB to keep the voice natural.
+  const notches = Array.isArray(settings.dynamicNotches) ? settings.dynamicNotches : [];
+
   const filters = [
     `highpass=f=${hpfFreq}:poles=2`,
     'equalizer=f=150:width_type=o:width=1.0:g=1',
     'equalizer=f=250:width_type=o:width=1.5:g=-1.5',
-    'equalizer=f=800:width_type=o:width=2.0:g=1',
+  ];
+
+  // Insert dynamic notches BEFORE the body boost so we don't fight ourselves.
+  for (const n of notches) {
+    if (!n || !Number.isFinite(n.freq) || n.freq <= 0) continue;
+    const q = Math.min(20, Math.max(2, Number(n.q) || 8));
+    const cutDb = -Math.min(6, Math.max(2, (Number(n.prominenceDb) || 4) - 2));
+    // ffmpeg's equalizer with width_type=q uses Q (the actual quality factor)
+    filters.push(`equalizer=f=${Math.round(n.freq)}:width_type=q:width=${q}:g=${cutDb}`);
+  }
+
+  filters.push(
+    `equalizer=f=${bodyHz}:width_type=o:width=2.0:g=1`,
     'equalizer=f=2500:width_type=o:width=2.0:g=3',
     'equalizer=f=4000:width_type=o:width=1.5:g=2',
     'equalizer=f=12000:width_type=o:width=2:g=2',
-  ];
+  );
 
   if (deEsser) {
-    filters.splice(6, 0, 'equalizer=f=6500:width_type=h:width=2000:g=-2');
+    filters.splice(filters.length - 1, 0, 'equalizer=f=6500:width_type=h:width=2000:g=-2');
   }
 
   if (breathReduction) {
@@ -199,19 +220,32 @@ async function analyzeFile(filePath, setCurrent) {
 // ── Resemble Enhance speech regeneration ──
 
 function findPython() {
-  // Honour explicit env var first
+  // 1. Explicit env var wins (used in dev: AUDIOPRO_PYTHON=...)
   if (process.env.AUDIOPRO_PYTHON && fs.existsSync(process.env.AUDIOPRO_PYTHON)) {
     return process.env.AUDIOPRO_PYTHON;
   }
-  // Try common interpreters in order of preference
+  // 2. Embedded runtime that ships with the .app (production install).
+  //    This is what end-users hit — they don't need any Python on their machine.
+  const embedded = binPaths.embeddedPython?.();
+  if (embedded) return embedded;
+  // 3. Local dev venv at ~/.audiopro-venv (the one we set up during
+  //    development with `python3.10 -m venv ~/.audiopro-venv`). Picked up
+  //    automatically so `npm start` works without exporting AUDIOPRO_PYTHON.
+  const home = process.env.HOME;
+  if (home) {
+    const devVenvPy = path.join(home, '.audiopro-venv', 'bin', 'python');
+    if (fs.existsSync(devVenvPy)) return devVenvPy;
+  }
+  // 4. Dev fallback: scan well-known system interpreters.
   const candidates = [
-    '/opt/homebrew/bin/python3.12',
+    '/opt/homebrew/bin/python3.10',  // matches torch==2.1.1 (resemble-enhance pin)
     '/opt/homebrew/bin/python3.11',
-    '/opt/homebrew/bin/python3.10',
+    '/opt/homebrew/bin/python3.12',
     '/opt/homebrew/bin/python3',
+    '/usr/local/bin/python3.10',
     '/usr/local/bin/python3.12',
     '/usr/local/bin/python3',
-    'python3.12',
+    'python3.10',
     'python3',
   ];
   for (const c of candidates) {
@@ -228,7 +262,7 @@ function findPython() {
 async function runResembleEnhance(inputPath, outputPath, settings, setCurrent, onLog, onProgress) {
   const py = findPython();
   const script = path.join(__dirname, 'python', 'enhance.py');
-  const preset = settings.enhancePreset ?? 'broadcast';
+  const preset = settings.enhancePreset ?? 'ultra_subtle';
   const args = [
     script, inputPath, outputPath,
     `preset=${preset}`,
@@ -330,16 +364,55 @@ async function runResembleEnhance(inputPath, outputPath, settings, setCurrent, o
 
 // ── DeepFilterNet denoise ──
 
-async function runDeepFilterNet(inputPath, outputPath, setCurrent) {
-  // deep-filter writes to an output directory, so we use a temp dir
+/**
+ * Step 0 — normalise the source file to AudioPro's canonical working
+ * format: mono / 48 kHz / 16-bit PCM. Every downstream step (denoise,
+ * Resemble, EQ, MBC, render) operates on this format.
+ *
+ * 16-bit is mandated by the bundled DeepFilterNet binary, which panics
+ * with `TooWide` on anything wider. Keeping the whole pipeline at 16-bit
+ * avoids quality-degrading bit-depth round-trips between stages.
+ */
+async function normaliseInput(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(binPaths.ffmpeg(), [
+      '-y', '-v', 'error',
+      '-i', inputPath,
+      '-ac', '1',           // mono
+      '-ar', '48000',       // 48 kHz
+      '-c:a', 'pcm_s16le',  // 16-bit (DeepFilterNet limit)
+      '-f', 'wav',
+      outputPath,
+    ]);
+    let stderr = '';
+    proc.stderr.on('data', c => { stderr += c.toString(); });
+    proc.on('close', code => {
+      if (code === 0) resolve();
+      else reject(new Error(`Input normalisation failed (${code}): ${stderr.slice(-200).trim()}`));
+    });
+    proc.on('error', reject);
+  });
+}
+
+async function runDeepFilterNet(inputPath, outputPath, setCurrent, settings) {
+  // Input is already mono / 48 kHz / 24-bit (Step 0 normalised it).
+  // deep-filter writes to an output directory, so we use a temp dir.
   const tmpDir = path.join(os.tmpdir(), `audiopro_dfn_${crypto.randomBytes(6).toString('hex')}`);
   fs.mkdirSync(tmpDir, { recursive: true });
 
   return new Promise((resolve, reject) => {
+    // --atten-lim-db caps how much DFN can attenuate the noisy signal.
+    // The default is 100 dB (full reduction), which produces an
+    // "over-processed" robotic / underwater sound on speech. Adobe
+    // Podcast Enhance and similar tools sit around 12-20 dB. We use 18
+    // dB — still removes obvious background noise but keeps the room
+    // tone natural and avoids the artefact-heavy "vacuum" sound.
+    const attenLimDb = String(settings?.aiDenoiseAttenLimDb ?? 18);
     const proc = spawn(binPaths.deepFilter(), [
       inputPath,
       '-o', tmpDir,
       '--compensate-delay',
+      '--atten-lim-db', attenLimDb,
     ]);
     if (setCurrent) setCurrent(proc);
     let stderr = '';
@@ -350,7 +423,7 @@ async function runDeepFilterNet(inputPath, outputPath, setCurrent) {
         try { fs.rmSync(tmpDir, { recursive: true }); } catch { /* ok */ }
         return reject(new Error(`DeepFilterNet failed (code ${code}): ${stderr.slice(-200)}`));
       }
-      // deep-filter outputs to tmpDir with the same filename
+      // deep-filter outputs to tmpDir with the same filename as the input.
       const outName = path.basename(inputPath);
       const dfnOutput = path.join(tmpDir, outName);
       try {
@@ -377,7 +450,7 @@ async function preprocessFile(inputPath, outputPath, settings, duration, onProgr
   await run('ffmpeg', [
     '-y', '-i', inputPath,
     '-af', chain,
-    '-acodec', 'pcm_s24le', '-ar', '48000',
+    '-acodec', 'pcm_s16le', '-ar', '48000',
     outputPath,
   ], { duration, onProgress, setCurrent });
 }
@@ -465,6 +538,7 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
     emit('file:start', { file: file.path, index: done, total });
     let tempPath = null;
     let dfnTempPath = null;
+    let normalisedInputPath = null;
 
     try {
       // Step 1 — Smart Analysis
@@ -481,11 +555,32 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
         });
       });
 
-      // Merge analyzer recommendations with user overrides
+      // Merge analyzer recommendations with user overrides.
+      //
+      // Default: user settings override analyzer recommendations (Object
+      // spread order). EXCEPTION: speech regeneration is gated by the
+      // analyzer when the user hasn't explicitly opted in. Otherwise a
+      // stale `enhanceEnabled: true` in the saved prefs (or in the user's
+      // last UI session) re-runs Resemble on every file even when the
+      // analyzer recommended skipping it (which is what was happening
+      // in production: log read "Audio is clean enough — skipping speech
+      // regeneration" yet Step 3/6 still ran).
       const fileSettings = { ...recommendations.settings, ...settings };
-      // But let analyzer win on auto-detected things unless user explicitly set them
       if (settings.mode === 'auto' || !settings.mode) {
+        // Auto mode: let the analyzer drive everything it knows about.
         Object.assign(fileSettings, recommendations.settings);
+      } else {
+        // Quality / Fast mode (user explicitly picked one): respect user
+        // preference for enhanceEnabled IF they actually toggled it on.
+        // But honour the analyzer's `false` when the user kept the toggle
+        // off, so we don't force regen on clean audio just because of a
+        // stale auto-setting from a previous run.
+        if (settings.enhanceEnabled !== true) {
+          fileSettings.enhanceEnabled = recommendations.settings.enhanceEnabled === true;
+          if (recommendations.settings.enhancePreset) {
+            fileSettings.enhancePreset = recommendations.settings.enhancePreset;
+          }
+        }
       }
 
       // Emit analysis results for UI
@@ -498,14 +593,32 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       if (isCancelled()) break;
 
       const duration = analysis.basic.duration ?? file.duration ?? null;
-      const useMLDenoise = fileSettings.mode !== 'fast';
+      // AI Denoise (DeepFilterNet) is opt-out via the dedicated toggle and
+      // also disabled in 'fast' mode. Anything else falls back to FFmpeg's
+      // afftdn inside the pre-process chain.
+      const useMLDenoise = fileSettings.mode !== 'fast'
+        && fileSettings.aiDenoiseEnabled !== false;
       // Speech regeneration is OFF by default. UI/settings opt-in via
       // settings.enhanceEnabled. Auto mode could turn it on for very degraded
       // audio in the future — left to recommendations.
       const useEnhance = fileSettings.enhanceEnabled === true;
       const STEP_TOTAL = (useMLDenoise ? 1 : 0) + (useEnhance ? 1 : 0) + 4;
       let stepIdx = 2;
-      let pipelineInput = file.path;
+
+      // Step 0 (between analysis and denoise) — lock the audio into
+      // AudioPro's canonical working format: mono / 48 kHz / 24-bit. From
+      // here on, the pipeline never has to re-resample or re-quantise; we
+      // just keep that resolution all the way through to the final render.
+      emit('progress', {
+        file: file.path, step: 'Preparing (mono / 48 kHz / 16-bit)', stepIndex: stepIdx, stepTotal: STEP_TOTAL,
+        pct: 5, eta: calcEta(t0, done, total),
+      });
+      normalisedInputPath = path.join(
+        os.tmpdir(),
+        `audiopro_norm_${crypto.randomBytes(8).toString('hex')}.wav`,
+      );
+      await normaliseInput(file.path, normalisedInputPath);
+      let pipelineInput = normalisedInputPath;
 
       // Build chains from per-file settings. Both loudnorm and the limiter
       // share the same true-peak target so they can't disagree.
@@ -522,7 +635,9 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
         dfnTempPath = path.join(os.tmpdir(), `audiopro_dfn_${crypto.randomBytes(8).toString('hex')}_${path.basename(file.path)}`);
 
         try {
-          await runDeepFilterNet(file.path, dfnTempPath, setCurrent);
+          // Pass the already-normalised input — deep-filter expects
+          // mono / 48 kHz / 24-bit and that's what we have at this stage.
+          await runDeepFilterNet(pipelineInput, dfnTempPath, setCurrent, fileSettings);
           pipelineInput = dfnTempPath;
         } catch (dfnErr) {
           console.warn(`DeepFilterNet failed, falling back to FFmpeg: ${dfnErr.message}`);
@@ -536,7 +651,7 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
 
       // Step — Resemble Enhance (Speech Regeneration)
       if (useEnhance) {
-        const presetLabel = fileSettings.enhancePreset ?? 'broadcast';
+        const presetLabel = fileSettings.enhancePreset ?? 'ultra_subtle';
         emit('progress', {
           file: file.path,
           step: `Speech Regeneration (Resemble — ${presetLabel})`,
@@ -653,6 +768,9 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       done++;
       emit('file:error', { file: file.path, error: err.message });
     } finally {
+      if (normalisedInputPath) {
+        try { fs.unlinkSync(normalisedInputPath); } catch { /* ignore */ }
+      }
       if (tempPath) {
         try { fs.unlinkSync(tempPath); } catch { /* ignore */ }
       }

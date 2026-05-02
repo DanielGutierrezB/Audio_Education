@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 const binPaths = require('./bin-paths');
+const { profileVoice } = require('./voice-profile');
 
 // ── Helpers ──
 
@@ -270,13 +271,37 @@ function buildRecommendations(analysis) {
   rec.settings.silenceTrimEnabled = true;
   rec.reasoning.push('Trimming leading/trailing silence');
 
-  // 5. HPF frequency
+  // 5. HPF frequency — reverb-aware AND voice-aware.
+  // Voice profile (when available) gives us a per-speaker HPF that follows
+  // the actual fundamental; reverb still escalates the cutoff a bit.
+  const voiceHpf = analysis.voice?.hpfHz;
   if (reverb.likelyReverb) {
-    rec.settings.hpfFrequency = 100;
-    rec.reasoning.push(`Reverb detected (${reverb.severity}) — HPF raised to 100 Hz to reduce boominess`);
+    // Raise by ~20 Hz over the voice baseline (or default to 100 Hz).
+    rec.settings.hpfFrequency = voiceHpf ? Math.min(120, voiceHpf + 20) : 100;
+    rec.reasoning.push(`Reverb detected (${reverb.severity}) — HPF set to ${rec.settings.hpfFrequency} Hz to reduce boominess`);
+  } else if (voiceHpf) {
+    rec.settings.hpfFrequency = voiceHpf;
+    rec.reasoning.push(`Voice profile: ${analysis.voice.voiceClass} (f0≈${analysis.voice.pitchHz} Hz) — HPF tuned to ${voiceHpf} Hz`);
   } else {
     rec.settings.hpfFrequency = 80;
     rec.reasoning.push('Minimal reverb — standard HPF at 80 Hz');
+  }
+
+  // 5b. Adaptive body-boost frequency + dynamic notches from voice profile.
+  if (analysis.voice) {
+    rec.settings.bodyBoostHz = analysis.voice.bodyBoostHz;
+    rec.settings.dynamicNotches = analysis.voice.notches; // [{freq,q,prominenceDb}]
+    if (analysis.voice.notches?.length) {
+      const summary = analysis.voice.notches
+        .map(n => `${n.freq} Hz (Q≈${n.q}, +${n.prominenceDb} dB)`)
+        .join(', ');
+      rec.reasoning.push(`Resonant peaks detected — dynamic notches at: ${summary}`);
+    } else {
+      rec.reasoning.push('No resonant peaks detected in 180–900 Hz — skipping dynamic notches');
+    }
+    if (analysis.voice.bodyBoostHz !== 800) {
+      rec.reasoning.push(`Body boost moved to ${analysis.voice.bodyBoostHz} Hz to match voice timbre`);
+    }
   }
 
   // 6. De-esser
@@ -322,16 +347,20 @@ function buildRecommendations(analysis) {
   if (heavyArtifacts || (reverby && wideDynamics) || veryQuiet) {
     rec.steps.push('speech_regeneration');
     rec.settings.enhanceEnabled = true;
-    // Pick a preset based on how degraded the audio is
+    // Pick a preset based on how degraded the audio is. Maps onto the 3
+    // user-facing levels (Suave / Medio / Fuerte) so the auto-mode is
+    // consistent with what the user sees in the dropdown. Previous strings
+    // ('aggressive', 'broadcast') no longer exist in enhance.py and would
+    // have caused the regen step to fail silently.
     if (heavyArtifacts) {
-      rec.settings.enhancePreset = 'aggressive';
-      rec.reasoning.push('Audio is noisy AND reverby — Resemble Enhance: aggressive (heavy regeneration)');
+      rec.settings.enhancePreset = 'strong';
+      rec.reasoning.push('Audio is noisy AND reverby — Resemble Enhance: Fuerte (strong regeneration)');
     } else if (reverby) {
-      rec.settings.enhancePreset = 'broadcast';
-      rec.reasoning.push(`Reverb ${reverb.severity} detected — Resemble Enhance: broadcast (60% regeneration)`);
+      rec.settings.enhancePreset = 'light';
+      rec.reasoning.push(`Reverb ${reverb.severity} detected — Resemble Enhance: Medio (light)`);
     } else {
-      rec.settings.enhancePreset = 'balanced';
-      rec.reasoning.push('Voice level very low / unclear — Resemble Enhance: balanced (70% original)');
+      rec.settings.enhancePreset = 'ultra_subtle';
+      rec.reasoning.push('Voice level very low / unclear — Resemble Enhance: Suave (ultra_subtle, preserve voice)');
     }
   } else {
     rec.settings.enhanceEnabled = false;
@@ -375,6 +404,7 @@ async function analyzeAudio(filePath, onStatus) {
   const sibilance = await safe('Detecting sibilance...', () => detectSibilance(filePath));
   const reverb    = await safe('Checking reverb...', () => detectReverb(filePath));
   const dynamics  = await safe('Analyzing dynamics...', () => detectDynamicRange(filePath));
+  const voice     = await safe('Profiling voice spectrum...', () => profileVoice(filePath));
 
   const analysis = {
     basic,
@@ -383,6 +413,7 @@ async function analyzeAudio(filePath, onStatus) {
     sibilance: sibilance ?? { overallDb: null, sibilanceDb: null, sibilanceRatio: null, hasSibilance: false, severity: 'unknown' },
     reverb:    reverb    ?? { crestFactor: null, likelyReverb: false, severity: 'unknown' },
     dynamics:  dynamics  ?? { peakDb: null, rmsDb: null, rmsPeakDb: null, rmsTroughDb: null, dynamicRange: null, hasClipping: false, needsCompression: true, compressionLevel: 'moderate' },
+    voice:     voice     ?? null,
   };
   const recommendations = buildRecommendations(analysis);
 

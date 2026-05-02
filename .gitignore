@@ -8,3 +8,9 @@ build/icons/
 *.log
 .DS_Store
 build/icon.iconset/
+
+# macOS AppleDouble metadata files (created on non-HFS volumes like exFAT SSDs)
+._*
+
+# Claude Code locks
+.claude/

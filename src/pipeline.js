@@ -38,14 +38,15 @@ function buildEqChain(settings) {
   const breathReduction = settings.breathReductionEnabled === true;
 
   // Voice-optimized EQ curve — warm, full, broadcast-quality
-  // Designed to match Adobe Podcast's spectral profile
+  // Low shelf at 120Hz targets voice fundamentals (80-150Hz)
+  // NOT at 250Hz which is the "boxy" zone that sounds hollow/echoey
   const filters = [
     `highpass=f=${hpfFreq}:poles=2`,
-    'lowshelf=f=250:width_type=o:width=0.8:g=6',       // warmth + body (+6 dB shelf, wider)
-    'equalizer=f=250:width_type=o:width=1.2:g=-1',     // reduce mud
-    'equalizer=f=800:width_type=o:width=2.0:g=0.5',    // lower mids, subtle
+    'lowshelf=f=120:width_type=o:width=0.7:g=4',       // voice warmth (fundamentals only)
+    'equalizer=f=300:width_type=o:width=1.5:g=-2',     // cut boxiness / room resonance
+    'equalizer=f=800:width_type=o:width=2.0:g=0.5',    // lower mids, subtle body
     'equalizer=f=2000:width_type=o:width=1.5:g=2',     // upper-mid clarity
-    'equalizer=f=3500:width_type=o:width=1.2:g=0.5',   // presence (subtle)
+    'equalizer=f=3500:width_type=o:width=1.2:g=1',     // presence / intelligibility
     'equalizer=f=8000:width_type=o:width=2.0:g=-0.5',  // tame harshness
   ];
 

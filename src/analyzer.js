@@ -310,18 +310,19 @@ function buildRecommendations(analysis) {
       rec.settings.mode = 'quality';
       rec.settings.denoiseStrength = 'full';
       rec.reasoning.push(`SNR ${snr.toFixed(1)} dB (poor, <20) — full DeepFilterNet AI denoise`);
-    } else if (snr < 35) {
+    } else if (snr < 25) {
       // Moderate SNR — some noise, light ML denoise
       rec.steps.push('ml_denoise');
       rec.settings.mode = 'quality';
       rec.settings.denoiseStrength = 'light';
       rec.reasoning.push(`SNR ${snr.toFixed(1)} dB (moderate) — light DeepFilterNet AI denoise`);
     } else {
-      // Good SNR — audio is already clean, skip denoise
+      // Good SNR (≥25 dB) — audio is already clean, skip denoise
+      // ML denoise on clean audio introduces phase artifacts (hollow/echo sound)
       rec.steps.push('skip_denoise');
       rec.settings.mode = 'clean';
       rec.settings.denoiseStrength = 'none';
-      rec.reasoning.push(`SNR ${snr.toFixed(1)} dB (good, >35) — audio is clean, skipping denoise to preserve quality`);
+      rec.reasoning.push(`SNR ${snr.toFixed(1)} dB (good, ≥25) — audio is clean, skipping denoise to preserve quality`);
     }
   } else if (noiseLevel !== null && noiseLevel < -60) {
     rec.steps.push('skip_denoise');

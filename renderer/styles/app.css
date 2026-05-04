@@ -69,6 +69,7 @@ body {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.3);
   padding-right: 14px;
+  margin-left: auto;
   flex-shrink: 0;
   -webkit-app-region: no-drag;
   letter-spacing: 0.3px;

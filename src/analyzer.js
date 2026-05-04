@@ -69,27 +69,35 @@ async function measureLoudness(filePath) {
 }
 
 async function measureNoiseFloor(filePath, channels) {
-  // Find first silence region to measure noise
+  // Find ALL silence regions to get a reliable noise measurement
   const { stderr: silenceStderr } = await runCmd('ffmpeg', [
     '-i', filePath,
     '-af', 'silencedetect=noise=-40dB:d=0.3',
     '-f', 'null', '-',
   ]);
 
-  // Parse first silence start
-  const silenceMatch = silenceStderr.match(/silence_start:\s*([\d.]+)/);
-  const silenceStart = silenceMatch ? parseFloat(silenceMatch[1]) : null;
+  // Parse all silence start/end pairs
+  const silenceStarts = [...silenceStderr.matchAll(/silence_start:\s*([\d.]+)/g)].map(m => parseFloat(m[1]));
+  const silenceEnds   = [...silenceStderr.matchAll(/silence_end:\s*([\d.]+)/g)].map(m => parseFloat(m[1]));
+  const hasSilenceRegions = silenceStarts.length > 0;
 
   let noiseFloorDb = null;
   let noiseRmsDb = null;
+  const noiseMeasurements = [];
 
-  if (silenceStart !== null) {
-    // Extract silence section and measure
+  // Measure noise from multiple silence regions for a reliable average
+  const regionsToMeasure = Math.min(silenceStarts.length, 5);
+  for (let i = 0; i < regionsToMeasure; i++) {
+    const start = silenceStarts[i];
+    const end = silenceEnds[i] ?? (start + 0.5);
+    const dur = Math.min(end - start, 1.0);  // cap at 1s
+    if (dur < 0.1) continue;  // too short to measure
+
     const tmpFile = path.join(os.tmpdir(), `audiopro_analyze_${crypto.randomBytes(6).toString('hex')}.wav`);
     try {
       await runCmd('ffmpeg', [
         '-y', '-i', filePath,
-        '-ss', String(silenceStart), '-t', '0.5',
+        '-ss', String(start), '-t', String(dur),
         '-ac', '1', tmpFile,
       ]);
       const { stderr: statsStderr } = await runCmd('ffmpeg', [
@@ -99,15 +107,26 @@ async function measureNoiseFloor(filePath, channels) {
       ]);
       const nfMatch = statsStderr.match(/Noise floor dB:\s*([\-\d.inf]+)/);
       const rmsMatch = statsStderr.match(/RMS level dB:\s*([\-\d.]+)/);
-      noiseFloorDb = nfMatch ? (nfMatch[1] === '-inf' ? -Infinity : parseNumber(nfMatch[1])) : null;
-      noiseRmsDb = rmsMatch ? parseNumber(rmsMatch[1]) : null;
+      const nf = nfMatch ? (nfMatch[1] === '-inf' ? -Infinity : parseNumber(nfMatch[1])) : null;
+      const rms = rmsMatch ? parseNumber(rmsMatch[1]) : null;
+      if (rms !== null && isFinite(rms)) noiseMeasurements.push(rms);
+      if (nf !== null && isFinite(nf) && (noiseFloorDb === null || nf > noiseFloorDb)) noiseFloorDb = nf;
     } catch { /* ignore */ }
     finally {
       try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
     }
   }
 
-  // Also measure overall stats to detect noise in voice sections
+  // Use median of noise measurements (robust against outliers)
+  if (noiseMeasurements.length > 0) {
+    noiseMeasurements.sort((a, b) => a - b);
+    const mid = Math.floor(noiseMeasurements.length / 2);
+    noiseRmsDb = noiseMeasurements.length % 2 === 0
+      ? (noiseMeasurements[mid - 1] + noiseMeasurements[mid]) / 2
+      : noiseMeasurements[mid];
+  }
+
+  // Measure overall stats
   const { stderr: overallStderr } = await runCmd('ffmpeg', [
     '-i', filePath, '-t', '60', '-ac', '1',
     '-af', 'astats=measure_perchannel=none:measure_overall=all',
@@ -117,13 +136,19 @@ async function measureNoiseFloor(filePath, channels) {
   const overallPeak = overallStderr.match(/Peak level dB:\s*([\-\d.]+)/);
   const dcOffset = overallStderr.match(/DC offset:\s*([\-\d.e]+)/);
 
+  // Compute SNR: voice level vs noise level
+  const voiceRmsDb = overallRms ? parseNumber(overallRms[1]) : null;
+  const snrDb = (voiceRmsDb !== null && noiseRmsDb !== null) ? voiceRmsDb - noiseRmsDb : null;
+
   return {
     noiseFloorDb,
     noiseRmsDb,
-    overallRmsDb: overallRms ? parseNumber(overallRms[1]) : null,
+    snrDb,
+    overallRmsDb: voiceRmsDb,
     overallPeakDb: overallPeak ? parseNumber(overallPeak[1]) : null,
     dcOffset: dcOffset ? parseNumber(dcOffset[1]) : null,
-    hasSilenceRegions: silenceStart !== null,
+    hasSilenceRegions,
+    measurementCount: noiseMeasurements.length,
   };
 }
 
@@ -186,24 +211,63 @@ async function detectReverb(filePath) {
 }
 
 async function detectDynamicRange(filePath) {
-  // Analyze volume distribution
+  // Measure dynamics only on voice-active segments (gate out silence first)
+  // This prevents pauses from inflating the dynamic range measurement
   const { stderr } = await runCmd('ffmpeg', [
+    '-i', filePath, '-ac', '1',
+    '-af', 'agate=threshold=0.003:ratio=100:attack=1:release=10,astats=measure_perchannel=none:measure_overall=all',
+    '-f', 'null', '-',
+  ]);
+
+  // Also measure ungated for peak/clipping detection
+  const { stderr: rawStderr } = await runCmd('ffmpeg', [
     '-i', filePath, '-ac', '1',
     '-af', 'astats=measure_perchannel=none:measure_overall=all',
     '-f', 'null', '-',
   ]);
-  const peakMatch = stderr.match(/Peak level dB:\s*([\-\d.]+)/);
-  const rmsMatch = stderr.match(/RMS level dB:\s*([\-\d.]+)/);
-  const rmsPeakMatch = stderr.match(/RMS peak dB:\s*([\-\d.]+)/);
-  const rmsTroughMatch = stderr.match(/RMS through dB:\s*([\-\d.]+)/);
+
+  const peakMatch = rawStderr.match(/Peak level dB:\s*([\-\d.]+)/);
+  const rmsMatch = rawStderr.match(/RMS level dB:\s*([\-\d.]+)/);
+
+  // Gated measurements (voice-only dynamic range)
+  const gatedRmsPeakMatch = stderr.match(/RMS peak dB:\s*([\-\d.]+)/);
+  const gatedRmsTroughMatch = stderr.match(/RMS trough dB:\s*([\-\d.]+)/);
+  const gatedRmsTroughFallback = stderr.match(/RMS through dB:\s*([\-\d.]+)/); // ffmpeg typo variant
 
   const peak = peakMatch ? parseNumber(peakMatch[1]) : null;
   const rms = rmsMatch ? parseNumber(rmsMatch[1]) : null;
-  const rmsPeak = rmsPeakMatch ? parseNumber(rmsPeakMatch[1]) : null;
-  const rmsTrough = rmsTroughMatch ? parseNumber(rmsTroughMatch[1]) : null;
+  const rmsPeak = gatedRmsPeakMatch ? parseNumber(gatedRmsPeakMatch[1]) : null;
+  const rmsTrough = gatedRmsTroughMatch
+    ? parseNumber(gatedRmsTroughMatch[1])
+    : (gatedRmsTroughFallback ? parseNumber(gatedRmsTroughFallback[1]) : null);
 
+  // Voice-only dynamic range (excludes silence gaps)
   const dynamicRange = (rmsPeak !== null && rmsTrough !== null) ? rmsPeak - rmsTrough : null;
   const hasClipping = peak !== null && peak >= -0.5;
+
+  // Also measure LRA from loudnorm for a second opinion
+  let lra = null;
+  try {
+    const { stderr: lnStderr } = await runCmd('ffmpeg', [
+      '-i', filePath,
+      '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json',
+      '-f', 'null', '-',
+    ]);
+    const lnMatch = lnStderr.match(/"input_lra"\s*:\s*"([\d.]+)"/);
+    lra = lnMatch ? parseNumber(lnMatch[1]) : null;
+  } catch { /* ignore */ }
+
+  // Use LRA as primary compression guide (more reliable for speech)
+  // LRA < 5 = tight, 5-10 = moderate, > 10 = wide
+  let compressionLevel;
+  if (lra !== null) {
+    compressionLevel = lra > 10 ? 'heavy' : lra > 5 ? 'moderate' : 'light';
+  } else if (dynamicRange !== null) {
+    // Fallback to gated dynamic range (thresholds adjusted for voice-only measurement)
+    compressionLevel = dynamicRange > 20 ? 'heavy' : dynamicRange > 12 ? 'moderate' : 'light';
+  } else {
+    compressionLevel = 'moderate';
+  }
 
   return {
     peakDb: peak,
@@ -211,11 +275,10 @@ async function detectDynamicRange(filePath) {
     rmsPeakDb: rmsPeak,
     rmsTroughDb: rmsTrough,
     dynamicRange,
+    lra,
     hasClipping,
-    needsCompression: dynamicRange !== null && dynamicRange > 20,
-    compressionLevel: dynamicRange !== null
-      ? (dynamicRange > 30 ? 'heavy' : dynamicRange > 20 ? 'moderate' : 'light')
-      : 'moderate',
+    needsCompression: compressionLevel !== 'light',
+    compressionLevel,
   };
 }
 
@@ -237,20 +300,44 @@ function buildRecommendations(analysis) {
     rec.reasoning.push(`Input is ${basic.channels}-channel — converting to mono for voice content`);
   }
 
-  // 2. Denoise decision
+  // 2. Denoise decision — based on SNR, not raw noise floor
+  const snr = noise.snrDb;
   const noiseLevel = noise.noiseRmsDb;
-  if (noiseLevel !== null && noiseLevel > -55) {
+  if (snr !== null) {
+    if (snr < 20) {
+      // Poor SNR — heavy noise, needs ML denoise
+      rec.steps.push('ml_denoise');
+      rec.settings.mode = 'quality';
+      rec.settings.denoiseStrength = 'full';
+      rec.reasoning.push(`SNR ${snr.toFixed(1)} dB (poor, <20) — full DeepFilterNet AI denoise`);
+    } else if (snr < 35) {
+      // Moderate SNR — some noise, light ML denoise
+      rec.steps.push('ml_denoise');
+      rec.settings.mode = 'quality';
+      rec.settings.denoiseStrength = 'light';
+      rec.reasoning.push(`SNR ${snr.toFixed(1)} dB (moderate) — light DeepFilterNet AI denoise`);
+    } else {
+      // Good SNR — audio is already clean, skip denoise
+      rec.steps.push('skip_denoise');
+      rec.settings.mode = 'clean';
+      rec.settings.denoiseStrength = 'none';
+      rec.reasoning.push(`SNR ${snr.toFixed(1)} dB (good, >35) — audio is clean, skipping denoise to preserve quality`);
+    }
+  } else if (noiseLevel !== null && noiseLevel < -60) {
+    rec.steps.push('skip_denoise');
+    rec.settings.mode = 'clean';
+    rec.settings.denoiseStrength = 'none';
+    rec.reasoning.push(`Noise floor at ${noiseLevel.toFixed(1)} dB (very low) — skipping denoise`);
+  } else if (noiseLevel !== null && noiseLevel > -45) {
     rec.steps.push('ml_denoise');
     rec.settings.mode = 'quality';
-    rec.reasoning.push(`Noise floor at ${noiseLevel.toFixed(1)} dB (above -55 threshold) — using DeepFilterNet AI denoise`);
-  } else if (noiseLevel !== null) {
+    rec.settings.denoiseStrength = 'full';
+    rec.reasoning.push(`Noise floor at ${noiseLevel.toFixed(1)} dB (high) — using DeepFilterNet AI denoise`);
+  } else {
     rec.steps.push('light_denoise');
     rec.settings.mode = 'fast';
-    rec.reasoning.push(`Noise floor at ${noiseLevel.toFixed(1)} dB (below -55) — light FFmpeg denoise sufficient`);
-  } else {
-    rec.steps.push('ml_denoise');
-    rec.settings.mode = 'quality';
-    rec.reasoning.push('Could not measure noise floor — defaulting to AI denoise for safety');
+    rec.settings.denoiseStrength = 'light';
+    rec.reasoning.push('Uncertain noise level — defaulting to light FFmpeg denoise');
   }
 
   // 3. Noise gate
@@ -289,22 +376,24 @@ function buildRecommendations(analysis) {
     rec.reasoning.push('Low sibilance — de-esser not needed');
   }
 
-  // 7. Compression
+  // 7. Compression — use LRA as primary guide, gentler ratios
   rec.steps.push('compression');
+  const lraStr = dynamics.lra != null ? `LRA ${dynamics.lra.toFixed(1)} LU` : null;
+  const drStr = dynamics.dynamicRange != null ? `DR ${dynamics.dynamicRange.toFixed(1)} dB` : null;
+  const metricsStr = [lraStr, drStr].filter(Boolean).join(', ') || 'unknown';
+
   if (dynamics.compressionLevel === 'heavy') {
     rec.settings.multiBandCompEnabled = true;
-    rec.settings.compressionRatio = 5;
-    const drStr = dynamics.dynamicRange != null ? `${dynamics.dynamicRange.toFixed(1)} dB` : 'wide';
-    rec.reasoning.push(`Wide dynamic range (${drStr}) — heavy multi-band compression`);
+    rec.settings.compressionRatio = 3;
+    rec.reasoning.push(`Wide dynamics (${metricsStr}) — moderate multi-band compression`);
   } else if (dynamics.compressionLevel === 'moderate') {
-    rec.settings.multiBandCompEnabled = true;
-    rec.settings.compressionRatio = 3.5;
-    const drStr = dynamics.dynamicRange != null ? `${dynamics.dynamicRange.toFixed(1)} dB` : 'moderate';
-    rec.reasoning.push(`Moderate dynamic range (${drStr}) — standard multi-band compression`);
+    rec.settings.multiBandCompEnabled = false;
+    rec.settings.compressionRatio = 2.5;
+    rec.reasoning.push(`Moderate dynamics (${metricsStr}) — gentle single-band compression`);
   } else {
     rec.settings.multiBandCompEnabled = false;
-    const drStr = dynamics.dynamicRange != null ? `${dynamics.dynamicRange.toFixed(1)} dB` : 'tight';
-    rec.reasoning.push(`Tight dynamic range (${drStr}) — single-band compression sufficient`);
+    rec.settings.compressionRatio = 2;
+    rec.reasoning.push(`Tight dynamics (${metricsStr}) — light single-band compression`);
   }
 
   // 8. Loudness target

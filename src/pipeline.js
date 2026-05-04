@@ -18,8 +18,9 @@ function buildPreChain(settings) {
   if (settings.mode === 'fast') {
     parts.push('afftdn=nf=-20:tn=1:nr=20:om=o');
   }
-  if (settings.noiseGateEnabled !== false) {
-    parts.push('agate=threshold=0.005:ratio=4:attack=5:release=80:range=0.003');
+  if (settings.noiseGateEnabled !== false && settings.mode !== 'clean') {
+    // Gentler noise gate — less aggressive range to avoid cutting natural room tone
+    parts.push('agate=threshold=0.003:ratio=3:attack=8:release=120:range=0.01');
   }
   if (settings.silenceTrimEnabled !== false) {
     // Trim leading silence only; trailing uses areverse trick to avoid cutting mid-speech pauses
@@ -36,18 +37,20 @@ function buildEqChain(settings) {
   const deEsser = settings.deEsserEnabled !== false;
   const breathReduction = settings.breathReductionEnabled === true;
 
+  // Gentler, more natural EQ curve — less aggressive highs
   const filters = [
     `highpass=f=${hpfFreq}:poles=2`,
-    'equalizer=f=150:width_type=o:width=1.0:g=1',
-    'equalizer=f=250:width_type=o:width=1.5:g=-1.5',
-    'equalizer=f=800:width_type=o:width=2.0:g=1',
-    'equalizer=f=2500:width_type=o:width=2.0:g=3',
-    'equalizer=f=4000:width_type=o:width=1.5:g=2',
-    'equalizer=f=12000:width_type=o:width=2:g=2',
+    'equalizer=f=120:width_type=o:width=0.8:g=1.5',   // warmth / body
+    'equalizer=f=250:width_type=o:width=1.5:g=-1',     // reduce mud (was -1.5)
+    'equalizer=f=800:width_type=o:width=2.0:g=0.5',    // lower mids, subtle (was 1)
+    'equalizer=f=2500:width_type=o:width=1.5:g=2',     // presence (was 3, narrower)
+    'equalizer=f=4000:width_type=o:width=1.2:g=1',     // clarity (was 2)
+    'equalizer=f=8000:width_type=o:width=1.5:g=0.5',   // air — subtle (was 12kHz @ +2)
   ];
 
   if (deEsser) {
-    filters.splice(6, 0, 'equalizer=f=6500:width_type=h:width=2000:g=-2');
+    const deEsserGain = settings.deEsserGain ?? -2;
+    filters.splice(6, 0, `equalizer=f=6500:width_type=h:width=2000:g=${deEsserGain}`);
   }
 
   if (breathReduction) {
@@ -59,8 +62,10 @@ function buildEqChain(settings) {
 
 const LIMITER = 'alimiter=level_in=1:limit=0.891:level_out=1:attack=5:release=50';
 
-function buildSingleBandComp() {
-  return `acompressor=threshold=0.06:ratio=3:attack=15:release=150:makeup=2.5,${LIMITER}`;
+function buildSingleBandComp(settings = {}) {
+  const ratio = settings.compressionRatio ?? 2.5;
+  const makeup = ratio <= 2 ? 1.5 : ratio <= 3 ? 2 : 2.5;
+  return `acompressor=threshold=0.08:ratio=${ratio}:attack=15:release=200:makeup=${makeup},${LIMITER}`;
 }
 
 function buildLoudnormBase(lufsTarget) {
@@ -181,17 +186,48 @@ async function analyzeFile(filePath, setCurrent) {
 
 // ── DeepFilterNet denoise ──
 
-async function runDeepFilterNet(inputPath, outputPath, setCurrent) {
+async function runDeepFilterNet(inputPath, outputPath, setCurrent, opts = {}) {
   // deep-filter writes to an output directory, so we use a temp dir
   const tmpDir = path.join(os.tmpdir(), `audiopro_dfn_${crypto.randomBytes(6).toString('hex')}`);
   fs.mkdirSync(tmpDir, { recursive: true });
 
+  // DFN 0.5.x crashes on 24-bit WAV ("TooWide") — convert to 16-bit first
+  let dfnInput = inputPath;
+  let convertedInput = null;
+  try {
+    const probeOut = await new Promise((res, rej) => {
+      const p = spawn(binPaths.ffprobe(), ['-v', 'quiet', '-print_format', 'json', '-show_streams', inputPath]);
+      let buf = '';
+      p.stdout.on('data', c => { buf += c; });
+      p.on('close', code => code === 0 ? res(buf) : rej(new Error('ffprobe failed')));
+      p.on('error', rej);
+    });
+    const streams = JSON.parse(probeOut).streams || [];
+    const audio = streams.find(s => s.codec_type === 'audio');
+    const bps = parseInt(audio?.bits_per_sample) || 16;
+    if (bps > 16) {
+      convertedInput = path.join(tmpDir, `input_16bit_${path.basename(inputPath)}`);
+      await new Promise((res, rej) => {
+        const p = spawn(binPaths.ffmpeg(), ['-y', '-i', inputPath, '-acodec', 'pcm_s16le', '-ar', String(audio?.sample_rate || 48000), convertedInput]);
+        p.on('close', code => code === 0 ? res() : rej(new Error('16-bit conversion failed')));
+        p.on('error', rej);
+      });
+      dfnInput = convertedInput;
+    }
+  } catch { /* proceed with original file */ }
+
   return new Promise((resolve, reject) => {
-    const proc = spawn(binPaths.deepFilter(), [
-      inputPath,
+    const args = [
+      dfnInput,
       '-o', tmpDir,
       '--compensate-delay',
-    ]);
+    ];
+    // Limit attenuation for light denoise (less aggressive)
+    // 100 = full denoise, 6 = very subtle, 0 = no denoise
+    if (opts.attenLimitDb != null) {
+      args.push('--atten-lim-db', String(opts.attenLimitDb));
+    }
+    const proc = spawn(binPaths.deepFilter(), args);
     if (setCurrent) setCurrent(proc);
     let stderr = '';
     proc.stderr.on('data', chunk => { stderr += chunk.toString(); });
@@ -201,8 +237,8 @@ async function runDeepFilterNet(inputPath, outputPath, setCurrent) {
         try { fs.rmSync(tmpDir, { recursive: true }); } catch { /* ok */ }
         return reject(new Error(`DeepFilterNet failed (code ${code}): ${stderr.slice(-200)}`));
       }
-      // deep-filter outputs to tmpDir with the same filename
-      const outName = path.basename(inputPath);
+      // deep-filter outputs to tmpDir with the same filename as the input
+      const outName = path.basename(dfnInput);
       const dfnOutput = path.join(tmpDir, outName);
       try {
         fs.copyFileSync(dfnOutput, outputPath);
@@ -235,8 +271,8 @@ async function preprocessFile(inputPath, outputPath, settings, duration, onProgr
 
 // ── Loudness measure pass ──
 
-async function measureLoudness(filePath, duration, eqChain, loudnormBase, onProgress, setCurrent) {
-  const chain = `${eqChain},${buildSingleBandComp()},loudnorm=${loudnormBase}:print_format=json`;
+async function measureLoudness(filePath, duration, eqChain, loudnormBase, settings, onProgress, setCurrent) {
+  const chain = `${eqChain},${buildSingleBandComp(settings)},loudnorm=${loudnormBase}:print_format=json`;
   const stderr = await run('ffmpeg', [
     '-y', '-i', filePath,
     '-af', chain,
@@ -254,16 +290,19 @@ async function renderFile(inputPath, outputPath, stats, eqChain, loudnormBase, s
 
   if (useMBC) {
     // Multi-band compressor via filter_complex
-    // Bands: low 0-300 Hz, mid 250-3500 Hz, high 3000+ Hz
-    // Each band gets independent compression, then mixed and limited
+    // Gentler ratios to avoid over-processing
+    const ratio = settings.compressionRatio ?? 2.5;
+    const lowRatio = Math.min(ratio + 0.5, 4);    // was 5
+    const midRatio = ratio;                         // was 3.5
+    const highRatio = Math.max(ratio - 0.5, 1.5);  // was 2
     const parts = [
       `[0:a]${eqChain},asplit=3[la][ma][ha]`,
       '[la]lowpass=f=300:poles=2[lf]',
       '[ma]highpass=f=250:poles=2,lowpass=f=3500:poles=2[mf]',
       '[ha]highpass=f=3000:poles=2[hf]',
-      '[lf]acompressor=threshold=0.05:ratio=5:attack=20:release=300:makeup=3[lc]',
-      '[mf]acompressor=threshold=0.08:ratio=3.5:attack=8:release=120:makeup=2[mc]',
-      '[hf]acompressor=threshold=0.12:ratio=2:attack=3:release=80:makeup=1.5[hc]',
+      `[lf]acompressor=threshold=0.06:ratio=${lowRatio}:attack=20:release=300:makeup=2[lc]`,
+      `[mf]acompressor=threshold=0.1:ratio=${midRatio}:attack=10:release=150:makeup=1.5[mc]`,
+      `[hf]acompressor=threshold=0.15:ratio=${highRatio}:attack=5:release=100:makeup=1[hc]`,
       `[lc][mc][hc]amix=inputs=3:normalize=0,volume=1.0,${LIMITER},${loudnorm}[out]`,
     ];
     await run('ffmpeg', [
@@ -274,7 +313,7 @@ async function renderFile(inputPath, outputPath, stats, eqChain, loudnormBase, s
       outputPath,
     ], { duration, onProgress, setCurrent });
   } else {
-    const chain = `${eqChain},${buildSingleBandComp()},${loudnorm}`;
+    const chain = `${eqChain},${buildSingleBandComp(settings)},${loudnorm}`;
     await run('ffmpeg', [
       '-y', '-i', inputPath,
       '-af', chain,
@@ -347,7 +386,7 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       if (isCancelled()) break;
 
       const duration = analysis.basic.duration ?? file.duration ?? null;
-      const useMLDenoise = fileSettings.mode !== 'fast';
+      const useMLDenoise = fileSettings.mode === 'quality';  // skip for 'clean' and 'fast'
       const STEP_TOTAL = useMLDenoise ? 6 : 5;
       let stepIdx = 2;
       let pipelineInput = file.path;
@@ -356,7 +395,10 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       const eqChain = buildEqChain(fileSettings);
       const loudnormBase = buildLoudnormBase(fileSettings.lufsTarget);
 
-      // Step 2 — DeepFilterNet ML Denoise (if recommended)
+      // Log what the pipeline decided
+      console.log(`[AudioPro] ${path.basename(file.path)}: mode=${fileSettings.mode}, denoise=${fileSettings.denoiseStrength ?? 'default'}, compression=${fileSettings.compressionLevel ?? (fileSettings.multiBandCompEnabled ? 'multiband' : 'single')} ratio=${fileSettings.compressionRatio ?? '?'}`);
+
+      // Step 2 — DeepFilterNet ML Denoise (if recommended and not clean audio)
       if (useMLDenoise) {
         emit('progress', {
           file: file.path, step: 'AI Denoise (DeepFilterNet)', stepIndex: stepIdx, stepTotal: STEP_TOTAL,
@@ -366,7 +408,12 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
         dfnTempPath = path.join(os.tmpdir(), `audiopro_dfn_${crypto.randomBytes(8).toString('hex')}_${path.basename(file.path)}`);
 
         try {
-          await runDeepFilterNet(file.path, dfnTempPath, setCurrent);
+          const dfnOpts = {};
+          // For light denoise, use reduced attenuation
+          if (fileSettings.denoiseStrength === 'light') {
+            dfnOpts.attenLimitDb = 12;  // limit attenuation to 12 dB (subtle)
+          }
+          await runDeepFilterNet(file.path, dfnTempPath, setCurrent, dfnOpts);
           pipelineInput = dfnTempPath;
         } catch (dfnErr) {
           console.warn(`DeepFilterNet failed, falling back to FFmpeg: ${dfnErr.message}`);
@@ -406,7 +453,7 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
         pct: 42, eta: calcEta(t0, done + 0.3, total),
       });
 
-      const stats = await measureLoudness(tempPath, duration, eqChain, loudnormBase,
+      const stats = await measureLoudness(tempPath, duration, eqChain, loudnormBase, fileSettings,
         frac => {
           if (isCancelled()) return;
           emit('progress', {

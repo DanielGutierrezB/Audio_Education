@@ -37,15 +37,16 @@ function buildEqChain(settings) {
   const deEsser = settings.deEsserEnabled !== false;
   const breathReduction = settings.breathReductionEnabled === true;
 
-  // Gentler, more natural EQ curve — less aggressive highs
+  // Voice-optimized EQ curve — warm, full, broadcast-quality
+  // Designed to match Adobe Podcast's spectral profile
   const filters = [
     `highpass=f=${hpfFreq}:poles=2`,
-    'equalizer=f=120:width_type=o:width=0.8:g=1.5',   // warmth / body
-    'equalizer=f=250:width_type=o:width=1.5:g=-1',     // reduce mud (was -1.5)
-    'equalizer=f=800:width_type=o:width=2.0:g=0.5',    // lower mids, subtle (was 1)
-    'equalizer=f=2500:width_type=o:width=1.5:g=2',     // presence (was 3, narrower)
-    'equalizer=f=4000:width_type=o:width=1.2:g=1',     // clarity (was 2)
-    'equalizer=f=8000:width_type=o:width=1.5:g=0.5',   // air — subtle (was 12kHz @ +2)
+    'lowshelf=f=250:width_type=o:width=0.8:g=6',       // warmth + body (+6 dB shelf, wider)
+    'equalizer=f=250:width_type=o:width=1.2:g=-1',     // reduce mud
+    'equalizer=f=800:width_type=o:width=2.0:g=0.5',    // lower mids, subtle
+    'equalizer=f=2000:width_type=o:width=1.5:g=2',     // upper-mid clarity
+    'equalizer=f=3500:width_type=o:width=1.2:g=0.5',   // presence (subtle)
+    'equalizer=f=8000:width_type=o:width=2.0:g=-0.5',  // tame harshness
   ];
 
   if (deEsser) {

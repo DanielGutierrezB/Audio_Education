@@ -929,6 +929,14 @@ function drawWaveform(peaks) {
   ctx.lineTo(W, mid);
   ctx.stroke();
 
+  // Normalize peaks to fill the available height
+  // Find the max peak value and scale everything to [0, 1]
+  let peakMax = 0;
+  for (let i = 0; i < peaks.length; i++) {
+    if (peaks[i] > peakMax) peakMax = peaks[i];
+  }
+  const scale = peakMax > 0 ? 1 / peakMax : 1;
+
   // Gradient fill
   const grad = ctx.createLinearGradient(0, 0, 0, H);
   grad.addColorStop(0, 'rgba(74,143,232,0.95)');
@@ -941,7 +949,7 @@ function drawWaveform(peaks) {
 
   for (let x = 0; x < W; x++) {
     const idx = Math.floor(x * step);
-    const v = (peaks[idx] ?? 0) * 0.95;
+    const v = ((peaks[idx] ?? 0) * scale) * 0.92;  // 0.92 = slight padding from edges
     const barH = Math.max(1, v * mid * 2);
     ctx.fillRect(x, mid - v * mid, barW, barH);
   }

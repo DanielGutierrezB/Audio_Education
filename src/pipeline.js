@@ -259,6 +259,21 @@ async function runDeepFilterNet(inputPath, outputPath, setCurrent, opts = {}) {
   });
 }
 
+// ── BodyGen: harmonic exciter + sub-harmonic synthesis ──
+
+async function runBodyGen(inputPath, outputPath, setCurrent, opts = {}) {
+  const pythonScript = path.join(__dirname, 'python', 'bodygen.py');
+  const args = [
+    pythonScript, inputPath, outputPath,
+    '--mix', String(opts.mix ?? 0.12),
+    '--sub-mix', String(opts.subMix ?? 0.06),
+  ];
+  if (opts.lowFreq) args.push('--low-freq', String(opts.lowFreq));
+  if (opts.highFreq) args.push('--high-freq', String(opts.highFreq));
+
+  await run('python3', args, { setCurrent, timeout: 2 * 60 * 1000 });
+}
+
 // ── Pre-process: mono + [denoise] + noise gate + silence trim ──
 
 async function preprocessFile(inputPath, outputPath, settings, duration, onProgress, setCurrent) {
@@ -355,6 +370,7 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
     emit('file:start', { file: file.path, index: done, total });
     let tempPath = null;
     let dfnTempPath = null;
+    let bodyGenTempPath = null;
 
     try {
       // Step 1 — Smart Analysis
@@ -389,7 +405,11 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
 
       const duration = analysis.basic.duration ?? file.duration ?? null;
       const useMLDenoise = fileSettings.mode === 'quality';  // skip for 'clean' and 'fast'
-      const STEP_TOTAL = useMLDenoise ? 6 : 5;
+      const useBodyGen = fileSettings.bodyGenEnabled !== false; // on by default
+      let stepCount = 4; // base: analyze + preprocess + EQ measure + render
+      if (useMLDenoise) stepCount++;
+      if (useBodyGen) stepCount++;
+      const STEP_TOTAL = stepCount;
       let stepIdx = 2;
       let pipelineInput = file.path;
 
@@ -449,7 +469,39 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       if (isCancelled()) break;
       stepIdx++;
 
-      // Step 4 — EQ Measure
+      // Step N — BodyGen (harmonic exciter + sub-harmonic synthesis)
+      if (useBodyGen) {
+        emit('progress', {
+          file: file.path, step: 'BodyGen (harmonics)', stepIndex: stepIdx, stepTotal: STEP_TOTAL,
+          pct: Math.round(25 + 15 * (useMLDenoise ? 1 : 0.7)),
+          eta: calcEta(t0, done + 0.25, total),
+        });
+
+        bodyGenTempPath = path.join(os.tmpdir(), `audiopro_bg_${crypto.randomBytes(8).toString('hex')}_${path.basename(file.path)}`);
+
+        try {
+          await runBodyGen(tempPath, bodyGenTempPath, setCurrent, {
+            mix: fileSettings.bodyGenMix ?? 0.12,
+            subMix: fileSettings.bodyGenSubMix ?? 0.06,
+          });
+          // Replace tempPath with bodygen output for subsequent steps
+          const oldTemp = tempPath;
+          tempPath = bodyGenTempPath;
+          bodyGenTempPath = oldTemp; // swap so old gets cleaned up
+        } catch (bgErr) {
+          console.warn(`BodyGen failed, continuing without: ${bgErr.message}`);
+          // Continue with unprocessed tempPath
+          if (bodyGenTempPath) {
+            try { fs.unlinkSync(bodyGenTempPath); } catch { /* ignore */ }
+            bodyGenTempPath = null;
+          }
+        }
+
+        if (isCancelled()) break;
+        stepIdx++;
+      }
+
+      // Step N — EQ Measure
       emit('progress', {
         file: file.path, step: 'EQ Measure', stepIndex: stepIdx, stepTotal: STEP_TOTAL,
         pct: 42, eta: calcEta(t0, done + 0.3, total),
@@ -498,6 +550,9 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       }
       if (dfnTempPath) {
         try { fs.unlinkSync(dfnTempPath); } catch { /* ignore */ }
+      }
+      if (bodyGenTempPath) {
+        try { fs.unlinkSync(bodyGenTempPath); } catch { /* ignore */ }
       }
     }
   }

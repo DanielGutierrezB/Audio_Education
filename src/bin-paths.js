@@ -2,7 +2,10 @@
 
 const path = require('path');
 const fs = require('fs');
-const { app } = require('electron');
+let app;
+try {
+  app = require('electron').app;
+} catch { /* running outside Electron (CLI/tests) */ }
 
 /**
  * Resolve paths to bundled binaries (ffmpeg, ffprobe, deep-filter).
@@ -11,7 +14,7 @@ const { app } = require('electron');
  */
 
 function getBinDir() {
-  if (app.isPackaged) {
+  if (app && app.isPackaged) {
     return path.join(process.resourcesPath, 'bin');
   }
   return path.join(__dirname, '..', 'bin');

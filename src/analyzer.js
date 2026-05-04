@@ -397,7 +397,15 @@ function buildRecommendations(analysis) {
     rec.reasoning.push(`Tight dynamics (${metricsStr}) — light single-band compression`);
   }
 
-  // 8. Loudness target
+  // 8. BodyGen (harmonic exciter + sub-harmonic synthesis)
+  // Always enabled — generates new harmonic content via waveshaping for fuller voice
+  rec.steps.push('bodygen');
+  rec.settings.bodyGenEnabled = true;
+  rec.settings.bodyGenMix = 0.12;
+  rec.settings.bodyGenSubMix = 0.06;
+  rec.reasoning.push('BodyGen enabled — harmonic exciter + sub-harmonic synthesis for voice fullness');
+
+  // 9. Loudness target
   if (loudness) {
     const currentLUFS = loudness.integratedLUFS;
     rec.settings.lufsTarget = -16;

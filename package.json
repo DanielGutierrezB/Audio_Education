@@ -5,6 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "setup:bin": "bash scripts/fetch-bin.sh",
     "build": "electron-builder --mac --arm64",
     "build:python": "bash scripts/build-python-runtime.sh",
     "build:full": "npm run build:python && npm run build",

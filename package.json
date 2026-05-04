@@ -35,17 +35,6 @@
         "filter": [
           "**/*"
         ]
-      },
-      {
-        "from": "python-runtime/",
-        "to": "python-runtime",
-        "filter": [
-          "**/*",
-          "!**/__pycache__/**",
-          "!**/*.pyc",
-          "!**/tests/**",
-          "!**/test/**"
-        ]
       }
     ],
     "asarUnpack": [

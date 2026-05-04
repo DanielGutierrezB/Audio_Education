@@ -287,20 +287,19 @@ function buildRecommendations(analysis) {
     rec.reasoning.push('Minimal reverb — standard HPF at 80 Hz');
   }
 
-  // 5b. Adaptive body-boost frequency + dynamic notches from voice profile.
+  // 5b. Dynamic notches from voice profile.
   if (analysis.voice) {
-    rec.settings.bodyBoostHz = analysis.voice.bodyBoostHz;
     rec.settings.dynamicNotches = analysis.voice.notches; // [{freq,q,prominenceDb}]
     if (analysis.voice.notches?.length) {
       const summary = analysis.voice.notches
-        .map(n => `${n.freq} Hz (Q≈${n.q}, +${n.prominenceDb} dB)`)
+        .map(n => {
+          const cut = Number.isFinite(n.fixedCutDb) ? `−${n.fixedCutDb} dB` : `+${n.prominenceDb} dB`;
+          return `${n.freq} Hz (Q≈${n.q}, ${cut})`;
+        })
         .join(', ');
       rec.reasoning.push(`Resonant peaks detected — dynamic notches at: ${summary}`);
     } else {
-      rec.reasoning.push('No resonant peaks detected in 180–900 Hz — skipping dynamic notches');
-    }
-    if (analysis.voice.bodyBoostHz !== 800) {
-      rec.reasoning.push(`Body boost moved to ${analysis.voice.bodyBoostHz} Hz to match voice timbre`);
+      rec.reasoning.push('No resonant peaks detected in 80–900 Hz — skipping dynamic notches');
     }
   }
 
@@ -378,6 +377,31 @@ function buildRecommendations(analysis) {
   // 10. Output
   rec.settings.outputFormat = 'wav24';
   rec.settings.sampleRate = basic.sampleRate >= 48000 ? 48000 : 44100;
+
+  // ── Clean source mode ──
+  // When the source has a low noise floor (≤ −55 dB — the same boundary
+  // that already separates "noisy → DFN" from "clean → afftdn") AND its
+  // dynamic range isn't extreme, treat it as production-grade material
+  // that doesn't need the heavy pipeline. We bypass denoise (DFN AND
+  // afftdn), EQ cuts, multi-band compression and single-band compression,
+  // keeping only loudness normalisation and the limiter. We stay at
+  // 24-bit throughout the pipeline (the 16-bit intermediate format only
+  // exists for DeepFilterNet, which we skip).
+  const noiseFloorDb = noise.noiseRmsDb;
+  const isCleanSource =
+    noiseFloorDb !== null && noiseFloorDb <= -55 &&
+    dynamics.compressionLevel !== 'heavy';
+  if (isCleanSource) {
+    rec.settings.cleanSourceMode    = true;
+    rec.settings.aiDenoiseEnabled   = false;
+    rec.settings.multiBandCompEnabled = false;
+    rec.settings.deEsserEnabled     = false;
+    rec.settings.skipStaticEqCuts   = true;
+    rec.reasoning.push(
+      `Clean source detected (noise floor ${noiseFloorDb.toFixed(1)} dB, ` +
+      `${dynamics.compressionLevel} dynamics) — minimal pipeline: loudnorm + limiter only, 24-bit throughout`
+    );
+  }
 
   return rec;
 }

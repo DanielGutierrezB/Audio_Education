@@ -21,6 +21,7 @@
             <span class="tab-badge" id="badge-done" hidden></span>
           </button>
           <button class="tab" data-tab="preview" role="tab" aria-selected="false">Preview</button>
+          <button class="tab" data-tab="eq" role="tab" aria-selected="false">EQ</button>
           <button class="tab" data-tab="about" role="tab" aria-selected="false">About</button>
         </nav>
       </div>
@@ -44,12 +45,21 @@
             title="Process all queued files through the full pipeline">
             &#9654; Process All
           </button>
+          <button class="btn btn-secondary btn-output" id="btn-output-dir"
+            title="Choose where processed files are saved. Default writes to Audio_Pro/ next to each source folder.">
+            <span class="btn-icon">&#128193;</span>
+            <span class="btn-output-label" id="btn-output-label">Output: Default</span>
+          </button>
+          <button class="btn-icon-only" id="btn-output-reset" hidden
+            title="Reset output folder to default (Audio_Pro/ next to source)">&#10005;</button>
           <span class="toolbar-spacer"></span>
           <span class="queue-summary" id="queue-summary"></span>
           <button class="btn btn-secondary btn-sm" id="btn-remove-completed" hidden
             title="Remove completed files from the queue">Remove Done</button>
           <button class="btn btn-secondary btn-sm" id="btn-clear-all" hidden
             title="Remove all files from the queue">Clear All</button>
+          <button class="btn btn-secondary btn-sm" id="btn-open-output" hidden
+            title="Open the custom output folder in Finder">Open output</button>
           <div class="mode-toggle" title="Quality: AI denoising (DeepFilterNet). Fast: FFmpeg denoise only. Auto: smart analyzer picks best settings per file.">
             <button class="mode-btn" id="mode-quality" data-mode="quality">Quality</button>
             <button class="mode-btn" id="mode-fast" data-mode="fast">Fast</button>
@@ -313,6 +323,37 @@
         <audio id="audio-player" preload="none"></audio>
       </section>
 
+      <!-- ── EQ View ── -->
+      <section class="view" id="view-eq" role="tabpanel" hidden>
+        <div class="eq-editor">
+
+          <div class="eq-toolbar">
+            <select class="eq-file-select" id="eq-file-select" aria-label="File to preview">
+              <option value="">No files in queue</option>
+            </select>
+            <div class="eq-transport">
+              <button class="btn-transport" id="eq-play" title="Play / Pause (Space)">&#9654;</button>
+              <button class="btn-transport" id="eq-stop" title="Stop">&#9632;</button>
+              <span class="eq-time" id="eq-time">0:00 / 0:00</span>
+            </div>
+            <span class="toolbar-spacer"></span>
+            <label class="eq-bypass-label" title="Bypass — hear the file with no EQ applied">
+              <input type="checkbox" id="eq-bypass">
+              <span>Bypass</span>
+            </label>
+            <button class="btn btn-secondary btn-sm" id="eq-reset" title="Reset to AudioPro's automatic EQ">Reset</button>
+            <button class="btn btn-accent btn-sm" id="eq-apply" title="Use this manual EQ for all queued files when processing">Apply to all</button>
+          </div>
+
+          <div class="eq-canvas-wrap">
+            <canvas id="eq-canvas" width="980" height="380"></canvas>
+            <div class="eq-status" id="eq-status">Manual EQ override: <span id="eq-status-value" class="eq-status-off">off</span></div>
+            <div class="eq-readout" id="eq-readout">Click and drag a band — scroll to change Q</div>
+          </div>
+
+        </div>
+      </section>
+
       <!-- ── About View ── -->
       <section class="view" id="view-about" role="tabpanel" hidden>
         <div class="about-container">
@@ -384,7 +425,7 @@
               <div class="step-number">4</div>
               <div class="step-body">
                 <h3>EQ Measure</h3>
-                <p>Applies the full EQ and dynamics chain in measurement mode (no output file) to gather loudness statistics for the two-pass <code>loudnorm</code> algorithm. <strong>EQ chain:</strong> HPF &rarr; warmth boost (150 Hz) &rarr; mud cut (250 Hz) &rarr; body boost (800 Hz) &rarr; presence boost (2.5 kHz) &rarr; clarity boost (4 kHz) &rarr; optional de-esser (6.5 kHz) &rarr; air shelf (12 kHz).</p>
+                <p>Applies the full EQ and dynamics chain in measurement mode (no output file) to gather loudness statistics for the two-pass <code>loudnorm</code> algorithm. <strong>EQ chain:</strong> HPF &rarr; static narrow cut (&minus;3 dB at 150 Hz, Q&nbsp;8) &rarr; mud cut (250 Hz) &rarr; static box cuts (&minus;3 dB at 400 &amp; 700 Hz, Q&nbsp;8) &rarr; adaptive notches (80&ndash;900 Hz) &rarr; gentle presence (+1 dB at 2.5 kHz) &rarr; optional de-esser (6.5 kHz) &rarr; air/sparkle shelf (+3 dB from 10 kHz).</p>
               </div>
             </div>
 
@@ -447,5 +488,6 @@
   </div>
 
   <script src="js/app.js"></script>
+  <script src="js/eq-editor.js"></script>
 </body>
 </html>

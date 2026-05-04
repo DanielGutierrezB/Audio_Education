@@ -22,6 +22,19 @@ const completedFiles = new Map();
 // Set of selected file paths
 const selectedFiles = new Set();
 
+// Tiny API surface for the EQ editor (and any future module) to peek at
+// the queue and the completed-file mapping without poking internals.
+window.audioProQueue = {
+  getCompletedOutput: (sourcePath) => completedFiles.get(sourcePath) || null,
+  listFiles: () => {
+    const out = [];
+    for (const [folder, group] of queue) {
+      for (const f of group.files) out.push({ path: f.path, name: f.name, status: f.status, output: completedFiles.get(f.path) || null });
+    }
+    return out;
+  },
+};
+
 // ── Tab navigation ──
 tabs.forEach(tab => {
   tab.addEventListener('click', () => {
@@ -647,6 +660,10 @@ const setSampleRate    = document.getElementById('set-samplerate');
 const lufsValue        = document.getElementById('lufs-value');
 const tpValue          = document.getElementById('tp-value');
 const hpfValue         = document.getElementById('hpf-value');
+const btnOutputDir     = document.getElementById('btn-output-dir');
+const btnOutputLabel   = document.getElementById('btn-output-label');
+const btnOutputReset   = document.getElementById('btn-output-reset');
+const btnOpenOutput    = document.getElementById('btn-open-output');
 
 btnSettings.addEventListener('click', () => {
   const open = !settingsPanel.hidden;
@@ -674,6 +691,25 @@ function applySettingsUI(p) {
   if (setEnhancePreset) setEnhancePreset.value = p.enhancePreset ?? 'ultra_subtle';
   setFormat.value = p.outputFormat ?? 'wav24';
   setSampleRate.value = String(p.sampleRate ?? 48000);
+  applyOutputDirUI(p.customOutputDir ?? '');
+}
+
+function applyOutputDirUI(dir) {
+  const hasCustom = typeof dir === 'string' && dir.length > 0;
+  if (hasCustom) {
+    // Show only the leaf folder name in the toolbar; full path on hover.
+    const leaf = dir.split('/').filter(Boolean).pop() || dir;
+    btnOutputLabel.textContent = `Output: ${leaf}`;
+    btnOutputDir.title = `Output folder: ${dir}\nClick to change.`;
+    btnOutputDir.classList.add('btn-output-custom');
+    btnOutputReset.hidden = false;
+  } else {
+    btnOutputLabel.textContent = 'Output: Default';
+    btnOutputDir.title = 'Output folder: Audio_Pro/ next to each source folder.\nClick to choose a custom folder.';
+    btnOutputDir.classList.remove('btn-output-custom');
+    btnOutputReset.hidden = true;
+  }
+  btnOpenOutput.hidden = !hasCustom;
 }
 
 function savePref(key, value) {
@@ -715,6 +751,22 @@ if (setEnhancePreset) {
 }
 setFormat.addEventListener('change', () => savePref('outputFormat', setFormat.value));
 setSampleRate.addEventListener('change', () => savePref('sampleRate', parseInt(setSampleRate.value)));
+
+btnOutputDir.addEventListener('click', async () => {
+  if (!window.api?.output) return;
+  const chosen = await window.api.output.chooseDir();
+  if (chosen) applyOutputDirUI(chosen);
+});
+
+btnOutputReset.addEventListener('click', (e) => {
+  e.stopPropagation(); // don't trigger the parent button's click
+  savePref('customOutputDir', '');
+  applyOutputDirUI('');
+});
+
+btnOpenOutput.addEventListener('click', () => {
+  if (window.api?.output) window.api.output.openDir();
+});
 
 // ── Event listeners — toolbar / empty state ──
 btnAddFolders.addEventListener('click', addFoldersViaDialog);
@@ -775,6 +827,13 @@ function waveformCacheSet(key, peaks) {
   }
   waveformCache.set(key, peaks);
 }
+
+// Per-file pair max peak. Used to normalise the Original and Processed
+// waveforms against the SAME reference, so when the user A/B-switches
+// the visual heights stay proportional to the actual signal level
+// difference (otherwise normalising each one to its own peak hides any
+// loudness change introduced by the pipeline).
+const pairMaxPeak = new Map(); // filePath → max(originalPeak, processedPeak)
 // Stored waveform image (without playhead) for repaint
 let waveformImageData = null;
 // RAF handle
@@ -936,6 +995,20 @@ async function loadWaveform(filePath) {
     if (peaks) waveformCacheSet(filePath, peaks);
   }
 
+  // Update the per-pair max so Original and Processed share the same
+  // visual reference. The pair is keyed on the original file path so
+  // both sources — currentPreviewOriginal and currentPreviewOutput —
+  // contribute to the same scale.
+  if (peaks && currentPreviewOriginal) {
+    let localMax = 0;
+    for (let i = 0; i < peaks.length; i++) {
+      const p = peaks[i] ?? 0;
+      if (p > localMax) localMax = p;
+    }
+    const prev = pairMaxPeak.get(currentPreviewOriginal) ?? 0;
+    if (localMax > prev) pairMaxPeak.set(currentPreviewOriginal, localMax);
+  }
+
   previewLoading.hidden = true;
 
   if (peaks) {
@@ -981,17 +1054,18 @@ function drawWaveform(peaks) {
   const barW = Math.max(1, W / peaks.length);
   const step = peaks.length / W;
 
-  // Normalise the peaks so the loudest sample maps to ~95% of the canvas
-  // height. Without this, very quiet recordings (low headroom, or files
-  // already attenuated upstream) produce a 1-pixel-tall flatline that's
-  // basically invisible.
-  let maxPeak = 0;
-  for (let i = 0; i < peaks.length; i++) {
-    const p = peaks[i] ?? 0;
-    if (p > maxPeak) maxPeak = p;
+  // Use the SHARED per-pair max (original ./. processed) when available so
+  // A/B-switching reflects the real loudness difference. Falls back to the
+  // local max if we somehow don't have a pair recorded yet.
+  let maxPeak = currentPreviewOriginal ? (pairMaxPeak.get(currentPreviewOriginal) ?? 0) : 0;
+  if (maxPeak <= 0) {
+    for (let i = 0; i < peaks.length; i++) {
+      const p = peaks[i] ?? 0;
+      if (p > maxPeak) maxPeak = p;
+    }
   }
   // If everything is silence, leave the bars at 0; otherwise scale so the
-  // loudest peak sits just under the canvas top.
+  // loudest peak in the pair sits just under the canvas top.
   const normScale = maxPeak > 0 ? (0.95 / maxPeak) : 0;
 
   for (let x = 0; x < W; x++) {

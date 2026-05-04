@@ -15,6 +15,10 @@ const VALID_STORE_KEYS = new Set([
   'sampleRate', 'showNotifications',
   // Speech Regeneration (Resemble Enhance)
   'enhanceEnabled', 'enhancePreset',
+  // Custom output directory ('' = sibling Audio_Pro/ next to each source)
+  'customOutputDir',
+  // Manual EQ override (FFmpeg filter chain string + on/off flag)
+  'manualEqChain', 'manualEqApply',
 ]);
 
 // 3 user-facing levels. Internal preset names map: Suave→ultra_subtle,
@@ -47,6 +51,13 @@ const store = new Store({
     // Speech Regeneration defaults (off by default; auto-enabled by Smart Analyze)
     enhanceEnabled: false,
     enhancePreset: 'ultra_subtle',
+    // Empty = sibling Audio_Pro/ behavior. Otherwise an absolute path.
+    customOutputDir: '',
+    // Manual EQ override — when manualEqApply is true, the pipeline uses
+    // manualEqChain (an FFmpeg -af filter chain string) instead of the
+    // analyzer-driven buildEqChain output.
+    manualEqChain: '',
+    manualEqApply: false,
   },
 });
 
@@ -109,8 +120,8 @@ ipcMain.handle('store:set', (_, key, value) => {
   // Type-validate values to prevent store corruption
   const BOOL_KEYS = new Set(['deEsserEnabled', 'aiDenoiseEnabled', 'noiseGateEnabled', 'stereoToMonoEnabled',
     'silenceTrimEnabled', 'breathReductionEnabled', 'multiBandCompEnabled', 'showNotifications',
-    'enhanceEnabled']);
-  const STRING_KEYS = new Set(['processingMode', 'outputFormat', 'enhancePreset']);
+    'enhanceEnabled', 'manualEqApply']);
+  const STRING_KEYS = new Set(['processingMode', 'outputFormat', 'enhancePreset', 'customOutputDir', 'manualEqChain']);
   const INT_KEYS = new Set(['lufsTarget', 'hpfFrequency', 'sampleRate']);
   // tpTarget can be a fractional dB value, so it's its own thing.
   const FLOAT_KEYS = new Set(['tpTarget']);
@@ -122,6 +133,10 @@ ipcMain.handle('store:set', (_, key, value) => {
   if (key === 'tpTarget' && (value > 0 || value < -10)) return;
   // Whitelist enhance preset values
   if (key === 'enhancePreset' && !VALID_ENHANCE_PRESETS.has(value)) return;
+  // customOutputDir: empty (= default behavior) or an absolute path.
+  if (key === 'customOutputDir') {
+    if (value !== '' && (!path.isAbsolute(value) || value.includes('..') || value.length > 1024)) return;
+  }
   store.set(key, value);
 });
 ipcMain.handle('store:getAll', () => store.store);
@@ -159,6 +174,28 @@ ipcMain.handle('shell:openPath', (_, filePath) => {
   if (resolved !== filePath && resolved !== path.normalize(filePath)) return;
   if (filePath.includes('..')) return;
   shell.showItemInFolder(resolved);
+});
+
+ipcMain.handle('output:chooseDir', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(win, {
+    title: 'Choose output folder for processed audio',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  const chosen = result.filePaths[0];
+  if (!path.isAbsolute(chosen) || chosen.length > 1024) return null;
+  store.set('customOutputDir', chosen);
+  logger.push('settings', `Custom output dir set: ${chosen}`);
+  return chosen;
+});
+
+ipcMain.handle('output:openDir', () => {
+  const dir = store.get('customOutputDir');
+  if (typeof dir !== 'string' || !dir) return false;
+  if (!fs.existsSync(dir)) return false;
+  shell.openPath(dir);
+  return true;
 });
 
 ipcMain.handle('folders:scan', (_, folderPath) => {
@@ -210,6 +247,9 @@ ipcMain.handle('pipeline:start', (event, files) => {
     enhancePreset:         store.get('enhancePreset'),
     outputFormat:          store.get('outputFormat'),
     sampleRate:            store.get('sampleRate'),
+    customOutputDir:       store.get('customOutputDir'),
+    manualEqChain:         store.get('manualEqChain'),
+    manualEqApply:         store.get('manualEqApply'),
   };
 
   pipelineState = { running: true, cancelled: false, currentProc: null };
@@ -252,9 +292,11 @@ ipcMain.handle('pipeline:start', (event, files) => {
     const state = pipelineState;
     pipelineState = null;
     if (!state?.cancelled && store.get('showNotifications') && Notification.isSupported()) {
+      const customDir = store.get('customOutputDir');
+      const dest = customDir ? path.basename(customDir) : 'Audio_Pro/';
       new Notification({
         title: 'AudioPro',
-        body: `Processing complete — ${files.length} file${files.length !== 1 ? 's' : ''} saved to Audio_Pro/`,
+        body: `Processing complete — ${files.length} file${files.length !== 1 ? 's' : ''} saved to ${dest}`,
       }).show();
     }
   });

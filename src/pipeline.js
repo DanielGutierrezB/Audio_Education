@@ -14,8 +14,10 @@ function buildPreChain(settings) {
   if (settings.stereoToMonoEnabled !== false) {
     parts.push('pan=mono|c0=0.5*c0+0.5*c1');
   }
-  // afftdn fallback only used in fast mode or when DFN is unavailable
-  if (settings.mode === 'fast') {
+  // afftdn fallback only used in fast mode or when DFN is unavailable.
+  // Always skipped in clean-source mode (the whole point is to keep the
+  // already-clean signal free of denoise smearing).
+  if (settings.mode === 'fast' && settings.cleanSourceMode !== true) {
     parts.push('afftdn=nf=-20:tn=1:nr=20:om=o');
   }
   if (settings.noiseGateEnabled !== false) {
@@ -32,39 +34,74 @@ function buildPreChain(settings) {
 }
 
 function buildEqChain(settings) {
+  const autoChain = buildAutoEqChain(settings);
+
+  // Manual EQ override (set by the EQ editor in the UI). When the user
+  // clicks "Apply to all", the renderer persists a ready-made FFmpeg
+  // -af chain. We APPEND it to the analyzer-driven auto chain so the
+  // pipeline produces the same sound the user hears in the EQ preview
+  // (which is processed-audio + manual-EQ summed in real time).
+  const manual = typeof settings.manualEqChain === 'string' ? settings.manualEqChain.trim() : '';
+  if (settings.manualEqApply === true && manual && manual !== 'acopy') {
+    return autoChain === 'acopy' ? manual : `${autoChain},${manual}`;
+  }
+  return autoChain;
+}
+
+function buildAutoEqChain(settings) {
+  // Clean-source mode: the analyzer flagged this file as already production-
+  // grade. Skip the entire EQ chain — no HPF, no static cuts, no presence
+  // boost, no air shelf. Loudnorm + limiter handle level; nothing else.
+  if (settings.cleanSourceMode === true) return 'acopy';
+
   const hpfFreq = settings.hpfFrequency ?? 80;
   const deEsser = settings.deEsserEnabled !== false;
   const breathReduction = settings.breathReductionEnabled === true;
 
-  // Adaptive body boost — the analyzer can shift this based on f0.
-  const bodyHz = Math.round(settings.bodyBoostHz ?? 800);
-
   // Dynamic resonant-peak notches discovered by voice-profile.js. Each
-  // entry is {freq, q, prominenceDb}. We attenuate by min(prominence-2, 6) dB
-  // so very sharp resonances get cut more aggressively, but we never go
-  // below −6 dB to keep the voice natural.
+  // entry is {freq, q, prominenceDb} and may carry a `fixedCutDb` field.
+  // When present, fixedCutDb wins (used for the 80–300 Hz low-resonance
+  // band where we always attenuate −3 dB regardless of prominence).
+  // Otherwise we scale with prominence, capped between −2 and −6 dB.
   const notches = Array.isArray(settings.dynamicNotches) ? settings.dynamicNotches : [];
 
   const filters = [
     `highpass=f=${hpfFreq}:poles=2`,
-    'equalizer=f=150:width_type=o:width=1.0:g=1',
-    'equalizer=f=250:width_type=o:width=1.5:g=-1.5',
+    // Narrow attenuation at 150 Hz — voice fundamental neighborhood
+    // tends to bloom in this region (chest resonance, plosive build-up).
+    // Closed Q (Q=8) so we cut a tight chunk without thinning the lows.
+    'equalizer=f=150:width_type=q:width=8:g=-3',
+    'equalizer=f=250:width_type=q:width=8:g=-3.5',
+    // Static mid-range cuts: 400 Hz and 700 Hz are the most common
+    // "boxy / honky" build-up points in spoken voice (room boxiness and
+    // chest-resonance respectively). Always −3 dB with a medium-narrow Q
+    // so the cut is precise but musical.
+    'equalizer=f=400:width_type=q:width=8:g=-3',
+    'equalizer=f=700:width_type=q:width=8:g=-3',
   ];
 
-  // Insert dynamic notches BEFORE the body boost so we don't fight ourselves.
+  // Insert dynamic notches early in the chain so they cut the resonance
+  // before any subsequent boost can re-amplify it.
   for (const n of notches) {
     if (!n || !Number.isFinite(n.freq) || n.freq <= 0) continue;
     const q = Math.min(20, Math.max(2, Number(n.q) || 8));
-    const cutDb = -Math.min(6, Math.max(2, (Number(n.prominenceDb) || 4) - 2));
+    const cutDb = Number.isFinite(n.fixedCutDb)
+      ? -Math.abs(n.fixedCutDb)
+      : -Math.min(6, Math.max(2, (Number(n.prominenceDb) || 4) - 2));
     // ffmpeg's equalizer with width_type=q uses Q (the actual quality factor)
     filters.push(`equalizer=f=${Math.round(n.freq)}:width_type=q:width=${q}:g=${cutDb}`);
   }
 
   filters.push(
-    `equalizer=f=${bodyHz}:width_type=o:width=2.0:g=1`,
-    'equalizer=f=2500:width_type=o:width=2.0:g=3',
-    'equalizer=f=4000:width_type=o:width=1.5:g=2',
-    'equalizer=f=12000:width_type=o:width=2:g=2',
+    // The 1k–5k region stays close to flat on purpose. We add only a
+    // gentle +1 dB lift at 2.5 kHz to keep some voice presence — any
+    // more turns into a hump that exaggerates nasality and harshness.
+    // No 1.5 kHz definition boost, no 4 kHz clarity boost.
+    'equalizer=f=2500:width_type=o:width=1.5:g=1',
+    // Air / sparkle shelf: high-shelf from 10 kHz, +3 dB always. Lifts
+    // 10–20 kHz for breathiness, openness and sheen on consonants.
+    // Above the de-esser (6.5 kHz), so they don't fight.
+    'highshelf=f=10000:g=3',
   );
 
   if (deEsser) {
@@ -96,7 +133,9 @@ function buildLimiter(tpTarget) {
   return `alimiter=level_in=1:limit=${limit.toFixed(6)}:level_out=1:attack=5:release=50`;
 }
 
-function buildSingleBandComp(tpTarget) {
+function buildSingleBandComp(tpTarget, settings = {}) {
+  // Clean-source mode: skip compression entirely. Loudnorm + limiter only.
+  if (settings.cleanSourceMode === true) return buildLimiter(tpTarget);
   return `acompressor=threshold=0.06:ratio=3:attack=15:release=150:makeup=2.5,${buildLimiter(tpTarget)}`;
 }
 
@@ -135,8 +174,12 @@ function buildOutputCodecArgs(settings) {
 function resolveOutputPath(inputPath, settings) {
   const format = settings.outputFormat ?? 'wav24';
   const ext = format === 'flac' ? '.flac' : '.wav';
-  const inputDir = path.dirname(inputPath);
-  const outputDir = path.join(path.dirname(inputDir), 'Audio_Pro');
+  // If the user picked a custom output folder, every file lands there.
+  // Otherwise we drop a sibling Audio_Pro/ next to each source folder.
+  const customDir = typeof settings.customOutputDir === 'string' ? settings.customOutputDir.trim() : '';
+  const outputDir = customDir
+    ? customDir
+    : path.join(path.dirname(path.dirname(inputPath)), 'Audio_Pro');
   fs.mkdirSync(outputDir, { recursive: true });
   const baseName = path.basename(inputPath, path.extname(inputPath)) + ext;
   return path.join(outputDir, baseName);
@@ -366,21 +409,25 @@ async function runResembleEnhance(inputPath, outputPath, settings, setCurrent, o
 
 /**
  * Step 0 — normalise the source file to AudioPro's canonical working
- * format: mono / 48 kHz / 16-bit PCM. Every downstream step (denoise,
- * Resemble, EQ, MBC, render) operates on this format.
+ * format: mono / 48 kHz / 16-bit PCM (or 24-bit in clean-source mode).
+ * Every downstream step (denoise, Resemble, EQ, MBC, render) operates
+ * on this format.
  *
  * 16-bit is mandated by the bundled DeepFilterNet binary, which panics
  * with `TooWide` on anything wider. Keeping the whole pipeline at 16-bit
- * avoids quality-degrading bit-depth round-trips between stages.
+ * avoids quality-degrading bit-depth round-trips between stages. When
+ * clean-source mode is active we skip DeepFilterNet entirely and stay
+ * at 24-bit so we don't quantise twice on already-clean material.
  */
-async function normaliseInput(inputPath, outputPath) {
+async function normaliseInput(inputPath, outputPath, settings = {}) {
+  const codec = settings.cleanSourceMode === true ? 'pcm_s24le' : 'pcm_s16le';
   return new Promise((resolve, reject) => {
     const proc = spawn(binPaths.ffmpeg(), [
       '-y', '-v', 'error',
       '-i', inputPath,
       '-ac', '1',           // mono
       '-ar', '48000',       // 48 kHz
-      '-c:a', 'pcm_s16le',  // 16-bit (DeepFilterNet limit)
+      '-c:a', codec,
       '-f', 'wav',
       outputPath,
     ]);
@@ -447,18 +494,19 @@ async function runDeepFilterNet(inputPath, outputPath, setCurrent, settings) {
 
 async function preprocessFile(inputPath, outputPath, settings, duration, onProgress, setCurrent) {
   const chain = buildPreChain(settings);
+  const codec = settings.cleanSourceMode === true ? 'pcm_s24le' : 'pcm_s16le';
   await run('ffmpeg', [
     '-y', '-i', inputPath,
     '-af', chain,
-    '-acodec', 'pcm_s16le', '-ar', '48000',
+    '-acodec', codec, '-ar', '48000',
     outputPath,
   ], { duration, onProgress, setCurrent });
 }
 
 // ── Loudness measure pass ──
 
-async function measureLoudness(filePath, duration, eqChain, loudnormBase, onProgress, setCurrent, tpTarget) {
-  const chain = `${eqChain},${buildSingleBandComp(tpTarget)},loudnorm=${loudnormBase}:print_format=json`;
+async function measureLoudness(filePath, duration, eqChain, loudnormBase, onProgress, setCurrent, tpTarget, settings = {}) {
+  const chain = `${eqChain},${buildSingleBandComp(tpTarget, settings)},loudnorm=${loudnormBase}:print_format=json`;
   const stderr = await run('ffmpeg', [
     '-y', '-i', filePath,
     '-af', chain,
@@ -498,7 +546,7 @@ async function renderFile(inputPath, outputPath, stats, eqChain, loudnormBase, s
       outputPath,
     ], { duration, onProgress, setCurrent });
   } else {
-    const chain = `${eqChain},${buildSingleBandComp()},${loudnorm}`;
+    const chain = `${eqChain},${buildSingleBandComp(tpTarget, settings)},${loudnorm}`;
     await run('ffmpeg', [
       '-y', '-i', inputPath,
       '-af', chain,
@@ -582,6 +630,17 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
           }
         }
       }
+      // Clean-source mode is analyzer-driven and ALWAYS wins over the
+      // user's mode selection — the whole point is to bypass the heavy
+      // pipeline when the file doesn't need it. Quality/Fast users still
+      // benefit from the auto-detection.
+      if (recommendations.settings.cleanSourceMode === true) {
+        fileSettings.cleanSourceMode      = true;
+        fileSettings.aiDenoiseEnabled     = false;
+        fileSettings.multiBandCompEnabled = false;
+        fileSettings.deEsserEnabled       = false;
+        fileSettings.skipStaticEqCuts     = true;
+      }
 
       // Emit analysis results for UI
       emit('analysis', {
@@ -609,15 +668,16 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       // AudioPro's canonical working format: mono / 48 kHz / 24-bit. From
       // here on, the pipeline never has to re-resample or re-quantise; we
       // just keep that resolution all the way through to the final render.
+      const prepBitDepth = fileSettings.cleanSourceMode === true ? '24-bit' : '16-bit';
       emit('progress', {
-        file: file.path, step: 'Preparing (mono / 48 kHz / 16-bit)', stepIndex: stepIdx, stepTotal: STEP_TOTAL,
+        file: file.path, step: `Preparing (mono / 48 kHz / ${prepBitDepth})`, stepIndex: stepIdx, stepTotal: STEP_TOTAL,
         pct: 5, eta: calcEta(t0, done, total),
       });
       normalisedInputPath = path.join(
         os.tmpdir(),
         `audiopro_norm_${crypto.randomBytes(8).toString('hex')}.wav`,
       );
-      await normaliseInput(file.path, normalisedInputPath);
+      await normaliseInput(file.path, normalisedInputPath, fileSettings);
       let pipelineInput = normalisedInputPath;
 
       // Build chains from per-file settings. Both loudnorm and the limiter
@@ -738,7 +798,7 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
             pct: Math.round(42 + frac * 20),
             eta: calcEta(t0, done + 0.3 + frac * 0.2, total),
           });
-        }, setCurrent, fileSettings.tpTarget);
+        }, setCurrent, fileSettings.tpTarget, fileSettings);
 
       if (isCancelled()) break;
       stepIdx++;

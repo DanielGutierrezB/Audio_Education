@@ -1,28 +1,60 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <!-- Background -->
-  <rect width="512" height="512" rx="110" fill="#12121a"/>
+  <defs>
+    <!-- Gradient background (Motion DS palette) -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a1d23"/>
+      <stop offset="100%" stop-color="#0d1015"/>
+    </linearGradient>
 
-  <!-- Outer ring -->
-  <circle cx="256" cy="256" r="192" fill="none" stroke="#4a8fe8" stroke-width="6" opacity="0.25"/>
+    <!-- Accent gradient for the waveform bars (Platzi green → cyan) -->
+    <linearGradient id="barGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0ae98d"/>
+      <stop offset="100%" stop-color="#4aeadc"/>
+    </linearGradient>
+
+    <!-- Soft glow filter for the bars -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Radial accent glow behind the waveform -->
+    <radialGradient id="accentGlow" cx="50%" cy="50%" r="40%">
+      <stop offset="0%" stop-color="#0ae98d" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#0ae98d" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background with gradient -->
+  <rect width="512" height="512" rx="110" fill="url(#bgGrad)"/>
+
+  <!-- Subtle accent glow behind the waveform -->
+  <circle cx="256" cy="256" r="180" fill="url(#accentGlow)"/>
+
+  <!-- Outer accent ring -->
+  <circle cx="256" cy="256" r="200" fill="none" stroke="#0ae98d" stroke-width="2" opacity="0.18"/>
 
   <!-- Waveform bars (7 bars, symmetric, voice-like shape) -->
-  <g fill="#4a8fe8">
+  <g fill="url(#barGrad)" filter="url(#glow)">
     <!-- bar 1 (leftmost) -->
-    <rect x="110" y="220" width="20" height="72" rx="10"/>
+    <rect x="110" y="220" width="22" height="72" rx="11"/>
     <!-- bar 2 -->
-    <rect x="148" y="176" width="20" height="160" rx="10"/>
+    <rect x="148" y="176" width="22" height="160" rx="11"/>
     <!-- bar 3 -->
-    <rect x="186" y="200" width="20" height="112" rx="10"/>
+    <rect x="186" y="200" width="22" height="112" rx="11"/>
     <!-- bar 4 (center, tallest) -->
-    <rect x="246" y="148" width="20" height="216" rx="10"/>
+    <rect x="245" y="140" width="22" height="232" rx="11"/>
     <!-- bar 5 -->
-    <rect x="306" y="200" width="20" height="112" rx="10"/>
+    <rect x="304" y="200" width="22" height="112" rx="11"/>
     <!-- bar 6 -->
-    <rect x="344" y="176" width="20" height="160" rx="10"/>
+    <rect x="342" y="176" width="22" height="160" rx="11"/>
     <!-- bar 7 (rightmost) -->
-    <rect x="382" y="220" width="20" height="72" rx="10"/>
+    <rect x="380" y="220" width="22" height="72" rx="11"/>
   </g>
 
-  <!-- Subtle center glow -->
-  <circle cx="256" cy="256" r="30" fill="#4a8fe8" opacity="0.08"/>
+  <!-- Inner highlight dot at center bar -->
+  <circle cx="256" cy="256" r="4" fill="#ffffff" opacity="0.6"/>
 </svg>

@@ -5,9 +5,8 @@
 // Spectral analysis to drive an adaptive EQ. We do TWO things here:
 //
 //  1. Pitch profile — estimate the dominant fundamental of the speaker.
-//     Used to decide HPF cutoff and to nudge the body-boost frequency
-//     toward the actual chest-resonance of the speaker (typically 2x f0
-//     for males, ~250-350 Hz for females, ~120-180 Hz for males).
+//     Used to decide HPF cutoff (deeper voices tolerate a lower cutoff)
+//     and to label the voice class for log-friendly reasoning.
 //
 //  2. Resonant peak detection — averaged FFT magnitude across the file.
 //     We look for the loudest 2-3 narrow peaks in the "mud / boxiness"
@@ -47,6 +46,19 @@ const LOWMID_MAX_NOTCHES   = 2;
 const LOWMID_Q_FALLBACK    = 10;    // narrower than mud (≈high-Q surgical cut)
 const LOWMID_MIN_SPACING   = 1.20;  // ratio between adjacent notches
 
+// Low-end resonance band (80–300 Hz). Catches room modes, chest-resonance
+// honks and general low-end build-up that makes a voice sound boomy.
+// Stricter prominence threshold (peaks must clearly stand out) and a
+// fixed −3 dB attenuation regardless of how prominent the peak is — the
+// goal here is a consistent, musical cut rather than a surgical one.
+const LOW_LO_HZ          = 80;
+const LOW_HI_HZ          = 300;
+const LOW_PROMINENCE_DB  = 3.5;   // moderately strict (broad bumps now visible thanks to wider floor window)
+const LOW_MAX_NOTCHES    = 2;
+const LOW_Q_FALLBACK     = 8;     // medium-narrow, not surgical
+const LOW_MIN_SPACING    = 1.20;
+const LOW_FIXED_CUT_DB   = 3;     // always −3 dB regardless of prominence
+
 // FFT analysis parameters.
 const ANALYSIS_SR     = 8000;   // resample target — speech mud lives < 4 kHz
 const FFT_SIZE        = 4096;   // ~0.5 s window @ 8 kHz, ~2 Hz bin resolution
@@ -56,13 +68,18 @@ const MIN_RMS_FRAME   = 0.005;  // skip silent frames so silence doesn't bias th
 
 // Notch detection thresholds.
 // A peak counts as "resonant / molesta" when it sits this many dB above
-// the local median magnitude in its 1/3-octave neighborhood.
-const PEAK_PROMINENCE_DB = 4.5;
+// the local median magnitude in its FLOOR_WINDOW_OCT octave neighborhood.
+const PEAK_PROMINENCE_DB = 3.0;
 // Don't pick more than this many notches — the EQ chain stays sane and
 // FFmpeg filtergraphs stay short.
-const MAX_NOTCHES        = 3;
+const MAX_NOTCHES        = 4;
 // Notches that fall closer than this in log-frequency are merged.
 const MIN_NOTCH_SPACING  = 1.25; // ratio (must be > 1)
+// How wide the local-median floor window is, in octaves. A wide window
+// (1 octave) reveals BROAD bumps as peaks-vs-floor; a narrow window
+// (1/3 octave) only catches sharp resonances. Voice mud/box tends to
+// be broad, so we use 1 octave (= 1/2 octave each side of the bin).
+const FLOOR_WINDOW_OCT   = 1.0;
 
 // Pitch-detection bounds. Real speech fundamentals typically sit between
 // ~80 Hz (deep male) and ~300 Hz (children / high female). We clamp here
@@ -247,26 +264,33 @@ function findResonantPeaks(spectrum, sampleRate, loHz, hiHz, opts = {}) {
     db[i] = 20 * Math.log10(Math.max(1e-12, m));
   }
 
-  // Local-median floor over 1/3 octave (factor 2^(1/3) ≈ 1.26).
-  // For each bin, we estimate the floor from a window of bins spanning
-  // [f / 2^(1/6), f * 2^(1/6)] (i.e. roughly half a 1/3-octave each side).
+  // Local-median floor across a configurable window (FLOOR_WINDOW_OCT
+  // octaves total, so half that width on each side of the bin).
+  // For each bin we estimate the floor from a window spanning
+  // [f / 2^(W/2), f * 2^(W/2)]. A wider W reveals broad bumps (the
+  // entire window picks up the slope, so the median sits below the
+  // peak). A narrow W only catches sharp resonances.
   const floorDb = new Float32Array(db.length);
-  const sixth = Math.pow(2, 1 / 6);
+  const sideOct = FLOOR_WINDOW_OCT / 2;
+  const sideFactor = Math.pow(2, sideOct);
   const tmp = [];
   for (let i = 0; i < db.length; i++) {
     const f = (loBin + i) * binHz;
-    const lo = Math.max(loBin, Math.floor((f / sixth) / binHz));
-    const hi = Math.min(hiBin, Math.ceil((f * sixth) / binHz));
+    const lo = Math.max(loBin, Math.floor((f / sideFactor) / binHz));
+    const hi = Math.min(hiBin, Math.ceil((f * sideFactor) / binHz));
     tmp.length = 0;
     for (let k = lo; k <= hi; k++) tmp.push(db[k - loBin]);
     tmp.sort((a, b) => a - b);
     floorDb[i] = tmp[Math.floor(tmp.length / 2)];
   }
 
-  // Pick local maxima that exceed the floor by PEAK_PROMINENCE_DB.
+  // Every bin that sits more than `prominenceDb` above the floor is a
+  // candidate. We deliberately skip the strict local-maximum test —
+  // broad bumps have nearly-flat tops and would be missed otherwise.
+  // Min-spacing dedup below keeps only the strongest candidate per
+  // log-frequency region, so we don't end up with a forest of notches.
   const candidates = [];
   for (let i = 1; i < db.length - 1; i++) {
-    if (db[i] <= db[i - 1] || db[i] <= db[i + 1]) continue; // not a local max
     const prominence = db[i] - floorDb[i];
     if (prominence < prominenceDb) continue;
     const f = (loBin + i) * binHz;
@@ -314,7 +338,7 @@ function findResonantPeaks(spectrum, sampleRate, loHz, hiHz, opts = {}) {
 
 /**
  * Public API. Profiles the voice in `filePath` and returns:
- *   { pitchHz, voiceClass, bodyBoostHz, hpfHz, notches: [...] }
+ *   { pitchHz, voiceClass, hpfHz, notches: [...] }
  *
  * Returns null if profiling failed (caller should fall back to defaults).
  */
@@ -326,13 +350,14 @@ async function profileVoice(filePath) {
 
   const pitch = estimatePitch(spectrum, ANALYSIS_SR);
 
-  // Two passes:
+  // Three passes:
   //   1. Mud / boxiness band (180–900 Hz) — broader, stricter prominence.
-  //   2. Low-mid warmth band (100–400 Hz) — surgical, narrower Q. This
-  //      catches the broad warmth bump that Adobe Podcast Enhance and
-  //      similar AI tools commonly leave behind. Higher sensitivity
-  //      (lower prominence threshold) and a tighter Q so we attenuate
-  //      the bump without smearing the rest of the low-mid range.
+  //   2. Low-mid warmth band (100–400 Hz) — narrower Q. Catches the broad
+  //      warmth bump that Adobe Podcast Enhance and similar AI tools leave
+  //      behind. Higher sensitivity, tighter Q.
+  //   3. Low-end resonance band (80–300 Hz) — strict prominence, fixed
+  //      −3 dB attenuation, medium-narrow Q. Catches room modes and
+  //      chest-resonance honks that make voices boomy.
   const mudPeaks = findResonantPeaks(spectrum, ANALYSIS_SR, MUD_LO_HZ, MUD_HI_HZ, {
     prominenceDb: PEAK_PROMINENCE_DB,
     maxNotches:   MAX_NOTCHES,
@@ -347,52 +372,56 @@ async function profileVoice(filePath) {
     qFallback:    LOWMID_Q_FALLBACK,
     maxQ:         16,
   });
+  const lowPeaks = findResonantPeaks(spectrum, ANALYSIS_SR, LOW_LO_HZ, LOW_HI_HZ, {
+    prominenceDb: LOW_PROMINENCE_DB,
+    maxNotches:   LOW_MAX_NOTCHES,
+    minSpacing:   LOW_MIN_SPACING,
+    qFallback:    LOW_Q_FALLBACK,
+    maxQ:         12,
+  }).map(p => ({ ...p, fixedCutDb: LOW_FIXED_CUT_DB }));
 
-  // Merge both lists. If a low-mid peak overlaps with a mud peak (within
-  // a 1.15 ratio band), keep only the higher-prominence one so we don't
-  // double-notch the same frequency.
-  const merged = [...mudPeaks];
-  for (const lm of lowMidPeaks) {
+  // Merge all three lists. LOW peaks have priority because they carry the
+  // user-requested fixed −3 dB attenuation; if a MUD or LOWMID candidate
+  // overlaps an already-picked LOW peak (within 1.15 ratio), we drop it.
+  // Otherwise prominence wins on tie-breaks.
+  const merged = [...lowPeaks];
+  const candidates = [...mudPeaks, ...lowMidPeaks];
+  candidates.sort((a, b) => b.prominenceDb - a.prominenceDb);
+  for (const c of candidates) {
     const overlap = merged.findIndex(m => {
-      const r = Math.max(m.freq, lm.freq) / Math.min(m.freq, lm.freq);
+      const r = Math.max(m.freq, c.freq) / Math.min(m.freq, c.freq);
       return r < 1.15;
     });
     if (overlap === -1) {
-      merged.push(lm);
-    } else if (lm.prominenceDb > merged[overlap].prominenceDb) {
-      merged[overlap] = lm;
+      merged.push(c);
+    } else if (
+      !Number.isFinite(merged[overlap].fixedCutDb) &&
+      c.prominenceDb > merged[overlap].prominenceDb
+    ) {
+      merged[overlap] = c;
     }
   }
   merged.sort((a, b) => a.freq - b.freq);
   const peaks = merged;
 
-  // Classify the voice from f0 — used for log-friendly labels.
+  // Classify the voice from f0 — used for log-friendly labels and to
+  // tune the HPF cutoff to the speaker's fundamental. We don't emit a
+  // body-boost frequency anymore: pipeline.js no longer adds gain in
+  // the 600–1000 Hz range because that region is exactly where boxiness
+  // lives, and the static cuts at 400/700 Hz are doing the anti-box work.
   let voiceClass = 'unknown';
-  let bodyBoostHz = 800;
   let hpfHz = 80;
   if (pitch != null) {
-    if (pitch < 110)      { voiceClass = 'deep_male';   bodyBoostHz = 600;  hpfHz = 60; }
-    else if (pitch < 150) { voiceClass = 'male';        bodyBoostHz = 700;  hpfHz = 70; }
-    else if (pitch < 190) { voiceClass = 'high_male';   bodyBoostHz = 800;  hpfHz = 80; }
-    else if (pitch < 230) { voiceClass = 'low_female';  bodyBoostHz = 900;  hpfHz = 85; }
-    else                  { voiceClass = 'female';      bodyBoostHz = 1000; hpfHz = 90; }
-  }
-
-  // Avoid placing the body boost on top of a detected resonance — that
-  // would just amplify the very thing we're notching out. Nudge it up
-  // by 1/3 octave if a notch sits within 30% of the boost frequency.
-  const sixth = Math.pow(2, 1 / 6);
-  for (const n of peaks) {
-    if (Math.abs(Math.log2(n.freq / bodyBoostHz)) < 1 / 3) {
-      bodyBoostHz = Math.round(bodyBoostHz * sixth);
-      break;
-    }
+    if (pitch < 110)      { voiceClass = 'deep_male';   hpfHz = 60; }
+    else if (pitch < 150) { voiceClass = 'male';        hpfHz = 70; }
+    else if (pitch < 190) { voiceClass = 'high_male';   hpfHz = 80; }
+    else if (pitch < 230) { voiceClass = 'low_female';  hpfHz = 85; }
+    else                  { voiceClass = 'female';      hpfHz = 90; }
   }
 
   return {
     pitchHz: pitch != null ? Math.round(pitch) : null,
     voiceClass,
-    bodyBoostHz,
     hpfHz,
     notches: peaks, // [{freq, q, prominenceDb}, ...]
   };

@@ -4,7 +4,7 @@
 Usage: python3 enhance.py <input.wav> <output.wav> [options]
 
 Options (key=value):
-  preset=light|balanced|broadcast|aggressive   (default: broadcast)
+  preset=ultra_subtle|subtle|light|balanced|strong   (default: ultra_subtle)
   lambd=<float>                                 (overrides preset; 0.0..1.0)
   tau=<float>                                   (overrides preset; 0.0..1.0)
   nfe=<int>                                     (overrides preset; 1..128)
@@ -38,16 +38,14 @@ import sys
 PRESETS = {
     # NEW default. Maximum fidelity — barely touches the voice, just neural
     # denoise. Lowest tau = lowest stochasticity = lowest chunk-boundary
-    # artefacts. Use this for clean studio recordings.
-    # Speed-tuned for CPU users (Apple Silicon). Speedups vs nfe=128:
-    #   nfe=64  → ~1.7x faster, near-identical output
-    #   nfe=48  → ~2.0x faster, very close output
-    #   nfe=32  → ~2.5x faster, mild diffusion divergence
-    "ultra_subtle": {"lambd": 0.98, "tau": 0.15, "nfe": 64, "solver": "midpoint"},
+    # artefacts. Use this for clean studio recordings. nfe=128 is upstream
+    # max and gives the most consistent output across diffusion chunks; the
+    # _fast variant below trades a small amount of consistency for speed.
+    "ultra_subtle": {"lambd": 0.98, "tau": 0.15, "nfe": 128, "solver": "midpoint"},
     # Mostly preserves the original voice, just cleans + very light polish.
     "subtle":     {"lambd": 0.97, "tau": 0.20, "nfe": 48, "solver": "midpoint"},
     # Slightly more enhancement, still very faithful to the original timbre.
-    "light":      {"lambd": 0.60, "tau": 0.30, "nfe": 32, "solver": "midpoint"},
+    "light":      {"lambd": 0.90, "tau": 0.30, "nfe": 32, "solver": "midpoint"},
     # Balanced — noticeable cleanup, mild timbre shift.
     "balanced":   {"lambd": 0.78, "tau": 0.40, "nfe": 48, "solver": "midpoint"},
     # Heavy regeneration. Use ONLY on degraded recordings (calls, heavy noise).
@@ -75,7 +73,7 @@ def parse_kv(args):
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: enhance.py <input.wav> <output.wav> [preset=broadcast] "
+        print("Usage: enhance.py <input.wav> <output.wav> [preset=ultra_subtle] "
               "[lambd=...] [tau=...] [nfe=...] [device=cpu]", file=sys.stderr)
         sys.exit(1)
 

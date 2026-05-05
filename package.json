@@ -5,6 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "setup:bin": "bash scripts/fetch-bin.sh",
     "build": "electron-builder --mac --arm64",
     "build:icon": "rsvg-convert -w 512 -h 512 build/icon.svg -o build/icons/512x512.png || convert build/icon.svg build/icons/512x512.png"
   },

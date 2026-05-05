@@ -58,7 +58,7 @@
             title="Remove all files from the queue">Clear All</button>
           <button class="btn btn-secondary btn-sm" id="btn-open-output" hidden
             title="Open the custom output folder in Finder">Open output</button>
-          <div class="mode-toggle" title="Quality: AI denoising (DeepFilterNet). Fast: FFmpeg denoise only. Auto: smart analyzer picks best settings per file.">
+          <div class="mode-toggle" title="Quality / Fast / Auto — affects per-file processing decisions made by the analyzer (compression, EQ, normalization). Denoise is currently disabled in all modes.">
             <button class="mode-btn" id="mode-quality" data-mode="quality">Quality</button>
             <button class="mode-btn" id="mode-fast" data-mode="fast">Fast</button>
             <button class="mode-btn" id="mode-auto" data-mode="auto">Auto</button>
@@ -102,10 +102,6 @@
 
             <div class="settings-category">
               <div class="settings-cat-title">Noise Reduction</div>
-              <div class="settings-row">
-                <span class="settings-label" title="Quality: DeepFilterNet AI neural denoise. Fast: FFmpeg afftdn denoise. Auto: chosen per file.">Denoise</span>
-                <span class="settings-auto">Mode-dependent</span>
-              </div>
               <div class="settings-row">
                 <label class="settings-label" for="set-noisegate"
                   title="Adaptive noise gate: closes the audio signal during very quiet passages to eliminate low-level background noise between words.">
@@ -339,12 +335,6 @@
             </div>
             <div class="pipe-arrow">&#8594;</div>
             <div class="pipe-node">
-              <span class="pipe-icon">&#127925;</span>
-              <span class="pipe-label">AI Denoise</span>
-              <span class="pipe-sub">DeepFilterNet3</span>
-            </div>
-            <div class="pipe-arrow">&#8594;</div>
-            <div class="pipe-node">
               <span class="pipe-icon">&#127908;</span>
               <span class="pipe-label">Pre-process</span>
               <span class="pipe-sub">Mono &middot; Gate &middot; Trim</span>
@@ -383,21 +373,13 @@
             <div class="pipeline-step">
               <div class="step-number">2</div>
               <div class="step-body">
-                <h3>AI Denoise <span class="step-badge">Quality / Auto</span></h3>
-                <p><strong>DeepFilterNet3</strong> — a neural network trained on thousands of recordings — removes background noise, room reverb, and broadband hum with far better quality than traditional signal processing. Runs on MPS (Apple Silicon GPU) when available, otherwise CPU. In <strong>Fast</strong> mode, FFmpeg's <code>afftdn</code> filter is used instead. Skipped entirely if the analyzer determines the recording is already clean.</p>
-              </div>
-            </div>
-
-            <div class="pipeline-step">
-              <div class="step-number">3</div>
-              <div class="step-body">
                 <h3>Pre-process</h3>
                 <p><strong>Stereo&rarr;Mono:</strong> Mixes channels to mono (voice is always mono). <strong>Noise Gate:</strong> Closes signal during silent passages (&lt;0.5% threshold) to eliminate background hum between words. <strong>Silence Trim:</strong> Removes leading and trailing silence using a double-pass areverse technique to preserve natural mid-speech pauses.</p>
               </div>
             </div>
 
             <div class="pipeline-step">
-              <div class="step-number">4</div>
+              <div class="step-number">3</div>
               <div class="step-body">
                 <h3>BodyGen <span class="step-badge">New in 0.1.2</span></h3>
                 <p><strong>Harmonic Exciter:</strong> Extracts the 80&ndash;350&nbsp;Hz voice body range, then applies analog-style waveshaping (soft saturation) to generate new odd and even harmonics &mdash; the same technique used in tube preamps and tape machines. <strong>Sub-Harmonic Synthesis:</strong> Creates sub-octave content from voice fundamentals (80&ndash;200&nbsp;Hz) via half-wave rectification. The result is a fuller, warmer voice with real new frequency content &mdash; not just an EQ boost. Powered by PyTorch for precision DSP.</p>
@@ -405,7 +387,7 @@
             </div>
 
             <div class="pipeline-step">
-              <div class="step-number">5</div>
+              <div class="step-number">4</div>
               <div class="step-body">
                 <h3>EQ Measure</h3>
                 <p>Applies the full EQ and dynamics chain in measurement mode (no output file) to gather loudness statistics for the two-pass <code>loudnorm</code> algorithm. <strong>EQ chain:</strong> HPF &rarr; warmth shelf (120 Hz) &rarr; body boost (180 Hz) &rarr; boxiness cut (300 Hz) &rarr; clarity (2 kHz) &rarr; presence (3.5 kHz) &rarr; optional de-esser (6.5 kHz) &rarr; harshness tame (8 kHz).</p>
@@ -413,7 +395,7 @@
             </div>
 
             <div class="pipeline-step">
-              <div class="step-number">6</div>
+              <div class="step-number">5</div>
               <div class="step-body">
                 <h3>Render</h3>
                 <p>EQ chain (HPF &rarr; warmth &rarr; boxiness cut &rarr; clarity &rarr; presence) &rarr; <strong>Parallel compression</strong> (100&ndash;350&nbsp;Hz heavily compressed and blended at low volume for consistent body) &rarr; Single-band or multi-band compressor &rarr; Hard limiter at &minus;1&nbsp;dBTP &rarr; Loudness normalization to your LUFS target. Output: WAV 24-bit 48&nbsp;kHz in <code>Audio_Pro/</code> next to the source folder.</p>

@@ -1,0 +1,34 @@
+name: Require approval before merge
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check-approval:
+    runs-on: ubuntu-latest
+    # Only enforce for PRs NOT authored by the repo owner
+    if: github.event.pull_request.user.login != 'DanielGutierrezB'
+    steps:
+      - name: Check for approving review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            const approved = reviews.some(
+              r => r.state === 'APPROVED' && r.user.login === 'DanielGutierrezB'
+            );
+
+            if (!approved) {
+              core.setFailed(
+                '❌ Este PR requiere approval de @DanielGutierrezB antes de merge.'
+              );
+            } else {
+              core.info('✅ Approved by @DanielGutierrezB');
+            }

@@ -199,6 +199,39 @@ async function analyzeFile(filePath, setCurrent) {
   };
 }
 
+// ── Step 0 — Canonical input normalisation ──
+
+/**
+ * Normalise the source file to AudioPro's canonical working format:
+ * mono / 48 kHz / pcm_s16le. Every downstream stage (DeepFilterNet,
+ * preprocess, BodyGen, EQ measure, render) operates on this format.
+ *
+ * 16-bit is required by the bundled deep-filter binary, which panics
+ * with `TooWide` on anything wider. Keeping the whole pipeline at 16-bit
+ * also avoids quality-degrading bit-depth round-trips between stages
+ * (the final render still emits 24-bit / FLAC if the user requested it).
+ */
+async function normaliseInput(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(binPaths.ffmpeg(), [
+      '-y', '-v', 'error',
+      '-i', inputPath,
+      '-ac', '1',
+      '-ar', '48000',
+      '-c:a', 'pcm_s16le',
+      '-f', 'wav',
+      outputPath,
+    ]);
+    let stderr = '';
+    proc.stderr.on('data', c => { stderr += c.toString(); });
+    proc.on('close', code => {
+      if (code === 0) resolve();
+      else reject(new Error(`Input normalisation failed (${code}): ${stderr.slice(-200).trim()}`));
+    });
+    proc.on('error', reject);
+  });
+}
+
 // ── DeepFilterNet denoise ──
 
 async function runDeepFilterNet(inputPath, outputPath, setCurrent, opts = {}) {
@@ -232,16 +265,19 @@ async function runDeepFilterNet(inputPath, outputPath, setCurrent, opts = {}) {
   } catch { /* proceed with original file */ }
 
   return new Promise((resolve, reject) => {
+    // --atten-lim-db caps how much DFN can attenuate the noisy signal.
+    // The upstream default is 100 dB (full reduction), which produces
+    // an "over-processed" / robotic sound on speech. Adobe Podcast and
+    // similar tools sit around 12-20 dB. Default to 18 dB — enough to
+    // strip obvious background noise while keeping the room tone
+    // natural. Callers can override via opts.attenLimitDb.
+    const attenLimDb = String(opts.attenLimitDb ?? 18);
     const args = [
       dfnInput,
       '-o', tmpDir,
       '--compensate-delay',
+      '--atten-lim-db', attenLimDb,
     ];
-    // Limit attenuation for light denoise (less aggressive)
-    // 100 = full denoise, 6 = very subtle, 0 = no denoise
-    if (opts.attenLimitDb != null) {
-      args.push('--atten-lim-db', String(opts.attenLimitDb));
-    }
     const proc = spawn(binPaths.deepFilter(), args);
     if (setCurrent) setCurrent(proc);
     let stderr = '';
@@ -384,6 +420,7 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
     let tempPath = null;
     let dfnTempPath = null;
     let bodyGenTempPath = null;
+    let normalisedPath = null;
 
     try {
       // Step 1 — Smart Analysis
@@ -424,7 +461,15 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       if (useBodyGen) stepCount++;
       const STEP_TOTAL = stepCount;
       let stepIdx = 2;
-      let pipelineInput = file.path;
+
+      // Step 0 — Canonical input. Lock the file into mono / 48 kHz /
+      // 16-bit pcm before any downstream stage touches it. This
+      // guarantees DeepFilterNet doesn't panic ("TooWide" on 24-bit
+      // input) and removes per-stage type confusion.
+      normalisedPath = path.join(os.tmpdir(),
+        `audiopro_in_${crypto.randomBytes(8).toString('hex')}_${path.basename(file.path)}`);
+      await normaliseInput(file.path, normalisedPath);
+      let pipelineInput = normalisedPath;
 
       // Build chains from per-file settings
       const eqChain = buildEqChain(fileSettings);
@@ -448,7 +493,7 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
           if (fileSettings.denoiseStrength === 'light') {
             dfnOpts.attenLimitDb = 12;  // limit attenuation to 12 dB (subtle)
           }
-          await runDeepFilterNet(file.path, dfnTempPath, setCurrent, dfnOpts);
+          await runDeepFilterNet(pipelineInput, dfnTempPath, setCurrent, dfnOpts);
           pipelineInput = dfnTempPath;
         } catch (dfnErr) {
           console.warn(`DeepFilterNet failed, falling back to FFmpeg: ${dfnErr.message}`);
@@ -566,6 +611,9 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       }
       if (bodyGenTempPath) {
         try { fs.unlinkSync(bodyGenTempPath); } catch { /* ignore */ }
+      }
+      if (normalisedPath) {
+        try { fs.unlinkSync(normalisedPath); } catch { /* ignore */ }
       }
     }
   }

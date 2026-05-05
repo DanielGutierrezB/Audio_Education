@@ -795,13 +795,29 @@ let rafId = null;
 // Preview file entries: [{ filePath, outputPath, name, folder }]
 const previewFiles = [];
 
+// Expose to other renderer modules (e.g. EQ editor) so they can list
+// processed outputs alongside sources.
+window.audioProQueue = {
+  listFiles() {
+    return previewFiles.map(f => ({
+      name: f.name,
+      path: f.filePath,
+      output: f.outputPath,
+    }));
+  },
+};
+
 function addToPreviewSelector(filePath, outputPath) {
   previewTopbar.hidden = false;
   if (previewListEmpty) previewListEmpty.hidden = true;
 
   // Check if already added
   const existing = previewFiles.find(f => f.filePath === filePath);
-  if (existing) { existing.outputPath = outputPath; return; }
+  if (existing) {
+    existing.outputPath = outputPath;
+    window.dispatchEvent(new CustomEvent('audiopro:queue-changed'));
+    return;
+  }
 
   const name = filePath.split('/').pop();
   const parts = filePath.split('/');
@@ -830,6 +846,8 @@ function addToPreviewSelector(filePath, outputPath) {
   previewFileList.appendChild(item);
 
   if (previewFiles.length === 1) selectPreviewItem(item);
+
+  window.dispatchEvent(new CustomEvent('audiopro:queue-changed'));
 }
 
 function selectPreviewItem(item) {

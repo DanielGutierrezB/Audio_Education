@@ -146,10 +146,17 @@ function buildOutputCodecArgs(settings) {
 function resolveOutputPath(inputPath, settings) {
   const format = settings.outputFormat ?? 'wav24';
   const ext = format === 'flac' ? '.flac' : '.wav';
+  const baseName = path.basename(inputPath, path.extname(inputPath)) + ext;
+  // Custom output dir override — empty string falls back to default behavior
+  // of writing into a sibling Audio_Pro/ folder next to each source.
+  const customDir = settings.customOutputDir;
+  if (typeof customDir === 'string' && customDir) {
+    fs.mkdirSync(customDir, { recursive: true });
+    return path.join(customDir, baseName);
+  }
   const inputDir = path.dirname(inputPath);
   const outputDir = path.join(path.dirname(inputDir), 'Audio_Pro');
   fs.mkdirSync(outputDir, { recursive: true });
-  const baseName = path.basename(inputPath, path.extname(inputPath)) + ext;
   return path.join(outputDir, baseName);
 }
 

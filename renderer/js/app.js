@@ -664,6 +664,7 @@ function applySettingsUI(p) {
   setAdaptiveEq.checked = p.adaptiveEqEnabled === true;
   setFormat.value = p.outputFormat ?? 'wav24';
   setSampleRate.value = String(p.sampleRate ?? 48000);
+  applyOutputDirUI(p.customOutputDir || '');
 }
 
 function savePref(key, value) {
@@ -697,6 +698,41 @@ btnAddFolders.addEventListener('click', addFoldersViaDialog);
 btnAddFiles.addEventListener('click', addFilesViaDialog);
 btnClearAll.addEventListener('click', clearAll);
 btnRemoveDone.addEventListener('click', removeCompleted);
+
+// ── Custom output directory ──
+const btnOutputDir    = document.getElementById('btn-output-dir');
+const btnOutputLabel  = document.getElementById('btn-output-label');
+const btnOutputReset  = document.getElementById('btn-output-reset');
+const btnOpenOutput   = document.getElementById('btn-open-output');
+
+function applyOutputDirUI(dir) {
+  prefs.customOutputDir = dir || '';
+  if (dir) {
+    const parts = dir.split('/').filter(Boolean);
+    const tail = parts.slice(-2).join('/');
+    btnOutputLabel.textContent = `Output: ${tail || dir}`;
+    btnOutputDir.title = `Output folder: ${dir}\nClick to change`;
+    btnOutputReset.hidden = false;
+    btnOpenOutput.hidden = false;
+  } else {
+    btnOutputLabel.textContent = 'Output: Default';
+    btnOutputDir.title = 'Choose where processed files are saved. Default writes to Audio_Pro/ next to each source folder.';
+    btnOutputReset.hidden = true;
+    btnOpenOutput.hidden = true;
+  }
+}
+
+btnOutputDir.addEventListener('click', async () => {
+  const chosen = await window.api.output.chooseDir();
+  if (chosen) applyOutputDirUI(chosen);
+});
+
+btnOutputReset.addEventListener('click', async () => {
+  await window.api.store.set('customOutputDir', '');
+  applyOutputDirUI('');
+});
+
+btnOpenOutput.addEventListener('click', () => window.api.output.openDir());
 
 // ── Copy Log button ──
 const btnCopyLog = document.getElementById('btn-copy-log');

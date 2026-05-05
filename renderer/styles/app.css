@@ -232,6 +232,20 @@ body {
   border-color: var(--border-focus);
 }
 
+/* ── Custom output dir button ── */
+.btn-output {
+  max-width: 240px;
+  overflow: hidden;
+}
+.btn-output-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  vertical-align: middle;
+  max-width: 200px;
+}
+
 /* ── Settings panel ── */
 .settings-panel {
   border-bottom: 1px solid var(--border);

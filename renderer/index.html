@@ -43,12 +43,21 @@
             title="Process all queued files through the full pipeline">
             &#9654; Process All
           </button>
+          <button class="btn btn-secondary btn-output" id="btn-output-dir"
+            title="Choose where processed files are saved. Default writes to Audio_Pro/ next to each source folder.">
+            <span class="btn-icon">&#128193;</span>
+            <span class="btn-output-label" id="btn-output-label">Output: Default</span>
+          </button>
+          <button class="btn-icon-only" id="btn-output-reset" hidden
+            title="Reset output folder to default (Audio_Pro/ next to source)">&#10005;</button>
           <span class="toolbar-spacer"></span>
           <span class="queue-summary" id="queue-summary"></span>
           <button class="btn btn-secondary btn-sm" id="btn-remove-completed" hidden
             title="Remove completed files from the queue">Remove Done</button>
           <button class="btn btn-secondary btn-sm" id="btn-clear-all" hidden
             title="Remove all files from the queue">Clear All</button>
+          <button class="btn btn-secondary btn-sm" id="btn-open-output" hidden
+            title="Open the custom output folder in Finder">Open output</button>
           <div class="mode-toggle" title="Quality: AI denoising (DeepFilterNet). Fast: FFmpeg denoise only. Auto: smart analyzer picks best settings per file.">
             <button class="mode-btn" id="mode-quality" data-mode="quality">Quality</button>
             <button class="mode-btn" id="mode-fast" data-mode="fast">Fast</button>

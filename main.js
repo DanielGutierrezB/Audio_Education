@@ -19,6 +19,8 @@ const VALID_STORE_KEYS = new Set([
   // Adaptive EQ — when ON, appends voice-profile-derived notches to the
   // static voice-warm EQ. OFF by default; the static curve is unchanged.
   'adaptiveEqEnabled',
+  // Custom output directory ('' = default sibling Audio_Pro/ next to source)
+  'customOutputDir',
 ]);
 
 const store = new Store({
@@ -38,6 +40,8 @@ const store = new Store({
     manualEqChain: '',
     manualEqApply: false,
     adaptiveEqEnabled: false,
+    // Empty = sibling Audio_Pro/ behavior. Otherwise an absolute path.
+    customOutputDir: '',
   },
 });
 
@@ -101,7 +105,7 @@ ipcMain.handle('store:set', (_, key, value) => {
   const BOOL_KEYS = new Set(['deEsserEnabled', 'noiseGateEnabled', 'stereoToMonoEnabled',
     'silenceTrimEnabled', 'breathReductionEnabled', 'multiBandCompEnabled', 'showNotifications',
     'manualEqApply', 'adaptiveEqEnabled']);
-  const STRING_KEYS = new Set(['processingMode', 'outputFormat', 'manualEqChain']);
+  const STRING_KEYS = new Set(['processingMode', 'outputFormat', 'manualEqChain', 'customOutputDir']);
   const INT_KEYS = new Set(['lufsTarget', 'hpfFrequency', 'sampleRate']);
   if (BOOL_KEYS.has(key) && typeof value !== 'boolean') return;
   if (STRING_KEYS.has(key) && typeof value !== 'string') return;
@@ -111,6 +115,10 @@ ipcMain.handle('store:set', (_, key, value) => {
   if (key === 'manualEqChain') {
     if (value.length > 4096) return;
     if (/[`$;&|<>\\\n\r]/.test(value)) return;
+  }
+  // customOutputDir: empty (= default behavior) or an absolute path.
+  if (key === 'customOutputDir') {
+    if (value !== '' && (!path.isAbsolute(value) || value.includes('..') || value.length > 1024)) return;
   }
   store.set(key, value);
 });
@@ -149,6 +157,28 @@ ipcMain.handle('shell:openPath', (_, filePath) => {
   if (resolved !== filePath && resolved !== path.normalize(filePath)) return;
   if (filePath.includes('..')) return;
   shell.showItemInFolder(resolved);
+});
+
+ipcMain.handle('output:chooseDir', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(win, {
+    title: 'Choose output folder for processed audio',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  const chosen = result.filePaths[0];
+  if (!path.isAbsolute(chosen) || chosen.length > 1024) return null;
+  store.set('customOutputDir', chosen);
+  logger.push('settings', `Custom output dir set: ${chosen}`);
+  return chosen;
+});
+
+ipcMain.handle('output:openDir', () => {
+  const dir = store.get('customOutputDir');
+  if (typeof dir !== 'string' || !dir) return false;
+  if (!fs.existsSync(dir)) return false;
+  shell.openPath(dir);
+  return true;
 });
 
 ipcMain.handle('folders:scan', (_, folderPath) => {
@@ -199,6 +229,7 @@ ipcMain.handle('pipeline:start', (event, files) => {
     manualEqChain:         store.get('manualEqChain'),
     manualEqApply:         store.get('manualEqApply'),
     adaptiveEqEnabled:     store.get('adaptiveEqEnabled'),
+    customOutputDir:       store.get('customOutputDir'),
   };
 
   pipelineState = { running: true, cancelled: false, currentProc: null };

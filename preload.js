@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld('api', {
   shell: {
     openPath: (filePath) => ipcRenderer.invoke('shell:openPath', filePath),
   },
+  output: {
+    chooseDir: () => ipcRenderer.invoke('output:chooseDir'),
+    openDir: () => ipcRenderer.invoke('output:openDir'),
+  },
   ffprobe: {
     getMetadata: (filePath) => ipcRenderer.invoke('ffprobe:metadata', filePath),
   },

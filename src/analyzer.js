@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 const binPaths = require('./bin-paths');
+const { profileVoice } = require('./voice-profile');
 
 // ── Helpers ──
 
@@ -442,6 +443,10 @@ async function analyzeAudio(filePath, onStatus) {
   const sibilance = await safe('Detecting sibilance...', () => detectSibilance(filePath));
   const reverb    = await safe('Checking reverb...', () => detectReverb(filePath));
   const dynamics  = await safe('Analyzing dynamics...', () => detectDynamicRange(filePath));
+  // Voice profile is used by adaptive EQ. Always computed (cheap ~150ms FFT)
+  // and exposed in `recommendations`; the pipeline only consumes it when
+  // settings.adaptiveEqEnabled is true.
+  const voiceProfile = await safe('Profiling voice...', () => profileVoice(filePath));
 
   const analysis = {
     basic,
@@ -450,8 +455,10 @@ async function analyzeAudio(filePath, onStatus) {
     sibilance: sibilance ?? { overallDb: null, sibilanceDb: null, sibilanceRatio: null, hasSibilance: false, severity: 'unknown' },
     reverb:    reverb    ?? { crestFactor: null, likelyReverb: false, severity: 'unknown' },
     dynamics:  dynamics  ?? { peakDb: null, rmsDb: null, rmsPeakDb: null, rmsTroughDb: null, dynamicRange: null, hasClipping: false, needsCompression: true, compressionLevel: 'moderate' },
+    voiceProfile: voiceProfile ?? null,
   };
   const recommendations = buildRecommendations(analysis);
+  recommendations.voiceProfile = voiceProfile;
 
   return { analysis, recommendations };
 }

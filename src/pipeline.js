@@ -32,11 +32,33 @@ function buildPreChain(settings) {
   return parts.length ? parts.join(',') : 'acopy';
 }
 
-function buildEqChain(settings) {
+/**
+ * Convert a voice-profile notch ({ freq, q, prominenceDb, fixedCutDb? })
+ * into an FFmpeg `equalizer=` filter string. LOW-band peaks carry a
+ * fixed −3 dB cut; the rest scale their cut from prominence with a
+ * conservative ceiling so dynamic notches never overpower the static
+ * voice-warm shape.
+ */
+function notchToFilter(n) {
+  const f = Math.max(40, Math.min(20000, Math.round(n.freq)));
+  const q = Math.max(0.5, Math.min(20, n.q ?? 8));
+  let g;
+  if (Number.isFinite(n.fixedCutDb)) {
+    g = n.fixedCutDb;
+  } else {
+    // Map prominence (dB above local average) to cut amount, capped at −3.5 dB.
+    const prom = Math.max(0, Math.min(12, n.prominenceDb ?? 4));
+    g = -Math.min(3.5, 1.5 + prom * 0.18);
+  }
+  return `equalizer=f=${f}:width_type=q:width=${q.toFixed(2)}:g=${g.toFixed(2)}`;
+}
+
+function buildEqChain(settings, voiceProfileNotches) {
   // Manual override — when the user has built a chain in the EQ editor
   // and toggled "Apply to all", that chain replaces the entire built-in
-  // voice-warm EQ. The breath gate (if requested) is still appended so
-  // the user doesn't lose downstream functionality.
+  // voice-warm EQ (and the adaptive notches below). The breath gate
+  // (if requested) is still appended so the user doesn't lose downstream
+  // functionality.
   if (settings.manualEqApply === true && typeof settings.manualEqChain === 'string'
       && settings.manualEqChain.trim()) {
     const parts = [settings.manualEqChain.trim()];
@@ -66,6 +88,13 @@ function buildEqChain(settings) {
   if (deEsser) {
     const deEsserGain = settings.deEsserGain ?? -2;
     filters.splice(6, 0, `equalizer=f=6500:width_type=h:width=2000:g=${deEsserGain}`);
+  }
+
+  // Adaptive EQ — append voice-profile-derived narrow notches AFTER the
+  // static voice-warm shape. Only applied when caller passes a non-empty
+  // array, gated upstream by settings.adaptiveEqEnabled.
+  if (Array.isArray(voiceProfileNotches) && voiceProfileNotches.length) {
+    for (const n of voiceProfileNotches) filters.push(notchToFilter(n));
   }
 
   if (breathReduction) {
@@ -471,8 +500,13 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       await normaliseInput(file.path, normalisedPath);
       let pipelineInput = normalisedPath;
 
-      // Build chains from per-file settings
-      const eqChain = buildEqChain(fileSettings);
+      // Build chains from per-file settings.
+      // Adaptive EQ: when ON, append voice-profile-derived notches to the
+      // static voice-warm curve. Default OFF — zero behaviour change unless
+      // the user opts in.
+      const adaptiveEqOn = fileSettings.adaptiveEqEnabled === true;
+      const voiceNotches = adaptiveEqOn ? recommendations?.voiceProfile?.notches : null;
+      const eqChain = buildEqChain(fileSettings, voiceNotches);
       const loudnormBase = buildLoudnormBase(fileSettings.lufsTarget);
 
       // Log what the pipeline decided

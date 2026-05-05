@@ -638,6 +638,7 @@ const setSilenceTrim   = document.getElementById('set-silencetrim');
 const setBreathRed     = document.getElementById('set-breathreduction');
 const setStereoMono    = document.getElementById('set-stereomono');
 const setMBC           = document.getElementById('set-mbc');
+const setAdaptiveEq    = document.getElementById('set-adaptive-eq');
 const setFormat        = document.getElementById('set-format');
 const setSampleRate    = document.getElementById('set-samplerate');
 const lufsValue        = document.getElementById('lufs-value');
@@ -660,6 +661,7 @@ function applySettingsUI(p) {
   setBreathRed.checked = p.breathReductionEnabled === true;
   setStereoMono.checked = p.stereoToMonoEnabled !== false;
   setMBC.checked = p.multiBandCompEnabled !== false;
+  setAdaptiveEq.checked = p.adaptiveEqEnabled === true;
   setFormat.value = p.outputFormat ?? 'wav24';
   setSampleRate.value = String(p.sampleRate ?? 48000);
 }
@@ -686,6 +688,7 @@ setSilenceTrim.addEventListener('change', () => savePref('silenceTrimEnabled', s
 setBreathRed.addEventListener('change', () => savePref('breathReductionEnabled', setBreathRed.checked));
 setStereoMono.addEventListener('change', () => savePref('stereoToMonoEnabled', setStereoMono.checked));
 setMBC.addEventListener('change', () => savePref('multiBandCompEnabled', setMBC.checked));
+setAdaptiveEq.addEventListener('change', () => savePref('adaptiveEqEnabled', setAdaptiveEq.checked));
 setFormat.addEventListener('change', () => savePref('outputFormat', setFormat.value));
 setSampleRate.addEventListener('change', () => savePref('sampleRate', parseInt(setSampleRate.value)));
 

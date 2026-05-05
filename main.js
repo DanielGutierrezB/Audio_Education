@@ -16,6 +16,9 @@ const VALID_STORE_KEYS = new Set([
   // When manualEqApply is true the pipeline uses manualEqChain in place
   // of its built-in voice-warm EQ.
   'manualEqChain', 'manualEqApply',
+  // Adaptive EQ — when ON, appends voice-profile-derived notches to the
+  // static voice-warm EQ. OFF by default; the static curve is unchanged.
+  'adaptiveEqEnabled',
 ]);
 
 const store = new Store({
@@ -34,6 +37,7 @@ const store = new Store({
     showNotifications: true,
     manualEqChain: '',
     manualEqApply: false,
+    adaptiveEqEnabled: false,
   },
 });
 
@@ -96,7 +100,7 @@ ipcMain.handle('store:set', (_, key, value) => {
   // Type-validate values to prevent store corruption
   const BOOL_KEYS = new Set(['deEsserEnabled', 'noiseGateEnabled', 'stereoToMonoEnabled',
     'silenceTrimEnabled', 'breathReductionEnabled', 'multiBandCompEnabled', 'showNotifications',
-    'manualEqApply']);
+    'manualEqApply', 'adaptiveEqEnabled']);
   const STRING_KEYS = new Set(['processingMode', 'outputFormat', 'manualEqChain']);
   const INT_KEYS = new Set(['lufsTarget', 'hpfFrequency', 'sampleRate']);
   if (BOOL_KEYS.has(key) && typeof value !== 'boolean') return;
@@ -194,6 +198,7 @@ ipcMain.handle('pipeline:start', (event, files) => {
     sampleRate:            store.get('sampleRate'),
     manualEqChain:         store.get('manualEqChain'),
     manualEqApply:         store.get('manualEqApply'),
+    adaptiveEqEnabled:     store.get('adaptiveEqEnabled'),
   };
 
   pipelineState = { running: true, cancelled: false, currentProc: null };

@@ -14,10 +14,9 @@ function buildPreChain(settings) {
   if (settings.stereoToMonoEnabled !== false) {
     parts.push('pan=mono|c0=0.5*c0+0.5*c1');
   }
-  // afftdn fallback only used in fast mode or when DFN is unavailable
-  if (settings.mode === 'fast') {
-    parts.push('afftdn=nf=-20:tn=1:nr=20:om=o');
-  }
+  // Denoise stages disabled — DeepFilterNet and FFmpeg afftdn were both
+  // degrading the source. Voice-warm EQ + noise gate handle residual
+  // hum without the artefacts that ML/spectral denoise introduce.
   if (settings.noiseGateEnabled !== false && settings.mode !== 'clean') {
     // Gentler noise gate — less aggressive range to avoid cutting natural room tone
     parts.push('agate=threshold=0.003:ratio=3:attack=8:release=120:range=0.01');
@@ -490,10 +489,12 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       if (isCancelled()) break;
 
       const duration = analysis.basic.duration ?? file.duration ?? null;
-      const useMLDenoise = fileSettings.mode === 'quality';  // skip for 'clean' and 'fast'
+      // ML denoise (DeepFilterNet) and FFmpeg afftdn are both disabled —
+      // they were degrading clean source material. The noise gate inside
+      // pre-process still suppresses obvious silences.
+      const useMLDenoise = false;
       const useBodyGen = fileSettings.bodyGenEnabled !== false; // on by default
       let stepCount = 4; // base: analyze + preprocess + EQ measure + render
-      if (useMLDenoise) stepCount++;
       if (useBodyGen) stepCount++;
       const STEP_TOTAL = stepCount;
       let stepIdx = 2;
@@ -546,8 +547,8 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
         stepIdx++;
       }
 
-      // Step 3 — Pre-process (mono + gate + trim)
-      const prepLabel = useMLDenoise ? 'Gate + Trim' : 'Denoise + Gate';
+      // Step 3 — Pre-process (mono + gate + trim) — denoise stages disabled
+      const prepLabel = 'Gate + Trim';
       emit('progress', {
         file: file.path, step: prepLabel, stepIndex: stepIdx, stepTotal: STEP_TOTAL,
         pct: 25, eta: calcEta(t0, done + 0.1, total),

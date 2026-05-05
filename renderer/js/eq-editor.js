@@ -495,6 +495,8 @@
       requestAnimationFrame(drawCurve);
     });
   }
+  window.addEventListener('audiopro:queue-changed', refreshFileSelect);
+  refreshFileSelect();
   playBtn.addEventListener('click', playPause);
   stopBtn.addEventListener('click', stop);
   bypassChk.addEventListener('change', applyBypass);

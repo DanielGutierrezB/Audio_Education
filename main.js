@@ -12,6 +12,10 @@ const VALID_STORE_KEYS = new Set([
   'noiseGateEnabled', 'stereoToMonoEnabled', 'silenceTrimEnabled',
   'breathReductionEnabled', 'multiBandCompEnabled', 'outputFormat',
   'sampleRate', 'showNotifications',
+  // Manual EQ override (FFmpeg filter chain string + on/off flag).
+  // When manualEqApply is true the pipeline uses manualEqChain in place
+  // of its built-in voice-warm EQ.
+  'manualEqChain', 'manualEqApply',
 ]);
 
 const store = new Store({
@@ -28,6 +32,8 @@ const store = new Store({
     outputFormat: 'wav24',
     sampleRate: 48000,
     showNotifications: true,
+    manualEqChain: '',
+    manualEqApply: false,
   },
 });
 
@@ -89,12 +95,19 @@ ipcMain.handle('store:set', (_, key, value) => {
   if (typeof key !== 'string' || !VALID_STORE_KEYS.has(key)) return;
   // Type-validate values to prevent store corruption
   const BOOL_KEYS = new Set(['deEsserEnabled', 'noiseGateEnabled', 'stereoToMonoEnabled',
-    'silenceTrimEnabled', 'breathReductionEnabled', 'multiBandCompEnabled', 'showNotifications']);
-  const STRING_KEYS = new Set(['processingMode', 'outputFormat']);
+    'silenceTrimEnabled', 'breathReductionEnabled', 'multiBandCompEnabled', 'showNotifications',
+    'manualEqApply']);
+  const STRING_KEYS = new Set(['processingMode', 'outputFormat', 'manualEqChain']);
   const INT_KEYS = new Set(['lufsTarget', 'hpfFrequency', 'sampleRate']);
   if (BOOL_KEYS.has(key) && typeof value !== 'boolean') return;
   if (STRING_KEYS.has(key) && typeof value !== 'string') return;
   if (INT_KEYS.has(key) && (typeof value !== 'number' || !Number.isFinite(value))) return;
+  // manualEqChain: cap length and reject obvious shell metacharacters that
+  // could break out of the FFmpeg `-af` argument.
+  if (key === 'manualEqChain') {
+    if (value.length > 4096) return;
+    if (/[`$;&|<>\\\n\r]/.test(value)) return;
+  }
   store.set(key, value);
 });
 ipcMain.handle('store:getAll', () => store.store);
@@ -179,6 +192,8 @@ ipcMain.handle('pipeline:start', (event, files) => {
     multiBandCompEnabled:  store.get('multiBandCompEnabled'),
     outputFormat:          store.get('outputFormat'),
     sampleRate:            store.get('sampleRate'),
+    manualEqChain:         store.get('manualEqChain'),
+    manualEqApply:         store.get('manualEqApply'),
   };
 
   pipelineState = { running: true, cancelled: false, currentProc: null };

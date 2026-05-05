@@ -18,6 +18,7 @@
             <span class="tab-badge" id="badge-done" hidden></span>
           </button>
           <button class="tab" data-tab="preview" role="tab" aria-selected="false">Preview</button>
+          <button class="tab" data-tab="eq" role="tab" aria-selected="false">EQ</button>
           <button class="tab" data-tab="about" role="tab" aria-selected="false">About</button>
         </nav>
       </div>
@@ -272,6 +273,37 @@
         <audio id="audio-player" preload="none"></audio>
       </section>
 
+      <!-- ── EQ View ── -->
+      <section class="view" id="view-eq" role="tabpanel" hidden>
+        <div class="eq-editor">
+
+          <div class="eq-toolbar">
+            <select class="eq-file-select" id="eq-file-select" aria-label="File to preview">
+              <option value="">No files in queue</option>
+            </select>
+            <div class="eq-transport">
+              <button class="btn-transport" id="eq-play" title="Play / Pause (Space)">&#9654;</button>
+              <button class="btn-transport" id="eq-stop" title="Stop">&#9632;</button>
+              <span class="eq-time" id="eq-time">0:00 / 0:00</span>
+            </div>
+            <span class="toolbar-spacer"></span>
+            <label class="eq-bypass-label" title="Bypass — hear the file with no EQ applied">
+              <input type="checkbox" id="eq-bypass">
+              <span>Bypass</span>
+            </label>
+            <button class="btn btn-secondary btn-sm" id="eq-reset" title="Reset to AudioPro's automatic EQ">Reset</button>
+            <button class="btn btn-accent btn-sm" id="eq-apply" title="Use this manual EQ for all queued files when processing">Apply to all</button>
+          </div>
+
+          <div class="eq-canvas-wrap">
+            <canvas id="eq-canvas" width="980" height="380"></canvas>
+            <div class="eq-status" id="eq-status">Manual EQ override: <span id="eq-status-value" class="eq-status-off">off</span></div>
+            <div class="eq-readout" id="eq-readout">Click and drag a band — scroll to change Q</div>
+          </div>
+
+        </div>
+      </section>
+
       <!-- ── About View ── -->
       <section class="view" id="view-about" role="tabpanel" hidden>
         <div class="about-container">
@@ -420,5 +452,6 @@
   </div>
 
   <script src="js/app.js"></script>
+  <script src="js/eq-editor.js"></script>
 </body>
 </html>

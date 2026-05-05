@@ -33,6 +33,19 @@ function buildPreChain(settings) {
 }
 
 function buildEqChain(settings) {
+  // Manual override — when the user has built a chain in the EQ editor
+  // and toggled "Apply to all", that chain replaces the entire built-in
+  // voice-warm EQ. The breath gate (if requested) is still appended so
+  // the user doesn't lose downstream functionality.
+  if (settings.manualEqApply === true && typeof settings.manualEqChain === 'string'
+      && settings.manualEqChain.trim()) {
+    const parts = [settings.manualEqChain.trim()];
+    if (settings.breathReductionEnabled === true) {
+      parts.push('agate=threshold=0.02:ratio=2:attack=5:release=150');
+    }
+    return parts.join(',');
+  }
+
   const hpfFreq = settings.hpfFrequency ?? 80;
   const deEsser = settings.deEsserEnabled !== false;
   const breathReduction = settings.breathReductionEnabled === true;

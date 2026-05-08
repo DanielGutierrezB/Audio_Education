@@ -20,12 +20,14 @@ function getBinDir() {
   return path.join(__dirname, '..', 'bin');
 }
 
+const EXE = process.platform === 'win32' ? '.exe' : '';
+
 function resolve(name) {
   const binDir = getBinDir();
-  const fullPath = path.join(binDir, name);
+  const fullPath = path.join(binDir, name + EXE);
   if (fs.existsSync(fullPath)) return fullPath;
   // Fallback to PATH (dev convenience)
-  return name;
+  return name + EXE;
 }
 
 module.exports = {

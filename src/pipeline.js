@@ -52,12 +52,23 @@ function notchToFilter(n) {
   return `equalizer=f=${f}:width_type=q:width=${q.toFixed(2)}:g=${g.toFixed(2)}`;
 }
 
-function buildEqChain(settings, voiceProfileNotches) {
+// Adaptive tonal curves keyed by voiceClass (from voice-profile.js).
+// Frequencies and gains are tuned per pitch range so we don't pile +4 dB at
+// 120 Hz onto a deep male voice that's already low-heavy, or boost female
+// boxiness at 300 Hz when their resonance lives nearer 450 Hz.
+const VOICE_EQ_CURVES = {
+  deep_male:  { lowshelfF: 100, lowshelfG: 2,   boxF: 250, boxG: -2,   bodyF: 700,  bodyG: 0.5, clarF: 2000, clarG: 1.5, presF: 3000, presG: 1,   deessF: 6500, harshF: 7500, harshG: -0.5 },
+  male:       { lowshelfF: 120, lowshelfG: 3,   boxF: 300, boxG: -2,   bodyF: 800,  bodyG: 0.5, clarF: 2000, clarG: 2,   presF: 3500, presG: 1,   deessF: 6500, harshF: 8000, harshG: -0.5 },
+  high_male:  { lowshelfF: 130, lowshelfG: 2.5, boxF: 350, boxG: -2,   bodyF: 900,  bodyG: 0.5, clarF: 2200, clarG: 2,   presF: 4000, presG: 1.5, deessF: 7000, harshF: 8000, harshG: -0.5 },
+  low_female: { lowshelfF: 150, lowshelfG: 2,   boxF: 400, boxG: -1.5, bodyF: 1000, bodyG: 0.5, clarF: 2500, clarG: 2,   presF: 4000, presG: 1.5, deessF: 7000, harshF: 8500, harshG: -0.5 },
+  female:     { lowshelfF: 180, lowshelfG: 1.5, boxF: 450, boxG: -1.5, bodyF: 1100, bodyG: 0.5, clarF: 3000, clarG: 2,   presF: 5000, presG: 1.5, deessF: 7500, harshF: 9000, harshG: -0.5 },
+  unknown:    { lowshelfF: 120, lowshelfG: 2,   boxF: 300, boxG: -1.5, bodyF: 800,  bodyG: 0.5, clarF: 2500, clarG: 1.5, presF: 3500, presG: 1,   deessF: 6500, harshF: 8000, harshG: -0.5 },
+};
+
+function buildEqChain(settings, voiceProfile) {
   // Manual override — when the user has built a chain in the EQ editor
   // and toggled "Apply to all", that chain replaces the entire built-in
-  // voice-warm EQ (and the adaptive notches below). The breath gate
-  // (if requested) is still appended so the user doesn't lose downstream
-  // functionality.
+  // adaptive EQ. The breath gate (if requested) is still appended.
   if (settings.manualEqApply === true && typeof settings.manualEqChain === 'string'
       && settings.manualEqChain.trim()) {
     const parts = [settings.manualEqChain.trim()];
@@ -67,33 +78,38 @@ function buildEqChain(settings, voiceProfileNotches) {
     return parts.join(',');
   }
 
-  const hpfFreq = settings.hpfFrequency ?? 80;
+  // Adaptive curve: pick the tonal profile that fits the speaker's voice
+  // class. Falls back to a neutral 'unknown' curve if profiling failed.
+  const voiceClass = voiceProfile?.voiceClass || 'unknown';
+  const curve = VOICE_EQ_CURVES[voiceClass] || VOICE_EQ_CURVES.unknown;
+
+  // HPF cutoff: voice-profile picks a value tied to the fundamental.
+  // settings.hpfFrequency wins when the user explicitly overrode it.
+  const hpfFreq = settings.hpfFrequency ?? voiceProfile?.hpfHz ?? 80;
   const deEsser = settings.deEsserEnabled !== false;
   const breathReduction = settings.breathReductionEnabled === true;
 
-  // Voice-optimized EQ curve — warm, full, broadcast-quality
-  // Low shelf at 120Hz targets voice fundamentals (80-150Hz)
-  // NOT at 250Hz which is the "boxy" zone that sounds hollow/echoey
   const filters = [
     `highpass=f=${hpfFreq}:poles=2`,
-    'lowshelf=f=120:width_type=o:width=0.7:g=4',       // voice warmth (fundamentals only)
-    'equalizer=f=300:width_type=o:width=1.5:g=-2',     // cut boxiness / room resonance
-    'equalizer=f=800:width_type=o:width=2.0:g=0.5',    // lower mids, subtle body
-    'equalizer=f=2000:width_type=o:width=1.5:g=2',     // upper-mid clarity
-    'equalizer=f=3500:width_type=o:width=1.2:g=1',     // presence / intelligibility
-    'equalizer=f=8000:width_type=o:width=2.0:g=-0.5',  // tame harshness
+    `lowshelf=f=${curve.lowshelfF}:width_type=o:width=0.7:g=${curve.lowshelfG}`,
+    `equalizer=f=${curve.boxF}:width_type=o:width=1.5:g=${curve.boxG}`,
+    `equalizer=f=${curve.bodyF}:width_type=o:width=2.0:g=${curve.bodyG}`,
+    `equalizer=f=${curve.clarF}:width_type=o:width=1.5:g=${curve.clarG}`,
+    `equalizer=f=${curve.presF}:width_type=o:width=1.2:g=${curve.presG}`,
+    `equalizer=f=${curve.harshF}:width_type=o:width=2.0:g=${curve.harshG}`,
   ];
 
   if (deEsser) {
     const deEsserGain = settings.deEsserGain ?? -2;
-    filters.splice(6, 0, `equalizer=f=6500:width_type=h:width=2000:g=${deEsserGain}`);
+    filters.splice(6, 0, `equalizer=f=${curve.deessF}:width_type=h:width=2000:g=${deEsserGain}`);
   }
 
-  // Adaptive EQ — append voice-profile-derived narrow notches AFTER the
-  // static voice-warm shape. Only applied when caller passes a non-empty
-  // array, gated upstream by settings.adaptiveEqEnabled.
-  if (Array.isArray(voiceProfileNotches) && voiceProfileNotches.length) {
-    for (const n of voiceProfileNotches) filters.push(notchToFilter(n));
+  // Voice-profile notches: surgical cuts at detected resonances. Always
+  // applied when the profiler found any (no opt-in toggle) — they
+  // complement the tonal curve above instead of duplicating its work.
+  const notches = voiceProfile?.notches;
+  if (Array.isArray(notches) && notches.length) {
+    for (const n of notches) filters.push(notchToFilter(n));
   }
 
   if (breathReduction) {
@@ -493,7 +509,7 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       // they were degrading clean source material. The noise gate inside
       // pre-process still suppresses obvious silences.
       const useMLDenoise = false;
-      const useBodyGen = fileSettings.bodyGenEnabled !== false; // on by default
+      const useBodyGen = fileSettings.bodyGenEnabled === true; // off by default
       let stepCount = 4; // base: analyze + preprocess + EQ measure + render
       if (useBodyGen) stepCount++;
       const STEP_TOTAL = stepCount;
@@ -508,13 +524,10 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
       await normaliseInput(file.path, normalisedPath);
       let pipelineInput = normalisedPath;
 
-      // Build chains from per-file settings.
-      // Adaptive EQ: when ON, append voice-profile-derived notches to the
-      // static voice-warm curve. Default OFF — zero behaviour change unless
-      // the user opts in.
-      const adaptiveEqOn = fileSettings.adaptiveEqEnabled === true;
-      const voiceNotches = adaptiveEqOn ? recommendations?.voiceProfile?.notches : null;
-      const eqChain = buildEqChain(fileSettings, voiceNotches);
+      // Adaptive EQ: tonal curve + HPF + notches all derived from the
+      // measured voice profile. Always applied; the EQ editor "Apply to all"
+      // toggle still overrides this chain wholesale.
+      const eqChain = buildEqChain(fileSettings, recommendations?.voiceProfile);
       const loudnormBase = buildLoudnormBase(fileSettings.lufsTarget);
 
       // Log what the pipeline decided

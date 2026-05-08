@@ -292,7 +292,7 @@ function buildRecommendations(analysis) {
     reasoning: [],
   };
 
-  const { basic, loudness, noise, sibilance, reverb, dynamics } = analysis;
+  const { basic, loudness, noise, sibilance, reverb, dynamics, voiceProfile } = analysis;
 
   // 1. Stereo to mono
   if (basic.channels > 1) {
@@ -357,13 +357,18 @@ function buildRecommendations(analysis) {
   rec.settings.silenceTrimEnabled = true;
   rec.reasoning.push('Trimming leading/trailing silence');
 
-  // 5. HPF frequency
+  // 5. HPF frequency — derived from the voice profile when available so
+  // the cutoff sits below each speaker's fundamental. Reverb pushes the
+  // cutoff up regardless of voice class to attack room boominess.
   if (reverb.likelyReverb) {
     rec.settings.hpfFrequency = 100;
     rec.reasoning.push(`Reverb detected (${reverb.severity}) — HPF raised to 100 Hz to reduce boominess`);
+  } else if (voiceProfile?.hpfHz) {
+    rec.settings.hpfFrequency = voiceProfile.hpfHz;
+    rec.reasoning.push(`HPF at ${voiceProfile.hpfHz} Hz from voice profile (${voiceProfile.voiceClass}, pitch ~${voiceProfile.pitchHz} Hz)`);
   } else {
     rec.settings.hpfFrequency = 80;
-    rec.reasoning.push('Minimal reverb — standard HPF at 80 Hz');
+    rec.reasoning.push('Minimal reverb, no voice profile — standard HPF at 80 Hz');
   }
 
   // 6. De-esser
@@ -399,12 +404,12 @@ function buildRecommendations(analysis) {
   }
 
   // 8. BodyGen (harmonic exciter + sub-harmonic synthesis)
-  // Always enabled — generates new harmonic content via waveshaping for fuller voice
-  rec.steps.push('bodygen');
-  rec.settings.bodyGenEnabled = true;
+  // Off by default — exciter colours the voice and can sound over-processed.
+  // User can opt-in via settings; defaults preserved here for when they do.
+  rec.settings.bodyGenEnabled = false;
   rec.settings.bodyGenMix = 0.12;
   rec.settings.bodyGenSubMix = 0.06;
-  rec.reasoning.push('BodyGen enabled — harmonic exciter + sub-harmonic synthesis for voice fullness');
+  rec.reasoning.push('BodyGen disabled by default — preserves natural source tone');
 
   // 9. Loudness target
   if (loudness) {
@@ -443,9 +448,8 @@ async function analyzeAudio(filePath, onStatus) {
   const sibilance = await safe('Detecting sibilance...', () => detectSibilance(filePath));
   const reverb    = await safe('Checking reverb...', () => detectReverb(filePath));
   const dynamics  = await safe('Analyzing dynamics...', () => detectDynamicRange(filePath));
-  // Voice profile is used by adaptive EQ. Always computed (cheap ~150ms FFT)
-  // and exposed in `recommendations`; the pipeline only consumes it when
-  // settings.adaptiveEqEnabled is true.
+  // Voice profile drives the adaptive EQ — tonal curve, HPF cutoff and
+  // resonance notches are all picked from this analysis on every file.
   const voiceProfile = await safe('Profiling voice...', () => profileVoice(filePath));
 
   const analysis = {

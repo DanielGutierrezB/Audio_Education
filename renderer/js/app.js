@@ -35,7 +35,6 @@ tabs.forEach(tab => {
       v.classList.toggle('active', isTarget);
       v.hidden = !isTarget;
     });
-    if (target === 'preview') sizePreviewCanvas();
   });
 });
 
@@ -388,17 +387,6 @@ function buildFileItem(file) {
   removeBtn.addEventListener('click', (e) => { e.stopPropagation(); removeFile(file.path); });
 
   item.append(cb, statusEl, name, dur, size, removeBtn);
-
-  // Click to select for preview (if done)
-  item.addEventListener('click', () => {
-    if (file.status === 'done' && completedFiles.has(file.path)) {
-      const outputPath = completedFiles.get(file.path);
-      // Switch to preview tab and load file
-      const previewTab = document.querySelector('[data-tab="preview"]');
-      if (previewTab) previewTab.click();
-      selectPreviewFile(file.path);
-    }
-  });
 
   // Right-click context menu
   item.addEventListener('contextmenu', (e) => {
@@ -760,46 +748,14 @@ btnProcessAll.addEventListener('click', () => {
   else startProcessing();
 });
 
-// ── Preview ──
-const previewFileList = document.getElementById('preview-file-list');
-const previewListEmpty = document.getElementById('preview-list-empty');
-const previewTopbar   = document.getElementById('preview-topbar');
-const audioPlayer    = document.getElementById('audio-player');
-const abOriginal     = document.getElementById('ab-original');
-const abProcessed    = document.getElementById('ab-processed');
-const btnPlayMain    = document.getElementById('btn-play-main');
-const btnStopMain    = document.getElementById('btn-stop-main');
-const btnSkipBack    = document.getElementById('btn-skip-back');
-const btnSkipFwd     = document.getElementById('btn-skip-fwd');
-const currentTimeEl  = document.getElementById('preview-current-time');
-const totalTimeEl    = document.getElementById('preview-total-time');
-const previewCanvas  = document.getElementById('preview-waveform');
-const previewLoading = document.getElementById('preview-loading');
-const volumeSlider   = document.getElementById('preview-volume');
+// ── Processed-files registry ──
+// Tracks completed files so the EQ editor can list them in its file selector.
+// Preview/playback lives in the EQ tab now (see eq-editor.js).
+const processedFiles = [];
 
-let previewMode = 'original'; // 'original' | 'processed'
-// LRU-bounded waveform cache — avoids unbounded memory growth when processing many files
-const WAVEFORM_CACHE_MAX = 50;
-const waveformCache = new Map();
-function waveformCacheSet(key, peaks) {
-  if (waveformCache.size >= WAVEFORM_CACHE_MAX) {
-    waveformCache.delete(waveformCache.keys().next().value);
-  }
-  waveformCache.set(key, peaks);
-}
-// Stored waveform image (without playhead) for repaint
-let waveformImageData = null;
-// RAF handle
-let rafId = null;
-
-// Preview file entries: [{ filePath, outputPath, name, folder }]
-const previewFiles = [];
-
-// Expose to other renderer modules (e.g. EQ editor) so they can list
-// processed outputs alongside sources.
 window.audioProQueue = {
   listFiles() {
-    return previewFiles.map(f => ({
+    return processedFiles.map(f => ({
       name: f.name,
       path: f.filePath,
       output: f.outputPath,
@@ -808,364 +764,15 @@ window.audioProQueue = {
 };
 
 function addToPreviewSelector(filePath, outputPath) {
-  previewTopbar.hidden = false;
-  if (previewListEmpty) previewListEmpty.hidden = true;
-
-  // Check if already added
-  const existing = previewFiles.find(f => f.filePath === filePath);
+  const existing = processedFiles.find(f => f.filePath === filePath);
   if (existing) {
     existing.outputPath = outputPath;
-    window.dispatchEvent(new CustomEvent('audiopro:queue-changed'));
-    return;
+  } else {
+    const name = filePath.split('/').pop();
+    processedFiles.push({ filePath, outputPath, name });
   }
-
-  const name = filePath.split('/').pop();
-  const parts = filePath.split('/');
-  const folder = parts.length >= 2 ? parts[parts.length - 2] : '';
-  previewFiles.push({ filePath, outputPath, name, folder });
-
-  const item = document.createElement('div');
-  item.className = 'preview-file-item';
-  item.dataset.filePath = filePath;
-  item.dataset.outputPath = outputPath;
-  // Build DOM safely — no innerHTML with user data
-  const iconSpan = document.createElement('span');
-  iconSpan.className = 'preview-file-icon';
-  iconSpan.textContent = '✓';
-  const nameSpan = document.createElement('span');
-  nameSpan.className = 'preview-file-name';
-  nameSpan.textContent = name;
-  item.append(iconSpan, nameSpan);
-  if (folder) {
-    const folderSpan = document.createElement('span');
-    folderSpan.className = 'preview-file-folder';
-    folderSpan.textContent = folder;
-    item.appendChild(folderSpan);
-  }
-  item.addEventListener('click', () => selectPreviewItem(item));
-  previewFileList.appendChild(item);
-
-  if (previewFiles.length === 1) selectPreviewItem(item);
-
   window.dispatchEvent(new CustomEvent('audiopro:queue-changed'));
 }
-
-function selectPreviewItem(item) {
-  // Deselect all
-  previewFileList.querySelectorAll('.preview-file-item').forEach(el => el.classList.remove('active'));
-  item.classList.add('active');
-  loadPreviewFile(item.dataset.filePath, item.dataset.outputPath);
-}
-
-function selectPreviewFile(filePath) {
-  const item = previewFileList.querySelector(`.preview-file-item[data-file-path="${CSS.escape(filePath)}"]`);
-  if (item) selectPreviewItem(item);
-}
-
-let currentPreviewOriginal = null;
-let currentPreviewOutput = null;
-let waveformLoadId = 0; // Monotonic counter to cancel stale waveform loads
-
-async function loadPreviewFile(filePath, outputPath) {
-  cancelAnimationFrame(rafId);
-  audioPlayer.pause();
-  audioPlayer.src = '';
-
-  currentPreviewOriginal = filePath;
-  currentPreviewOutput = outputPath;
-
-  currentTimeEl.textContent = '0:00';
-  totalTimeEl.textContent = '0:00';
-  btnPlayMain.textContent = '▶';
-
-  const src = previewMode === 'original' ? filePath : outputPath;
-  audioPlayer.src = `file://${src}`;
-  audioPlayer.load();
-
-  await loadWaveform(src);
-}
-
-async function switchAB(mode) {
-  if (mode === previewMode) return;
-
-  const wasPlaying = !audioPlayer.paused;
-  const savedTime = audioPlayer.currentTime;
-
-  audioPlayer.pause();
-  cancelAnimationFrame(rafId);
-
-  previewMode = mode;
-  abOriginal.classList.toggle('active', mode === 'original');
-  abProcessed.classList.toggle('active', mode === 'processed');
-
-  const filePath   = currentPreviewOriginal;
-  const outputPath = currentPreviewOutput;
-  if (!filePath) return;
-
-  const src = mode === 'original' ? filePath : outputPath;
-  audioPlayer.src = `file://${src}`;
-  audioPlayer.load();
-
-  // Load waveform and wait for metadata in parallel
-  await Promise.all([
-    loadWaveform(src),
-    new Promise(resolve => {
-      if (audioPlayer.readyState >= 1) return resolve();
-      audioPlayer.addEventListener('loadedmetadata', resolve, { once: true });
-    }),
-  ]);
-
-  if (isFinite(audioPlayer.duration)) {
-    audioPlayer.currentTime = Math.min(savedTime, audioPlayer.duration);
-  }
-  drawPlayheadAt(audioPlayer.currentTime);
-  if (wasPlaying) audioPlayer.play().catch(() => {});
-}
-
-abOriginal.addEventListener('click', () => switchAB('original'));
-abProcessed.addEventListener('click', () => switchAB('processed'));
-
-// ── Waveform ──
-function sizePreviewCanvas() {
-  const wrap = previewCanvas.parentElement;
-  const dpr = window.devicePixelRatio || 1;
-  const w = wrap.clientWidth || 600;
-  const h = wrap.clientHeight || 160;
-  previewCanvas.width = Math.round(w * dpr);
-  previewCanvas.height = Math.round(h * dpr);
-  previewCanvas.style.width = w + 'px';
-  previewCanvas.style.height = h + 'px';
-}
-
-async function loadWaveform(filePath) {
-  const loadId = ++waveformLoadId; // Cancel any in-flight load
-  previewLoading.hidden = false;
-  previewCanvas.style.opacity = '0';
-  waveformImageData = null;
-
-  sizePreviewCanvas();
-  let numPeaks = previewCanvas.width;
-  // Canvas may be 0-width if the view isn't visible yet — retry after a frame
-  if (numPeaks < 10) {
-    await new Promise(r => requestAnimationFrame(r));
-    if (loadId !== waveformLoadId) return; // Cancelled
-    sizePreviewCanvas();
-    numPeaks = previewCanvas.width;
-  }
-  if (numPeaks < 10) numPeaks = 800; // fallback
-
-  let peaks = waveformCache.get(filePath);
-  if (!peaks && window.api) {
-    peaks = await window.api.audio.peaks(filePath, numPeaks);
-    if (loadId !== waveformLoadId) return; // Cancelled — user switched files
-    if (peaks) waveformCacheSet(filePath, peaks);
-  }
-
-  previewLoading.hidden = true;
-  previewCanvas.style.opacity = '1';
-
-  if (peaks) {
-    drawWaveform(peaks);
-    drawPlayheadAt(audioPlayer.currentTime);
-  }
-}
-
-function drawWaveform(peaks) {
-  const ctx = previewCanvas.getContext('2d');
-  const W = previewCanvas.width;
-  const H = previewCanvas.height;
-  const mid = H / 2;
-
-  ctx.clearRect(0, 0, W, H);
-
-  // Center line
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, mid);
-  ctx.lineTo(W, mid);
-  ctx.stroke();
-
-  // Normalize peaks to fill the available height
-  // Find the max peak value and scale everything to [0, 1]
-  let peakMax = 0;
-  for (let i = 0; i < peaks.length; i++) {
-    if (peaks[i] > peakMax) peakMax = peaks[i];
-  }
-  const scale = peakMax > 0 ? 1 / peakMax : 1;
-
-  // Gradient fill
-  const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, 'rgba(74,143,232,0.95)');
-  grad.addColorStop(0.5, 'rgba(74,143,232,0.75)');
-  grad.addColorStop(1, 'rgba(74,143,232,0.35)');
-  ctx.fillStyle = grad;
-
-  const barW = Math.max(1, W / peaks.length);
-  const step = peaks.length / W;
-
-  for (let x = 0; x < W; x++) {
-    const idx = Math.floor(x * step);
-    const v = ((peaks[idx] ?? 0) * scale) * 0.92;  // 0.92 = slight padding from edges
-    const barH = Math.max(1, v * mid * 2);
-    ctx.fillRect(x, mid - v * mid, barW, barH);
-  }
-
-  // Save image without playhead
-  waveformImageData = ctx.getImageData(0, 0, W, H);
-}
-
-function drawPlayheadAt(currentTime) {
-  if (!audioPlayer.duration || !waveformImageData) return;
-  const ctx = previewCanvas.getContext('2d');
-  ctx.putImageData(waveformImageData, 0, 0);
-  const x = (currentTime / audioPlayer.duration) * previewCanvas.width;
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(x, 0);
-  ctx.lineTo(x, previewCanvas.height);
-  ctx.stroke();
-
-  // Playhead knob
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.arc(x, previewCanvas.height / 2, 4, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function startPlayheadLoop() {
-  cancelAnimationFrame(rafId);
-  function tick() {
-    drawPlayheadAt(audioPlayer.currentTime);
-    currentTimeEl.textContent = formatAudioTime(audioPlayer.currentTime);
-    if (!audioPlayer.paused) rafId = requestAnimationFrame(tick);
-  }
-  rafId = requestAnimationFrame(tick);
-}
-
-// ── Waveform seek ──
-let isScrubbing = false;
-
-function seekFromEvent(e) {
-  if (!audioPlayer.duration) return;
-  const rect = previewCanvas.getBoundingClientRect();
-  const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-  audioPlayer.currentTime = (x / rect.width) * audioPlayer.duration;
-  drawPlayheadAt(audioPlayer.currentTime);
-  currentTimeEl.textContent = formatAudioTime(audioPlayer.currentTime);
-}
-
-previewCanvas.addEventListener('mousedown', (e) => {
-  isScrubbing = true;
-  seekFromEvent(e);
-});
-document.addEventListener('mousemove', (e) => {
-  if (isScrubbing) seekFromEvent(e);
-});
-document.addEventListener('mouseup', () => { isScrubbing = false; });
-window.addEventListener('blur', () => { isScrubbing = false; });
-
-// ── Transport controls ──
-function togglePlayPause() {
-  if (audioPlayer.paused) {
-    audioPlayer.play().catch(() => {});
-  } else {
-    audioPlayer.pause();
-  }
-}
-
-audioPlayer.addEventListener('play', () => {
-  btnPlayMain.textContent = '⏸';
-  startPlayheadLoop();
-});
-
-audioPlayer.addEventListener('pause', () => {
-  cancelAnimationFrame(rafId);
-  btnPlayMain.textContent = '▶';
-  drawPlayheadAt(audioPlayer.currentTime);
-});
-
-audioPlayer.addEventListener('ended', () => {
-  cancelAnimationFrame(rafId);
-  btnPlayMain.textContent = '▶';
-  audioPlayer.currentTime = 0;
-  drawPlayheadAt(0);
-  currentTimeEl.textContent = '0:00';
-});
-
-audioPlayer.addEventListener('loadedmetadata', () => {
-  totalTimeEl.textContent = formatAudioTime(audioPlayer.duration);
-  currentTimeEl.textContent = '0:00';
-});
-
-audioPlayer.addEventListener('timeupdate', () => {
-  if (audioPlayer.paused) {
-    currentTimeEl.textContent = formatAudioTime(audioPlayer.currentTime);
-  }
-});
-
-btnPlayMain.addEventListener('click', togglePlayPause);
-
-btnStopMain.addEventListener('click', () => {
-  cancelAnimationFrame(rafId);
-  audioPlayer.pause();
-  audioPlayer.currentTime = 0;
-  btnPlayMain.textContent = '▶';
-  drawPlayheadAt(0);
-  currentTimeEl.textContent = '0:00';
-});
-
-btnSkipBack.addEventListener('click', () => {
-  audioPlayer.currentTime = Math.max(0, audioPlayer.currentTime - 5);
-  drawPlayheadAt(audioPlayer.currentTime);
-});
-
-btnSkipFwd.addEventListener('click', () => {
-  audioPlayer.currentTime = Math.min(audioPlayer.duration || 0, audioPlayer.currentTime + 5);
-  drawPlayheadAt(audioPlayer.currentTime);
-});
-
-volumeSlider.addEventListener('input', () => {
-  audioPlayer.volume = parseFloat(volumeSlider.value);
-});
-
-// ── Keyboard shortcuts (preview tab only) ──
-document.addEventListener('keydown', (e) => {
-  if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
-  const activeView = document.querySelector('.view.active');
-  if (!activeView || activeView.id !== 'view-preview') return;
-
-  if (e.key === ' ') {
-    e.preventDefault();
-    togglePlayPause();
-  } else if (e.key === 'ArrowLeft') {
-    e.preventDefault();
-    audioPlayer.currentTime = Math.max(0, audioPlayer.currentTime - 5);
-    drawPlayheadAt(audioPlayer.currentTime);
-  } else if (e.key === 'ArrowRight') {
-    e.preventDefault();
-    audioPlayer.currentTime = Math.min(audioPlayer.duration || 0, audioPlayer.currentTime + 5);
-    drawPlayheadAt(audioPlayer.currentTime);
-  } else if (e.key === 'a' || e.key === 'A') {
-    e.preventDefault();
-    switchAB(previewMode === 'original' ? 'processed' : 'original');
-  }
-});
-
-// ── Window resize — re-size waveform canvas ──
-const resizeObserver = new ResizeObserver(() => {
-  const activeView = document.querySelector('.view.active');
-  if (activeView?.id === 'view-preview' && waveformImageData) {
-    sizePreviewCanvas();
-    // Reload waveform for current file
-    if (currentPreviewOriginal) {
-      const src = previewMode === 'original' ? currentPreviewOriginal : currentPreviewOutput;
-      if (src) loadWaveform(src);
-    }
-  }
-});
-resizeObserver.observe(document.getElementById('preview-waveform-wrap'));
 
 // ── Init ──
 loadPrefs();

@@ -28,9 +28,16 @@ function resolve(name) {
   return name;
 }
 
+function resolvePython() {
+  const bundled = path.join(getBinDir(), 'python', 'bin', 'python3');
+  if (fs.existsSync(bundled)) return bundled;
+  return 'python3';
+}
+
 module.exports = {
   ffmpeg:     () => resolve('ffmpeg'),
   ffprobe:    () => resolve('ffprobe'),
   deepFilter: () => resolve('deep-filter'),
+  python:     resolvePython,
   getBinDir,
 };

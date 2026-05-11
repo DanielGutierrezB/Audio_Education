@@ -7,7 +7,8 @@ achieves with ML but using deterministic DSP that preserves naturalness.
 
 Usage: python3 bodygen.py <input.wav> <output.wav> [--mix 0.12] [--sub-mix 0.06]
 
-Expects mono WAV input. Output is same sample rate/format.
+Expects WAV input (mono or stereo — stereo is downmixed). Output is mono WAV
+PCM_24 at the input sample rate. Depends on torch + soundfile + numpy.
 """
 
 import sys
@@ -36,20 +37,19 @@ def main():
 
     try:
         import torch
-        import torchaudio
+        import soundfile as sf
+        import numpy as np
     except ImportError as e:
-        print(f"Error: Missing dependency — {e}. Run: pip install torch torchaudio",
+        print(f"Error: Missing dependency — {e}. Run: pip install torch soundfile numpy",
               file=sys.stderr)
         sys.exit(2)
 
     t0 = time.time()
 
-    # Load audio
-    waveform, sr = torchaudio.load(args.input)
-
-    # Convert to mono if needed
-    if waveform.shape[0] > 1:
-        waveform = waveform.mean(dim=0, keepdim=True)
+    audio_np, sr = sf.read(args.input, dtype='float32', always_2d=False)
+    if audio_np.ndim > 1:
+        audio_np = audio_np.mean(axis=1)
+    waveform = torch.from_numpy(np.ascontiguousarray(audio_np)).unsqueeze(0)
 
     n = waveform.shape[-1]
 
@@ -120,8 +120,8 @@ def main():
     if peak > 0.95:
         result = result * (0.95 / peak)
 
-    # Save — match input format
-    torchaudio.save(args.output, result, sr)
+    out_np = result.squeeze(0).contiguous().numpy()
+    sf.write(args.output, out_np, sr, subtype='PCM_24')
 
     elapsed = time.time() - t0
     print(f"[bodygen] Done in {elapsed:.1f}s — mix={args.mix}, sub={args.sub_mix}", flush=True)

@@ -355,7 +355,7 @@ async function runBodyGen(inputPath, outputPath, setCurrent, opts = {}) {
   if (opts.lowFreq) args.push('--low-freq', String(opts.lowFreq));
   if (opts.highFreq) args.push('--high-freq', String(opts.highFreq));
 
-  await run('python3', args, { setCurrent, timeout: 2 * 60 * 1000 });
+  await run(binPaths.python(), args, { setCurrent, timeout: 2 * 60 * 1000 });
 }
 
 // ── Pre-process: mono + [denoise] + noise gate + silence trim ──

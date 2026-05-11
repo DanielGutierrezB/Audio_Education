@@ -7,10 +7,9 @@ Current version: **v0.1.2** (macOS arm64).
 ## Requirements
 
 - macOS 10.12+ on Apple Silicon (M1 / M2 / M3)
-- Node.js 18+
-- _Optional_ — Python 3.10+ with `torch` and `torchaudio` for the BodyGen harmonic exciter step. Without these, BodyGen is silently skipped and the rest of the pipeline runs unaffected.
+- Node.js 18+ (only for development — end users do not need Node)
 
-`ffmpeg`, `ffprobe`, and `deep-filter` are downloaded as **arm64-native, statically-linked binaries** by `npm run setup:bin` (no Homebrew, no Rosetta).
+`ffmpeg`, `ffprobe`, `deep-filter` and a relocatable Python 3.11 runtime (with `torch` + `soundfile` + `numpy` for BodyGen) are downloaded as **arm64-native binaries** by `npm run setup:bin` and bundled into the `.app`. No Homebrew, no Rosetta, no system Python required.
 
 ## Setup
 
@@ -40,7 +39,7 @@ Each file passes through up to 6 steps:
 | **Canonical Input** | Locks the file into AudioPro's working format: mono / 48 kHz / 16-bit pcm. Every downstream stage operates on this. |
 | **AI Denoise** | DeepFilterNet3 neural denoise (Quality / Auto mode). Defaults to a soft `--atten-lim-db 18` to avoid the robotic / over-processed sound. Falls back to FFmpeg `afftdn` in Fast mode. |
 | **Pre-process** | Stereo→Mono, noise gate, silence trim. |
-| **BodyGen** | Harmonic exciter + sub-harmonic synthesis via analog-style waveshaping. Adds body and fullness to thin voice recordings. Requires Python with torch / torchaudio at runtime; skipped silently otherwise. |
+| **BodyGen** | Harmonic exciter + sub-harmonic synthesis via analog-style waveshaping. Adds body and fullness to thin voice recordings. Uses the bundled Python runtime (torch + soundfile); skipped silently if the runtime is unavailable. |
 | **EQ Measure → Render** | Voice-warm EQ chain (calibrated against Adobe Podcast spectral profile) → optional adaptive notches from voice-profile → optional manual override → 3-band compressor → limiter → two-pass `loudnorm` → output file. |
 
 Output files land in **`Audio_Pro/`** next to the source folder, or in a custom folder if the user picks one in the toolbar.
@@ -93,7 +92,9 @@ src/
     enhance.py                Resemble Enhance wrapper (deferred, not wired up)
 scripts/
   fetch-bin.sh                Downloads arm64 ffmpeg / ffprobe / deep-filter
-bin/                          (gitignored) populated by fetch-bin.sh
+  setup-python.sh             Downloads relocatable Python 3.11 + installs torch + soundfile + numpy
+bin/                          (gitignored) populated by setup:bin
+  python/                     Bundled Python runtime (BodyGen dependency)
 ```
 
 ## Known limitations

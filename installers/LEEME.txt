@@ -1,0 +1,44 @@
+═══════════════════════════════════════════════════════
+  INSTALACIÓN DE AUDIOPRO EN MAC
+═══════════════════════════════════════════════════════
+
+PASO 1 — Extraer este ZIP
+   Doble click al archivo .zip si no se extrajo solo.
+   Quedará una carpeta con AudioPro.app + install.command
+
+PASO 2 — Ejecutar el instalador
+   Click DERECHO sobre "install.command" → "Abrir"
+   (NO doble click la primera vez).
+
+   La primera vez aparecerá un aviso de seguridad.
+   Presiona "Abrir" para confirmar.
+
+PASO 3 — Listo
+   Se abrirá una ventana de Terminal que copia la app
+   a /Applications, limpia la marca de cuarentena de
+   macOS y la deja lista para abrir con doble click.
+
+   Después podrás abrir AudioPro normalmente desde
+   Launchpad o desde la carpeta Aplicaciones.
+
+═══════════════════════════════════════════════════════
+
+¿NO QUIERES USAR EL INSTALADOR AUTOMÁTICO?
+
+Puedes hacerlo a mano abriendo Terminal y escribiendo:
+
+   cp -R AudioPro.app /Applications/
+   xattr -cr /Applications/AudioPro.app
+   codesign --force --deep --sign - /Applications/AudioPro.app
+
+═══════════════════════════════════════════════════════
+
+¿APARECE "AudioPro está dañada"?
+
+Significa que se omitieron los pasos anteriores. Corre
+en Terminal:
+
+   xattr -cr /Applications/AudioPro.app
+   codesign --force --deep --sign - /Applications/AudioPro.app
+
+═══════════════════════════════════════════════════════

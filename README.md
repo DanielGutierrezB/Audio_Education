@@ -4,6 +4,30 @@ Professional voice processing for educational audio content. Drop WAV files, get
 
 Current version: **v0.1.2** (macOS arm64).
 
+---
+
+## Instalar (usuarios finales · macOS)
+
+Si solo quieres usar AudioPro sin compilarla, descarga el instalador y sigue 3 pasos:
+
+1. Descarga **[`installers/AudioPro-Installer.zip`](installers/AudioPro-Installer.zip)** (o el `.dmg` desde la misma carpeta).
+2. Extrae el ZIP (doble click).
+3. **Click derecho** sobre `install.command` → **Abrir** → **Abrir** en el aviso de macOS.
+
+Listo. La app queda en `/Applications/AudioPro.app` y se abre con doble click sin errores. El script limpia la marca de cuarentena de macOS y re-firma la app localmente, así no aparece el mensaje *"AudioPro está dañada"*.
+
+Detalles técnicos del instalador y cómo regenerarlo: ver **[`installers/README.md`](installers/README.md)**.
+
+> Si descargaste la app por Slack u otro canal y ves *"AudioPro está dañada y no puede abrirse"*, abre Terminal y ejecuta:
+> ```bash
+> xattr -cr /Applications/AudioPro.app
+> codesign --force --deep --sign - /Applications/AudioPro.app
+> ```
+
+---
+
+## Desarrollo
+
 ## Requirements
 
 - macOS 10.12+ on Apple Silicon (M1 / M2 / M3)

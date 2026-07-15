@@ -45,4 +45,10 @@ contextBridge.exposeInMainWorld('api', {
       return () => ipcRenderer.removeListener('pipeline:event', handler);
     },
   },
+  update: {
+    getVersion: () => ipcRenderer.invoke('app:getVersion'),
+    check: () => ipcRenderer.invoke('update:check'),
+    apply: () => ipcRenderer.invoke('update:apply'),
+    relaunch: () => ipcRenderer.invoke('update:relaunch'),
+  },
 });

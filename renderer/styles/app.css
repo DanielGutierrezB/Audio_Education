@@ -65,14 +65,50 @@ body {
   padding-left: 76px;
 }
 
-.titlebar-version {
+/* ── Update pill (⟳ + version, right side of the titlebar) ── */
+.titlebar-update {
+  font-family: inherit;
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.3);
-  padding-right: 14px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  margin-right: 12px;
   margin-left: auto;
   flex-shrink: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   -webkit-app-region: no-drag;
-  letter-spacing: 0.3px;
+  transition: border-color 160ms ease-out, color 160ms ease-out, background 160ms ease-out;
+}
+.titlebar-update:hover { border-color: var(--accent); color: var(--text); }
+.titlebar-update:disabled { opacity: 0.6; cursor: default; }
+
+.update-icon {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+.update-icon.spinning { animation: ap-spin 0.8s linear infinite; }
+@keyframes ap-spin { to { transform: rotate(360deg); } }
+
+/* New version available on GitHub — the pill highlights and pulses. */
+.titlebar-update.has-update {
+  color: var(--warning);
+  border-color: var(--warning);
+  background: rgba(232, 168, 74, 0.12);
+  animation: ap-update-pulse 2s ease-in-out infinite;
+}
+.titlebar-update.has-update:hover { background: rgba(232, 168, 74, 0.2); }
+@keyframes ap-update-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(232, 168, 74, 0.5); }
+  50% { box-shadow: 0 0 0 4px rgba(232, 168, 74, 0); }
 }
 
 /* ── Tabs ── */

@@ -12,6 +12,7 @@ const pairing = require('./src/pairing');
 const fusion = require('./src/fusion');
 const spectrogram = require('./src/spectrogram');
 const qcReport = require('./src/qc-report');
+const updater = require('./src/updater');
 const { DELIVERY_PRESETS, DEFAULT_PRESET } = require('./src/presets');
 
 const VALID_STORE_KEYS = new Set([
@@ -409,6 +410,50 @@ ipcMain.handle('qc:saveReport', async (event, fileSummaries) => {
   } catch (err) {
     return { error: err.message };
   }
+});
+
+// ── Self-update (⟳ button in the titlebar) ──
+// The app checks the GitHub repo's version and updates itself in place —
+// same pattern as HyperPremiere's ⟳. With asar disabled, __dirname is the
+// live app root both in dev (repo checkout) and packaged (Resources/app),
+// so the updater reads and writes the exact files this process runs from.
+
+ipcMain.handle('app:getVersion', () => app.getVersion());
+
+ipcMain.handle('update:check', async () => {
+  const res = await updater.checkUpdate(__dirname);
+  if (res.ok && res.changed) {
+    logger.push('update', `Nueva versión disponible: v${res.current} → v${res.remote}`);
+  } else if (!res.ok) {
+    logger.push('update', `Chequeo de actualización falló: ${res.error}`);
+  }
+  return res;
+});
+
+let updateInFlight = false;
+ipcMain.handle('update:apply', async () => {
+  if (updateInFlight) return { ok: false, error: 'Ya hay una actualización en curso' };
+  if (pipelineState?.running) return { ok: false, error: 'Hay un lote procesándose — esperá a que termine antes de actualizar' };
+  updateInFlight = true;
+  try {
+    logger.push('update', 'Aplicando actualización desde GitHub…');
+    const res = await updater.applyUpdate(__dirname);
+    if (res.ok && res.changed) {
+      logger.push('update', `Actualizado: v${res.previous} → v${res.version}. Reiniciando…`);
+    } else if (res.ok) {
+      logger.push('update', `Ya en la última versión (v${res.version}).`);
+    } else {
+      logger.push('update', `Actualización falló: ${res.error}`);
+    }
+    return res;
+  } finally {
+    updateInFlight = false;
+  }
+});
+
+ipcMain.handle('update:relaunch', () => {
+  app.relaunch();
+  app.exit(0);
 });
 
 ipcMain.handle('ffprobe:metadata', (_, filePath) => {

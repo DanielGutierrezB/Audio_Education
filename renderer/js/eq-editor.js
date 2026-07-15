@@ -6,8 +6,9 @@
 //   • mouse wheel over a handle changes Q
 //   • shift-click toggles a band on/off
 // Web Audio routes the file through a BiquadFilterNode chain in real time
-// so the user hears the EQ as they edit. "Apply to all" persists the
-// chain as an FFmpeg filter string and the pipeline honours it.
+// so the user hears the EQ as they edit. Every change auto-saves (debounced,
+// see scheduleAutoSave/persistEqState below) as an FFmpeg filter string that
+// the pipeline honours on Process All — there's no separate "apply" step.
 
 (function () {
 

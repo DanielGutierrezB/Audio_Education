@@ -62,7 +62,7 @@
           <button class="btn btn-secondary btn-sm" id="btn-clear-all" hidden
             title="Remove all files from the queue">Clear All</button>
           <button class="btn btn-secondary btn-sm" id="btn-open-output" hidden
-            title="Open the custom output folder in Finder">Open output</button>
+            title="Show the custom output folder">Open output</button>
           <button class="btn-icon-only" id="btn-qc-report"
             title="Export a Markdown QC report for this batch — modes, flags, and loudness check per file">&#128196;</button>
           <button class="btn-icon-only" id="btn-copy-log"
@@ -118,14 +118,14 @@
                 </label>
               </div>
               <div class="settings-row settings-row-note">
-                <span class="settings-note">For finer control use the EQ tab &mdash; "Apply to all" overrides the base curve.</span>
+                <span class="settings-note">For finer control use the EQ tab &mdash; every band edit auto-saves and overrides the base curve for <strong>Process All</strong>, no separate apply step.</span>
               </div>
             </div>
 
             <div class="settings-category">
               <div class="settings-cat-title">Dynamics &amp; Body</div>
               <div class="settings-row">
-                <span class="settings-label" title="Gentle sentence-to-sentence leveling (2.5:1). Skipped automatically when the source is already dense (FLAT_DYNAMICS).">Leveler</span>
+                <span class="settings-label" title="Gentle sentence-to-sentence leveling (3:1). Skipped automatically when the source is already dense (FLAT_DYNAMICS).">Leveler</span>
                 <select class="settings-select" id="set-compression">
                   <option value="auto">Auto</option>
                   <option value="off">Off</option>
@@ -166,7 +166,7 @@
                 </label>
               </div>
               <div class="settings-row">
-                <span class="settings-label" title="'Both' matches every class to the exact target (recommended for a course — turns quiet AND hot classes to the same level). 'Raise only' never turns a file down.">Normalize</span>
+                <span class="settings-label" title="'Both' matches every class to the exact target (recommended for a course — turns quiet AND hot classes to the same level). 'Raise only' never lowers a file's loudness target (the always-on true-peak limiter can still catch stray peaks either way).">Normalize</span>
                 <select class="settings-select" id="set-normalize">
                   <option value="both">Both directions</option>
                   <option value="raiseOnly">Raise only</option>
@@ -181,7 +181,7 @@
               </div>
               <div class="settings-row">
                 <label class="settings-label" for="set-fusion-enabled"
-                  title="When off, paired files process as Mode 1 on the enhanced track only (no fusion with the original).">
+                  title="When off, paired files skip fusion entirely and process as Mode 1 on the raw original (the enhanced track is not used).">
                   Enable fusion
                 </label>
                 <label class="toggle">
@@ -333,7 +333,7 @@
               <div class="step-number">1</div>
               <div class="step-body">
                 <h3>Mode 1 &middot; Original only</h3>
-                <p>Drop the raw recording with no Adobe Podcast step. AudioPro analyzes it, applies conditional local denoise (RNNoise) only when the measured noise floor calls for it, repairs whatever the detectors actually flag (clipping, hum, clicks, silence padding), then runs the shared tone/dynamics/loudness chain below.</p>
+                <p>Drop the raw recording with no Adobe Podcast step. AudioPro analyzes it, applies conditional local denoise (RNNoise) only when the measured noise floor calls for it, repairs whatever the detectors actually flag (clipping, hum, silence padding &mdash; plus an unconditional, safe de-click pass since mouth clicks have no reliable detector), then runs the shared tone/dynamics/loudness chain below.</p>
               </div>
             </div>
 
@@ -361,7 +361,7 @@
               <div class="step-number">2</div>
               <div class="step-body">
                 <h3>Clean + repair (conditional)</h3>
-                <p>Mode 1 only: RNNoise denoise gated by the measured noise floor, scaled to how far over threshold it is. Both modes: hum notches, click removal, de-clip, and head/tail silence trim &mdash; each one only inserted into the chain when its detector fired, so already-clean material renders bit-for-bit through the same path untouched.</p>
+                <p>Mode 1 only: RNNoise denoise gated by the measured noise floor, scaled to how far over threshold it is. Both modes: hum notches, de-clip, and head/tail silence trim &mdash; each one only inserted into the chain when its detector fired, so already-clean material skips them entirely. De-click is the one exception: there's no reliable detector for mouth clicks, so it runs on every file with safe, conservative defaults rather than waiting on a detector that doesn't exist yet.</p>
               </div>
             </div>
 
@@ -369,7 +369,7 @@
               <div class="step-number">3</div>
               <div class="step-body">
                 <h3>Tone + Dynamics</h3>
-                <p>HPF &rarr; EQ cuts (mud/box/honk) &rarr; gentle leveling compression (skipped if the source is already dense) &rarr; optional parallel "body" compression &rarr; presence/air boosts (air shelf skips automatically on band-limited sources) &rarr; dynamic de-esser (only engages on measured sibilance).</p>
+                <p>HPF &rarr; EQ cuts (mud/box/honk) &rarr; gentle leveling compression (skipped if the source is already dense) &rarr; optional parallel "body" compression &rarr; presence/air boosts (air shelf skips automatically on band-limited sources) &rarr; optional harmonic exciter ("Presence extra", off by default) &rarr; dynamic de-esser (only engages on measured sibilance).</p>
               </div>
             </div>
 
@@ -385,7 +385,7 @@
               <div class="step-number">5</div>
               <div class="step-body">
                 <h3>EQ editor</h3>
-                <p>Open the EQ tab, pick a source file from the dropdown, hit Play and drag bands in real time. Every band change auto-saves &mdash; when you go back to Processing and hit <strong>Process All</strong>, the pipeline uses whatever curve the editor is currently showing. <strong>Reset</strong> returns to the base EQ; <strong>Bypass</strong> A/Bs the preview level-matched to the current curve (a make-up gain measured on that file&rsquo;s own spectrum cancels the average loudness the EQ adds, so the A/B judges tone, not volume). Mode 2 pairs add an <strong>Original / Enhanced / Fusion</strong> switch to audition the three raw sources before any EQ is applied.</p>
+                <p>Open the EQ tab, pick a source file from the dropdown, hit Play and drag bands in real time (shift-click a band to disable it, scroll to change its Q). Every band change auto-saves &mdash; when you go back to Processing and hit <strong>Process All</strong>, the pipeline uses whatever curve the editor is currently showing. <strong>Reset</strong> returns to the base EQ; <strong>Bypass</strong> A/Bs the preview level-matched to the current curve (a make-up gain measured on that file&rsquo;s own spectrum cancels the average loudness the EQ adds, so the A/B judges tone, not volume). Mode 2 pairs add an <strong>Original / Enhanced / Fusion</strong> switch to compare the three raw candidate signals &mdash; each one still plays through the same live EQ curve you're editing, so you're choosing the best starting point, not toggling the EQ on and off.</p>
               </div>
             </div>
 
@@ -404,7 +404,12 @@
               <div class="shortcut-row">
                 <div class="shortcut-context">Anywhere</div>
                 <kbd>Esc</kbd>
-                <span class="shortcut-desc">Close context menu</span>
+                <span class="shortcut-desc">Close the context menu or spectrogram viewer</span>
+              </div>
+              <div class="shortcut-row">
+                <div class="shortcut-context">EQ tab</div>
+                <kbd>Space</kbd>
+                <span class="shortcut-desc">Play / Pause the preview</span>
               </div>
             </div>
           </div>
@@ -425,7 +430,7 @@
     <button class="ctx-item" data-action="move-down" role="menuitem">Move down</button>
     <div class="ctx-separator" role="separator"></div>
     <button class="ctx-item" data-action="spectrogram" role="menuitem">View spectrogram&hellip;</button>
-    <button class="ctx-item" data-action="open-finder" role="menuitem">Open in Finder</button>
+    <button class="ctx-item" data-action="open-finder" role="menuitem">Show in folder</button>
   </div>
 
   <!-- Spectrogram viewer (Fase 8c — visual QC inspection) -->

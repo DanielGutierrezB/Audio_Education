@@ -6,6 +6,8 @@ const Store = require('electron-store');
 const pipeline = require('./src/pipeline');
 const binPaths = require('./src/bin-paths');
 const logger = require('./src/logger');
+const pairing = require('./src/pairing');
+const { DELIVERY_PRESETS, DEFAULT_PRESET } = require('./src/presets');
 
 const VALID_STORE_KEYS = new Set([
   'hpfFrequency', 'deEsserEnabled',
@@ -16,7 +18,26 @@ const VALID_STORE_KEYS = new Set([
   'manualEqChain', 'manualEqApply',
   // Custom output directory ('' = default sibling Audio_Pro/ next to source).
   'customOutputDir',
+  // Delivery target (docs/PLAN.md §2.3).
+  'platformPreset',
+  // Dynamics / tone extras (docs/PLAN.md §2.6).
+  'denoiseMode', 'compressionMode', 'bodyPct', 'airExtraEnabled', 'trimSilence', 'normalizeMode',
+  // Mode 2 fusion — original + Adobe Podcast Enhance 100% (docs/PLAN.md §2.4).
+  'fusionEnabled', 'fusionMode', 'fusionCrossoverHz', 'fusionOriginalPct',
 ]);
+
+const ENUM_VALUES = {
+  platformPreset:  Object.keys(DELIVERY_PRESETS),
+  denoiseMode:     ['auto', 'off'],
+  compressionMode: ['auto', 'off'],
+  normalizeMode:   ['both', 'raiseOnly'],
+  fusionMode:      ['bands', 'bed', 'bands_bed'],
+};
+const RANGE_VALUES = {
+  bodyPct:           [0, 100],
+  fusionCrossoverHz: [80, 500],
+  fusionOriginalPct: [0, 40],
+};
 
 const store = new Store({
   defaults: {
@@ -28,6 +49,17 @@ const store = new Store({
     manualEqChain: '',
     manualEqApply: false,
     customOutputDir: '',
+    platformPreset: DEFAULT_PRESET,
+    denoiseMode: 'auto',
+    compressionMode: 'auto',
+    bodyPct: 0,
+    airExtraEnabled: false,
+    trimSilence: true,
+    normalizeMode: 'both',
+    fusionEnabled: true,
+    fusionMode: 'bands',
+    fusionCrossoverHz: 200,
+    fusionOriginalPct: 20,
   },
 });
 
@@ -85,12 +117,20 @@ ipcMain.handle('log:push', (_, category, message, data) => {
 ipcMain.handle('store:get', (_, key) => store.get(key));
 ipcMain.handle('store:set', (_, key, value) => {
   if (typeof key !== 'string' || !VALID_STORE_KEYS.has(key)) return;
-  const BOOL_KEYS = new Set(['deEsserEnabled', 'showNotifications', 'manualEqApply']);
+  const BOOL_KEYS = new Set([
+    'deEsserEnabled', 'showNotifications', 'manualEqApply',
+    'airExtraEnabled', 'trimSilence', 'fusionEnabled',
+  ]);
   const STRING_KEYS = new Set(['outputFormat', 'manualEqChain', 'customOutputDir']);
-  const INT_KEYS = new Set(['hpfFrequency', 'sampleRate']);
+  const INT_KEYS = new Set(['hpfFrequency', 'sampleRate', 'bodyPct', 'fusionCrossoverHz', 'fusionOriginalPct']);
   if (BOOL_KEYS.has(key) && typeof value !== 'boolean') return;
   if (STRING_KEYS.has(key) && typeof value !== 'string') return;
   if (INT_KEYS.has(key) && (typeof value !== 'number' || !Number.isFinite(value))) return;
+  if (ENUM_VALUES[key] && !ENUM_VALUES[key].includes(value)) return;
+  if (RANGE_VALUES[key]) {
+    const [lo, hi] = RANGE_VALUES[key];
+    if (value < lo || value > hi) return;
+  }
   if (key === 'manualEqChain') {
     if (value.length > 4096) return;
     if (/[`$;&|<>\\\n\r]/.test(value)) return;
@@ -115,9 +155,9 @@ ipcMain.handle('folders:open', async (event) => {
 ipcMain.handle('files:open', async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const result = await dialog.showOpenDialog(win, {
-    title: 'Select WAV files',
+    title: 'Select audio files',
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: 'WAV Files', extensions: ['wav'] }],
+    filters: [{ name: 'Audio Files', extensions: pairing.AUDIO_EXTS.map(e => e.slice(1)) }],
   });
   if (result.canceled) return [];
   return result.filePaths.map(filePath => {
@@ -158,17 +198,20 @@ ipcMain.handle('output:openDir', () => {
   return true;
 });
 
+// Scans a dropped/selected folder for audio files and auto-detects Mode 2
+// candidates via the `adobe-podcast-batch` `Enhanced/` convention
+// (docs/PLAN.md §2.1, §2.4, §3). Originals that pair with an enhanced
+// counterpart carry a `pairPath`; everything else queues as Mode 1.
 ipcMain.handle('folders:scan', (_, folderPath) => {
   if (typeof folderPath !== 'string' || !folderPath || folderPath.includes('..')) return [];
   try {
-    const entries = fs.readdirSync(folderPath, { withFileTypes: true });
-    return entries
-      .filter(e => e.isFile() && e.name.toLowerCase().endsWith('.wav'))
-      .map(e => {
-        const filePath = path.join(folderPath, e.name);
-        const { size } = fs.statSync(filePath);
-        return { path: filePath, name: e.name, size };
-      });
+    const { pairs, singles } = pairing.findPairs(folderPath);
+    const paired = pairs.map(({ original, enhanced }) => ({ ...original, pairPath: enhanced.path }));
+    const result = [...paired, ...singles];
+    if (pairs.length) {
+      logger.push('files', `Mode 2 pairs detected in ${folderPath}: ${pairs.length}`, pairs.map(p => path.basename(p.original.path)));
+    }
+    return result;
   } catch {
     return [];
   }
@@ -187,33 +230,50 @@ ipcMain.handle('pipeline:start', (event, files) => {
     if (typeof f?.path !== 'string' || !f.path || f.path.includes('..')) {
       return { error: 'Invalid file path in list' };
     }
+    if (f.pairPath !== undefined && (typeof f.pairPath !== 'string' || !f.pairPath || f.pairPath.includes('..'))) {
+      return { error: 'Invalid pair path in list' };
+    }
   }
 
   const win = BrowserWindow.fromWebContents(event.sender);
   const settings = {
-    hpfFrequency:    store.get('hpfFrequency'),
-    deEsserEnabled:  store.get('deEsserEnabled'),
-    outputFormat:    store.get('outputFormat'),
-    sampleRate:      store.get('sampleRate'),
-    manualEqChain:   store.get('manualEqChain'),
-    manualEqApply:   store.get('manualEqApply'),
-    customOutputDir: store.get('customOutputDir'),
+    hpfFrequency:      store.get('hpfFrequency'),
+    deEsserEnabled:    store.get('deEsserEnabled'),
+    outputFormat:      store.get('outputFormat'),
+    sampleRate:        store.get('sampleRate'),
+    manualEqChain:     store.get('manualEqChain'),
+    manualEqApply:     store.get('manualEqApply'),
+    customOutputDir:   store.get('customOutputDir'),
+    platformPreset:    store.get('platformPreset'),
+    denoiseMode:       store.get('denoiseMode'),
+    compressionMode:   store.get('compressionMode'),
+    bodyPct:           store.get('bodyPct'),
+    airExtraEnabled:   store.get('airExtraEnabled'),
+    trimSilence:       store.get('trimSilence'),
+    normalizeMode:     store.get('normalizeMode'),
+    fusionEnabled:     store.get('fusionEnabled'),
+    fusionMode:        store.get('fusionMode'),
+    fusionCrossoverHz: store.get('fusionCrossoverHz'),
+    fusionOriginalPct: store.get('fusionOriginalPct'),
   };
 
   pipelineState = { running: true, cancelled: false, currentProc: null };
 
-  logger.push('pipeline', `Starting batch: ${files.length} files`, {
+  const pairedCount = files.filter(f => f.pairPath).length;
+  logger.push('pipeline', `Starting batch: ${files.length} files (${pairedCount} Mode 2 pairs)`, {
     outputFormat: settings.outputFormat,
     sampleRate: settings.sampleRate,
     manualEq: settings.manualEqApply,
+    platformPreset: settings.platformPreset,
   });
 
   const emit = (type, data) => {
     if (!win.isDestroyed()) win.webContents.send('pipeline:event', { type, ...data });
     if (type === 'file:start') logger.push('pipeline', `▶ Processing: ${data.file}`, `${data.index + 1}/${data.total}`);
-    if (type === 'file:done') logger.push('pipeline', `✓ Done: ${data.file}`, `→ ${data.outputPath}`);
+    if (type === 'file:done') logger.push('pipeline', `✓ Done: ${data.file} [Mode ${data.mode}]`, `→ ${data.outputPath}`);
     if (type === 'file:error') logger.push('pipeline', `✗ Error: ${data.file}`, data.error);
     if (type === 'loudness') logger.push('loudness', data.message, path.basename(data.file));
+    if (type === 'qc') logger.push('qc', `Flags for ${path.basename(data.file)} [Mode ${data.mode}]`, data.flags.map(f => f.code).join(', ') || 'none');
     if (type === 'progress' && data.stepIndex !== undefined) {
       const stepKey = `${data.file}:${data.stepIndex}`;
       if (!emit._loggedSteps) emit._loggedSteps = new Set();

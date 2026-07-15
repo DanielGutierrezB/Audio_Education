@@ -64,11 +64,14 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF#refs/tags/}"
           notes="Unsigned macOS build (Apple Silicon / arm64) — first launch needs right-click → Open to bypass Gatekeeper (see README § Known limitations)."
-          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload "$tag" "${{ steps.dmg.outputs.path }}" --clobber --repo "${{ github.repository }}"
-          else
-            gh release create "$tag" "${{ steps.dmg.outputs.path }}" \
+          # build-windows.yml publishes the same release from a parallel job
+          # on this tag; whichever of the two runs `release create` first
+          # wins, the other falls back to `release upload` against the
+          # now-existing release instead of racing a duplicate create.
+          if ! gh release create "$tag" "${{ steps.dmg.outputs.path }}" \
               --title "AudioPro $tag" \
               --notes "$notes" \
-              --repo "${{ github.repository }}"
+              --repo "${{ github.repository }}"; then
+            echo "release create failed (likely already exists) — uploading asset instead"
+            gh release upload "$tag" "${{ steps.dmg.outputs.path }}" --clobber --repo "${{ github.repository }}"
           fi

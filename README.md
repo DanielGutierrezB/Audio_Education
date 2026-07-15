@@ -5,7 +5,7 @@ recording, or the raw recording **plus** its Adobe Podcast Enhance Speech
 counterpart, and get course-ready output with consistent loudness and a
 polished, full-bodied voice.
 
-Current version: **v0.3.1** (macOS arm64 · Windows x64).
+Current version: **v0.3.2** (macOS arm64 · Windows x64).
 
 ## Purpose
 
@@ -193,10 +193,12 @@ npm run build:win    # Windows x64 NSIS installer → dist/
 The artifacts are unsigned — first-time macOS users need to right-click →
 **Open** to bypass Gatekeeper.
 
-`.github/workflows/build-macos-dmg.yml` builds the same DMG on a macOS Actions
-runner and attaches it to a GitHub Release whenever a `v*.*.*` tag is pushed
-(or uploads it as a workflow artifact on a manual `workflow_dispatch` run,
-without publishing a release).
+`.github/workflows/build-macos-dmg.yml` and `.github/workflows/build-windows.yml`
+build the DMG and the NSIS installer on a macOS / Windows Actions runner
+respectively (`windows-latest` is real Windows, so this is an actual build+
+package smoke test, not a cross-compile guess) and attach both to the same
+GitHub Release whenever a `v*.*.*` tag is pushed (or upload as workflow
+artifacts on a manual `workflow_dispatch` run, without publishing a release).
 
 ## Settings
 

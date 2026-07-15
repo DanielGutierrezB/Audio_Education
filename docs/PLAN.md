@@ -1,11 +1,17 @@
 # Plan de acción — AudioPro: la mejor voz para cursos
 
-> Estado: **PLAN aprobado para implementación por fases — ninguna fase implementada aún.**
-> Revisión 2 (misma sesión): incorpora los **dos modos de entrada** definidos por Daniel
-> y la integración con [`adobe-podcast-batch`](https://github.com/DanielGutierrezB/adobe-podcast-batch).
-> Este documento es el punto de partida de la siguiente sesión de trabajo.
-> Base: rama `cursor/unify-adobe-podcast-pipeline-940c` (pipeline unificado v0.2.0:
-> probe → measure → render, EQ F6 + loudnorm a −16 LUFS).
+> Estado: **Fases 1–7 y 9 implementadas en v0.3.0** (esta sesión, rama
+> `cursor/unify-adobe-podcast-pipeline-940c`). Fase 8 parcial: quedan chips QC +
+> badge de modo + verificación de salida en la UI, pero falta A/B con nivel
+> igualado, A/B de tres vías en Modo 2, espectrograma y export del informe QC
+> del lote. Fase 10 (enhance embebido, Nivel 2 de §3.1) **no** se aborda — sigue
+> pendiente de la decisión D6 (§5). Ver `§4` para el detalle fase por fase y
+> `test/` (Fase 9) para la suite que valida los detectores y ambos modos.
+> Revisión 2 (misma sesión de diseño): incorpora los **dos modos de entrada**
+> definidos por Daniel y la integración con
+> [`adobe-podcast-batch`](https://github.com/DanielGutierrezB/adobe-podcast-batch).
+> Base de diseño: pipeline v0.2.0 (probe → measure → render, EQ F6 + loudnorm a
+> −16 LUFS) — reemplazado por el pipeline de este documento.
 
 ## 0. Objetivo
 
@@ -391,7 +397,7 @@ valor llegue pronto: primero *saber* (medir), luego *no fallar* (verificar), lue
 *sonar mejor* (dinámica/cuerpo), luego *reparar*, luego los dos modos (fusión y
 limpieza local), y al final el enhance embebido.
 
-### Fase 1 — Módulo de métricas y QC de entrada
+### Fase 1 — Módulo de métricas y QC de entrada ✅ implementada
 **Archivos:** `src/metrics.js` (nuevo), `src/pipeline.js` (llamada), `main.js` (evento IPC), renderer (mostrar).
 - `analyzeFile(path)`: una pasada FFmpeg con `ebur128+astats+aspectralstats+silencedetect`
   + una pasada de bandas (`asplit` → bandpass múltiple + astats) → objeto `{ loudness,
@@ -402,7 +408,7 @@ limpieza local), y al final el enhance embebido.
 - **Aceptación:** procesar los WAV sintéticos del corpus (Fase 9 seed) produce
   exactamente los flags esperados; cero falsos positivos sobre el corpus limpio.
 
-### Fase 2 — Presets de plataforma + verificación de salida
+### Fase 2 — Presets de plataforma + verificación de salida ✅ implementada
 **Archivos:** `src/pipeline.js`, `main.js` (schema settings), renderer (selector).
 - `DELIVERY_PRESETS`, selector UI, normalización bidireccional (con opción legacy).
 - Post-render: re-medir I/TP con `ebur128` y emitir `file:verified {i, tp, delta}`;
@@ -410,14 +416,14 @@ limpieza local), y al final el enhance embebido.
 - **Aceptación:** los 3 presets aterrizan en ±0.5 LU del target sobre el corpus; el
   informe QC de salida aparece en la UI y en el log copiable.
 
-### Fase 3 — Dinámica: nivelador + limitador
+### Fase 3 — Dinámica: nivelador + limitador ✅ implementada
 **Archivos:** `src/pipeline.js`.
 - `acompressor` condicional a LRA de entrada; `alimiter` siempre (techo del preset).
 - Exponer "Compresión: auto / off" en settings.
 - **Aceptación:** archivo con LRA 14 LU termina ≤ 8 LU sin bombeo audible (revisión
   A/B); archivo con LRA 5 LU pasa sin compresión (flag A14 respetado).
 
-### Fase 4 — Cuerpo y presencia
+### Fase 4 — Cuerpo y presencia ✅ implementada
 **Archivos:** `src/pipeline.js`, renderer (slider "Cuerpo").
 - Rama paralela de cuerpo (asplit/acompressor/amix) con peso 0–0.5.
 - Shelf de aire condicional al rolloff (A13). `aexciter` opcional detrás de un toggle
@@ -425,7 +431,7 @@ limpieza local), y al final el enhance embebido.
 - **Aceptación:** con "Cuerpo" al 30 %, `cuerpo_ratio` del master sube ≥ 2 dB vs
   cuerpo 0 %, sin cambiar el LUFS integrado (±0.3) ni el TP.
 
-### Fase 5 — Reparación condicional
+### Fase 5 — Reparación condicional ✅ implementada
 **Archivos:** `src/metrics.js` (detectores A4, A7, A9), `src/pipeline.js` (inserción condicional).
 - `adeclip` si A1, `adeclick` si A9, `bandreject` si A8, trim si A11, de-esser
   dinámico si A4, HPF dinámico si A7.
@@ -435,7 +441,7 @@ limpieza local), y al final el enhance embebido.
   artefacto (métricas antes/después en el informe) y los archivos limpios salen con
   cadena idéntica a Fase 4 (bit-a-bit).
 
-### Fase 6 — Modo 2: emparejado + fusión con el original
+### Fase 6 — Modo 2: emparejado + fusión con el original ✅ implementada
 **Archivos:** `src/pipeline.js`, `src/pairing.js` (nuevo), `main.js`, renderer (emparejado + slider "Original").
 - Emparejado por nombre/duración con reconocimiento de la convención
   `X.wav ↔ Enhanced/X.wav` de `adobe-podcast-batch` (§3): soltar la carpeta del lote
@@ -449,7 +455,7 @@ limpieza local), y al final el enhance embebido.
   cuyo `cuerpo_ratio` ≥ el del enhanced solo; sin comb audible en A/B; la carpeta
   `Enhanced/` de `adobe-podcast-batch` se empareja sin intervención manual.
 
-### Fase 7 — Modo 1: limpieza local condicional
+### Fase 7 — Modo 1: limpieza local condicional ✅ implementada
 **Archivos:** `src/pipeline.js`, `src/metrics.js` (gate por noise floor), `scripts/fetch-bin.sh` / `.ps1` (modelo `.rnnn`), renderer (indicador).
 - `arnndn` (RNNoise, modelo `somnolent-hogwash` ~290 KB) insertado antes de la
   reparación solo si `Noise_floor` > umbral; `mix` escalado con el exceso de ruido
@@ -460,28 +466,36 @@ limpieza local), y al final el enhance embebido.
   sin voz acuosa audible en A/B; material limpio pasa **bit-a-bit idéntico** (gate
   cerrado, filtro ni siquiera se inserta).
 
-### Fase 8 — UX de control de calidad
+### Fase 8 — UX de control de calidad ⚠️ parcial
 **Archivos:** renderer.
-- A/B con **nivel igualado** en el editor EQ (el A/B actual engaña: lo procesado suena
-  "mejor" solo por estar más alto — igualar con ganancia de compensación medida).
-  En Modo 2, A/B de tres vías: original / enhanced / fusión.
-- Espectrograma opcional por archivo (`showspectrumpic`, ya validado que existe) para
-  inspección visual de artefactos.
-- Exportar informe QC del lote (texto/markdown) para adjuntar al entregable del curso.
+- ✅ Hecho: chips de flags QC por archivo (`renderer/js/app.js` → `renderFlagChips`),
+  badge de modo (pendiente/fusionado/fallback) y chip de verificación post-render
+  (I/TP re-medidos, badge ok/warn) junto a cada archivo de la cola.
+- ⏳ Pendiente: A/B con **nivel igualado** en el editor EQ (el A/B actual engaña: lo
+  procesado suena "mejor" solo por estar más alto — igualar con ganancia de
+  compensación medida). En Modo 2, A/B de tres vías: original / enhanced / fusión.
+- ⏳ Pendiente: espectrograma opcional por archivo (`showspectrumpic`, ya validado que
+  existe) para inspección visual de artefactos.
+- ⏳ Pendiente: exportar informe QC del lote (texto/markdown) para adjuntar al
+  entregable del curso.
 - **Aceptación:** A/B no cambia de loudness percibido (medición: misma M máx ±0.5 LU).
 
-### Fase 9 — Corpus de validación y regresión
+### Fase 9 — Corpus de validación y regresión ✅ implementada (corpus sintético; corpus real pendiente)
 **Archivos:** `test/` (nuevo), `package.json` (script `npm test`), fixtures generadas con ffmpeg.
-- Corpus sintético generado por script (tonos, ruido, voz TTS si hay, artefactos
-  inyectados: clipping, hum, clicks, silencio, banda limitada) + **pedir a Daniel 5–10
-  clases reales en pares** (original + enhanced 100 %) como corpus privado no versionado.
-- Tests (node:test): cada detector, conformidad de presets, invariantes del render
-  (duración ±50 ms, formato, LUFS/TP), emparejado Modo 2, gate del denoise Modo 1.
-  Corren con `npm test` en CI.
+- ✅ Hecho: corpus sintético generado por script (`test/fixtures.js`, vía `lavfi`):
+  limpio, ruidoso, hum, sibilante, recortado, sin aire, aplastado, silencios de
+  cabeza/cola, DC offset. 33 tests (`node:test`) cubren cada detector, conformidad de
+  presets, invariantes del render (duración, formato, LUFS/TP), emparejado Modo 2 y
+  el gate del denoise Modo 1 — más Mode 1/Mode 2 end-to-end y cancelación. Corren con
+  `npm test` (ver `.github/workflows/test.yml`, en cada push/PR a `main`).
+- ⏳ Pendiente: **pedir a Daniel 5–10 clases reales en pares** (original + enhanced
+  100 %) como corpus privado no versionado — sigue siendo la D4 abierta (§5); sin él
+  los umbrales de `QC_THRESHOLDS` quedan calibrados contra el corpus sintético, no
+  contra voz real.
 - **Aceptación:** suite verde; añadir un artefacto nuevo al corpus rompe el test hasta
   implementar su detector.
 
-### Fase 10 — "Un solo proceso": enhance embebido (Nivel 2 de §3.1)
+### Fase 10 — "Un solo proceso": enhance embebido (Nivel 2 de §3.1) ⏳ no iniciada
 **Archivos:** `src/enhance/` (motor phonos compartido), `main.js` (login Adobe + token), renderer (estados remotos en la cola).
 - Incorporar `phonos.js` + compuerta de créditos de `batch.js` (idealmente como
   paquete compartido con `adobe-podcast-batch` para no bifurcar el motor).

@@ -1,5 +1,14 @@
 # AudioPro — Design
 
+> **Superseded by `docs/PLAN.md`.** This document describes the original
+> v0.2.0 design (fixed EQ + loudnorm only, Adobe Podcast as the only clean
+> source, no per-file adaptation). As of v0.3.0 the pipeline adds QC-driven
+> conditional processing, two entry modes, and Mode 2 fusion — see
+> `docs/PLAN.md` for the current design and implementation status. Kept here
+> for historical context on the EQ curve rationale and the ML-denoise
+> non-goal (still true for *unconditional* denoise; Mode 1 now runs RNNoise,
+> but only when a measured noise floor calls for it — see `docs/PLAN.md` §2.5).
+
 ## Vision
 
 Finishing tool for course voice recordings. The voice is cleaned upstream by

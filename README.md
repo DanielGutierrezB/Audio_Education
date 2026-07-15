@@ -112,6 +112,29 @@ target, or "raise only" as a conservative legacy mode.
   touching saved state.
 - A manual EQ override replaces the built-in cuts+boosts curve entirely; the
   dynamic de-esser and optional exciter still apply on top of it.
+- **Level-matched A/B** — a live "level-matched (±N dB)" readout next to
+  Bypass shows the makeup gain needed so the EQ'd preview and the raw source
+  play back at the same perceived loudness, derived from the same offline FFT
+  used for auto-fit (not a fixed number). It recomputes whenever you switch
+  source or move a band, so A/B comparisons can't be fooled by "louder sounds
+  better".
+- **Three-way A/B for Mode 2 pairs** — when the selected file has an
+  `Enhanced/` pair, a second toggle (**Original / Enhanced / Fusion**)
+  appears. "Fusion" renders an on-demand preview through the same filter
+  graph `Process All` would use (cached per file + fusion settings), and
+  switching sources hot-swaps the audio element in place, preserving
+  playback position so you can A/B the exact same passage.
+
+## QC tools
+
+- **Spectrogram viewer** — right-click any queued file → **View
+  spectrogram** to open a modal with an `showspectrumpic` render, useful for
+  visually spotting hum lines, clipping, or musical-noise speckle from
+  over-aggressive denoise.
+- **Export QC report** — the toolbar button writes a Markdown summary of the
+  whole batch (per-file mode, duration, QC flags, output verification badge,
+  and a flagged-files detail section) to a location you choose, ready to
+  attach to a course deliverable.
 
 ## Output
 
@@ -210,9 +233,12 @@ src/
   ffmpeg-run.js               Shared ffmpeg/ffprobe spawn helper (timeout, progress, cancellation)
   bin-paths.js                Resolves paths to bundled binaries + RNNoise model (dev vs packaged)
   logger.js                   Structured logging (copyable from the app)
+  spectrogram.js              showspectrumpic PNG render for the QC spectrogram modal
+  qc-report.js                Markdown QC report builder for the batch export button
 test/
   fixtures.js                 Synthetic WAV generator (ffmpeg lavfi) for the corpus below
-  *.test.js                   node:test suite — metrics, pairing, fusion, presets, pipeline, ffmpeg-run
+  *.test.js                   node:test suite — metrics, pairing, fusion, presets, pipeline,
+                               ffmpeg-run, spectrogram, qc-report
 scripts/
   fetch-bin.sh                Downloads macOS arm64 ffmpeg/ffprobe/RNNoise model (SHA256-pinned)
   fetch-bin.ps1                Downloads Windows x64 ffmpeg/ffprobe/RNNoise model

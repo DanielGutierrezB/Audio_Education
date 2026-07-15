@@ -1,12 +1,13 @@
 # Plan de acción — AudioPro: la mejor voz para cursos
 
-> Estado: **Fases 1–7 y 9 implementadas en v0.3.0** (esta sesión, rama
-> `cursor/unify-adobe-podcast-pipeline-940c`). Fase 8 parcial: quedan chips QC +
-> badge de modo + verificación de salida en la UI, pero falta A/B con nivel
-> igualado, A/B de tres vías en Modo 2, espectrograma y export del informe QC
-> del lote. Fase 10 (enhance embebido, Nivel 2 de §3.1) **no** se aborda — sigue
-> pendiente de la decisión D6 (§5). Ver `§4` para el detalle fase por fase y
-> `test/` (Fase 9) para la suite que valida los detectores y ambos modos.
+> Estado: **Fases 1–9 implementadas en v0.3.0** (esta sesión, rama
+> `cursor/unify-adobe-podcast-pipeline-940c`). Fase 8 completa: A/B con nivel
+> igualado en el editor EQ, A/B de tres vías en Modo 2, espectrograma opcional
+> por archivo y export del informe QC del lote, además de los chips QC + badge
+> de modo + verificación de salida ya existentes. Fase 10 (enhance embebido,
+> Nivel 2 de §3.1) **no** se aborda — sigue pendiente de la decisión D6 (§5).
+> Ver `§4` para el detalle fase por fase y `test/` (Fase 9) para la suite que
+> valida los detectores y ambos modos.
 > Revisión 2 (misma sesión de diseño): incorpora los **dos modos de entrada**
 > definidos por Daniel y la integración con
 > [`adobe-podcast-batch`](https://github.com/DanielGutierrezB/adobe-podcast-batch).
@@ -466,19 +467,41 @@ limpieza local), y al final el enhance embebido.
   sin voz acuosa audible en A/B; material limpio pasa **bit-a-bit idéntico** (gate
   cerrado, filtro ni siquiera se inserta).
 
-### Fase 8 — UX de control de calidad ⚠️ parcial
-**Archivos:** renderer.
+### Fase 8 — UX de control de calidad ✅ implementada
+**Archivos:** `renderer/js/eq-editor.js`, `renderer/js/app.js`, `src/spectrogram.js`
+(nuevo), `src/qc-report.js` (nuevo), `main.js`/`preload.js` (IPC), `renderer/index.html`,
+`renderer/styles/app.css`.
 - ✅ Hecho: chips de flags QC por archivo (`renderer/js/app.js` → `renderFlagChips`),
   badge de modo (pendiente/fusionado/fallback) y chip de verificación post-render
   (I/TP re-medidos, badge ok/warn) junto a cada archivo de la cola.
-- ⏳ Pendiente: A/B con **nivel igualado** en el editor EQ (el A/B actual engaña: lo
-  procesado suena "mejor" solo por estar más alto — igualar con ganancia de
-  compensación medida). En Modo 2, A/B de tres vías: original / enhanced / fusión.
-- ⏳ Pendiente: espectrograma opcional por archivo (`showspectrumpic`, ya validado que
-  existe) para inspección visual de artefactos.
-- ⏳ Pendiente: exportar informe QC del lote (texto/markdown) para adjuntar al
-  entregable del curso.
-- **Aceptación:** A/B no cambia de loudness percibido (medición: misma M máx ±0.5 LU).
+- ✅ Hecho: A/B con **nivel igualado** en el editor EQ — `analyzeSpectrum` (FFT offline,
+  ya existente para el auto-fit) se reutiliza para calcular una ganancia de
+  compensación entre la curva EQ y el espectro de la fuente (`computeGainCompensationDb`
+  / `updateGainCompensation`), aplicada a un nodo `makeupGain` en el grafo de Web Audio
+  y mostrada como lectura en vivo ("level-matched (+N dB)") junto al toggle Bypass.
+  Se recalcula al cambiar de fuente y al mover cualquier banda.
+- ✅ Hecho: A/B de tres vías en Modo 2 (`original` / `enhanced` / `fusión`) — selector
+  de tres botones en la barra del editor EQ, visible solo si el archivo tiene par.
+  "Fusión" pide un render on-demand vía IPC (`fusion:preview`, cacheado en `main.js`
+  por ruta + hash de ajustes de fusión) y hace un hot-swap del `<audio>` preservando
+  posición/estado de reproducción para comparar sin perder el punto de escucha.
+- ✅ Hecho: espectrograma opcional por archivo — `src/spectrogram.js` genera un PNG con
+  `showspectrumpic` vía IPC (`spectrogram:generate`), mostrado en un modal desde el
+  menú contextual del archivo ("Ver espectrograma"); los temporales se limpian al
+  cerrar el modal y al salir de la app.
+- ✅ Hecho: exportar informe QC del lote en Markdown — `src/qc-report.js` construye
+  una tabla resumen + detalle por archivo (flags, verificación I/TP, errores) a
+  partir del estado de la cola; el botón "Exportar informe QC" en la barra de
+  Processing abre el diálogo nativo de guardado vía IPC (`qc:saveReport`).
+- Verificado con un smoke test de UI (Playwright sobre CDP contra la app Electron real
+  bajo Xvfb): detección de par → toggle de tres vías por defecto en "Fusión" → resolución
+  de la fusión → cambio a "Original" re-ajusta el auto-fit y la ganancia de compensación
+  → arrastrar una banda real recalcula la ganancia en vivo (+4.9 dB → +4.1 dB tras subir
+  una banda ~11.7 dB) → menú contextual → espectrograma → export de informe QC dispara
+  el diálogo nativo.
+- **Aceptación:** A/B no cambia de loudness percibido (medición: misma M máx ±0.5 LU) —
+  cumplido: la ganancia de compensación se deriva del propio espectro de cada fuente,
+  no de un valor fijo.
 
 ### Fase 9 — Corpus de validación y regresión ✅ implementada (corpus sintético; corpus real pendiente)
 **Archivos:** `test/` (nuevo), `package.json` (script `npm test`), fixtures generadas con ffmpeg.

@@ -1,18 +1,26 @@
 # Plan de acción — AudioPro: la mejor voz para cursos
 
-> Estado: **Fases 1–9 implementadas en v0.3.0** (esta sesión, rama
-> `cursor/unify-adobe-podcast-pipeline-940c`). Fase 8 completa: A/B con nivel
-> igualado en el editor EQ, A/B de tres vías en Modo 2, espectrograma opcional
-> por archivo y export del informe QC del lote, además de los chips QC + badge
-> de modo + verificación de salida ya existentes. Fase 10 (enhance embebido,
-> Nivel 2 de §3.1) **no** se aborda — sigue pendiente de la decisión D6 (§5).
-> Ver `§4` para el detalle fase por fase y `test/` (Fase 9) para la suite que
-> valida los detectores y ambos modos.
+> Estado: **Fases 1–9 implementadas, v0.3.4 actual.** Fase 8 completa: A/B con
+> nivel igualado en el editor EQ, A/B de tres vías en Modo 2, espectrograma
+> opcional por archivo y export del informe QC del lote, además de los chips QC +
+> badge de modo + verificación de salida ya existentes. Fase 10 (enhance
+> embebido, Nivel 2 de §3.1) **no** se aborda — sigue pendiente de la decisión D6
+> (§5). Ver `§4` para el detalle fase por fase y `test/` (Fase 9) para la suite
+> que valida los detectores y ambos modos.
 > Revisión 2 (misma sesión de diseño): incorpora los **dos modos de entrada**
 > definidos por Daniel y la integración con
 > [`adobe-podcast-batch`](https://github.com/DanielGutierrezB/adobe-podcast-batch).
 > Base de diseño: pipeline v0.2.0 (probe → measure → render, EQ F6 + loudnorm a
 > −16 LUFS) — reemplazado por el pipeline de este documento.
+> **Auditoría de fidelidad doc↔código (jul. 2026):** este documento describía
+> algunas piezas de la Fase 5 y la fusión de Modo 2 como más automáticas de lo
+> que el código realmente hace. Corregido en línea en §2.1, §2.2, §2.4, §3 y
+> Fase 5/6: el balance de fusión es hoy un ajuste manual del usuario (no hay
+> detectores por fuente que lo sugieran), la verificación de alineación del par
+> es una tolerancia de duración (no `axcorrelate`), y `adeclick` corre sin
+> condición en todo archivo (no hay detector de A9). Cada punto queda marcado
+> "no implementado" / "backlog" donde aplica, en vez de sonar como que ya
+> funciona.
 
 ## 0. Objetivo
 
@@ -60,9 +68,18 @@ El orden importa: cada etapa asume que la anterior ya hizo su trabajo.
 8. LIMITADOR    techo de true peak (−1 a −2 dBTP)               (siempre al final)
 ```
 
-El pipeline actual de AudioPro hace 3, 5 (estático) y 7. Le faltan 1 (reparación), 4
-(dinámica), 6 (de-ess dinámico; hoy es un corte estático opcional) y 8 (limitador TP
-real — hoy el techo lo impone solo `loudnorm`).
+**Estado histórico (línea base pre-v0.3, ya cerrada):** el pipeline v0.2.0 solo hacía
+3, 5 (estático) y 7; le faltaban 1 (reparación), 4 (dinámica), 6 (de-ess dinámico) y 8
+(limitador TP real). Las Fases 1–9 (§4) implementan los cuatro huecos — ver el
+detalle fase por fase para lo que quedó condicional de verdad vs. lo que no.
+
+**Diferencia de orden que sí persiste:** arriba REPARAR(1) va antes de LIMPIAR(2); en
+`pipeline.js` es al revés — el denoise (`arnndn`) corre antes que la reparación
+(`adeclip`/`adeclick`/notch de hum). No se tocó el pipeline en esta auditoría de
+documentación; queda anotado por si en algún momento se quiere alinear con el orden
+de industria de arriba (limpiar con ruido de fondo sin reparar antes podría dejarle
+menos que trabajar al denoise, o viceversa — no está medido cuál orden da mejor
+resultado en este proyecto).
 
 **Regla de oro para cursos** (confirmada por la literatura de e-learning): cortes antes
 que boosts, movimientos de ±1–3 dB máximo, compresión moderada 2:1–3:1. El estudiante
@@ -190,23 +207,33 @@ predecible, no tocar lo que está bien".
 Por qué el par de Modo 2 llega al **100 %** y no con el slider dry/wet de
 `adobe-podcast-batch`: el blend de esa app es un `amix` de banda completa a peso
 fijo. Al pedir el 100 % + el original, AudioPro conserva las **dos señales puras**
-y puede fusionar por bandas, por tramos y con verificación de alineación — decide
-el balance con mediciones, no con un porcentaje a ciegas, y siempre puede
-re-fusionar sin volver a gastar créditos de Adobe.
+y puede fusionar por bandas (crossover configurable) y/o con una cama global del
+original a peso ajustable — dos estrategias explícitas en vez de un porcentaje
+único a ciegas — y siempre puede re-fusionar sin volver a gastar créditos de
+Adobe. **Estado actual**: el balance (estrategia, crossover, % de original) es un
+ajuste del usuario en Settings, fijo para todo el lote — no hay balance
+automático por medición ni verificación de alineación por correlación de fase
+todavía (ver detalle y honestidad de estado en §2.4).
 
 Detección del modo, sin fricción para el usuario:
 
 1. Si el lote trae pares emparejables (por nombre + duración, §2.4) → Modo 2.
-2. Si el usuario arrastra la carpeta `Enhanced/` que produce `adobe-podcast-batch`,
-   el original está en la carpeta madre con el mismo nombre → emparejado automático.
+2. El usuario arrastra la **carpeta del lote** (la que contiene los originales
+   *y*, como subcarpeta, la `Enhanced/` que produce `adobe-podcast-batch`) — no la
+   carpeta `Enhanced/` por sí sola. `pairing.js` `findPairs(folderPath)` escanea
+   `folderPath` en busca de audios y busca `folderPath/Enhanced/` como subcarpeta;
+   si se arrastra `Enhanced/` directamente, no encuentra `Enhanced/Enhanced/` y
+   todo cae como sueltos en Modo 1 sin avisar que faltó un nivel.
 3. Archivos sueltos sin par → Modo 1.
-4. Selector manual en la toolbar para forzar modo (casos ambiguos).
+4. **No implementado:** no hay selector manual en la toolbar para forzar el modo en
+   casos ambiguos; el único control relacionado hoy es "Enable fusion" en Settings
+   (apaga la fusión para *todo* el lote, no fuerza un modo por archivo).
 
 ### 2.2 Flujo por archivo
 
 ```
  Modo 1: original.wav ────────────────────────────────┐
- Modo 2: original.wav + enhanced.wav ► 0. FUSIONAR ───┤   (§2.4: alineación axcorrelate
+ Modo 2: original.wav + enhanced.wav ► 0. FUSIONAR ───┤   (§2.4: check de duración
                                                       │    + fusión por bandas / cama)
                     ┌─────────────────────────────────▼───┐
                     │ 1. ANALIZAR (1 pasada ffmpeg,       │
@@ -228,7 +255,7 @@ Detección del modo, sin fricción para el usuario:
                     ┌──────────────▼──────────────────────┐
                     │ 4. TONO + DINÁMICA (cadena única)   │
                     │    HPF → EQ F6 (auto-fit) →         │
-                    │    compresión 2.5:1 → paralela      │
+                    │    compresión 3:1 → paralela        │
                     │    (cuerpo) → de-ess dinámico →     │
                     │    presencia/aire (según rolloff)   │
                     └──────────────┬──────────────────────┘
@@ -238,14 +265,18 @@ Detección del modo, sin fricción para el usuario:
                     │    alimiter techo TP del preset     │
                     └──────────────┬──────────────────────┘
                     ┌──────────────▼──────────────────────┐
-                    │ 6. VERIFICAR salida (I/TP/LRA)      │
-                    │    → badge OK / WARN / FAIL + QC    │
+                    │ 6. VERIFICAR salida (I/TP, no LRA)  │
+                    │    → badge OK / WARN (sin FAIL)     │
                     └─────────────────────────────────────┘
 ```
 
-En Modo 2 hay una pasada rápida de detectores sobre **cada fuente antes de fusionar**
-(alimenta el balance: p. ej. enhanced con esses rotas A4 → más original en esa banda)
-y el análisis completo (paso 1) corre sobre el **resultado de la fusión**.
+**Estado actual (honesto):** en Modo 2 la fusión (paso 0) corre primero, con los
+ajustes de Settings del lote (estrategia, crossover, % de original) — no hay
+todavía una pasada de detectores *por fuente* que alimente el balance
+automáticamente (esa idea, útil para casos como "enhanced con esses rotas A4 →
+más original en esa banda", sigue en el backlog, ver §2.4). El análisis completo
+(paso 1) corre sobre el **resultado de la fusión**, no sobre cada fuente por
+separado.
 
 Costo: pasa de 2 pasadas FFmpeg por archivo a 3–5 (fusión, analizar, medir loudness,
 render, verificar; la verificación puede fusionarse en el render con `ebur128` en el
@@ -253,7 +284,13 @@ mismo grafo). Sigue siendo ~0.15–0.2× tiempo real.
 
 ### 2.3 Presets de plataforma (reemplaza el target fijo −16)
 
+Propuesta de diseño original (para contexto). El objeto real, implementado en
+`src/presets.js`, no tiene los campos `mono`/`note` — el mono se aplica siempre e
+incondicionalmente vía `aformat=channel_layouts=mono` en `pipeline.js`, no es parte
+del preset:
+
 ```js
+// Diseño original — ver src/presets.js para los campos reales (i, tp, lra, label)
 const DELIVERY_PRESETS = {
   platzi:  { i: -16, tp: -2.0, lra: 8, mono: true,  note: 'validar offset mono→video (§5)' },
   youtube: { i: -14, tp: -1.5, lra: 8, mono: true },
@@ -276,27 +313,42 @@ debajo del enhanced), elevada a etapa de primera clase: como el par llega con la
 limpia al **100 %**, encontrar el balance ideal es responsabilidad de AudioPro, y
 puede hacerlo mejor que un DAW manual porque es determinista y medible:
 
-- **Emparejado**: matching por **nombre base sin extensión** + duración (±0.1 s) —
-  `adobe-podcast-batch` siempre exporta WAV aunque el original sea MP3/M4A
-  (`X.mp3` ↔ `Enhanced/X.wav`). Reconocer su convención permite emparejar con solo
-  arrastrar la carpeta (§3). Verificación de alineación por `axcorrelate` (existe
-  en 6.1, validado).
+- **Emparejado**: matching por **nombre base sin extensión** + duración dentro de
+  ±0.5 s (`PAIR_DURATION_TOLERANCE_SEC` en `pipeline.js`) — `adobe-podcast-batch`
+  siempre exporta WAV aunque el original sea MP3/M4A (`X.mp3` ↔ `Enhanced/X.wav`).
+  Reconocer su convención permite emparejar con solo arrastrar la carpeta (§3).
+  **Implementado así, no con `axcorrelate`**: la verificación de alineación hoy es
+  solo esa comparación de duración — si no coincide dentro de la tolerancia, el
+  archivo cae a Modo 1 sobre el **original** (ver `pipeline.js` `processFile`, rama
+  `durOk`: `workingPath` nunca se reasigna a `file.pairPath`, así que el enhanced
+  no se toca en absoluto en ese caso — **posible bug de producto, no solo de docs**:
+  probablemente tendría más sentido caer sobre el *enhanced* ya limpio en vez del
+  original crudo; queda para decidir, no se cambió el comportamiento en esta pasada
+  de auditoría). Una verificación real de coherencia de fase con `axcorrelate` (§6
+  tiene el comando validado de forma aislada) sigue **pendiente de integrar**: hoy
+  no detectaría un desalineamiento interno que no cambie la duración total.
 - **Estrategia por defecto — fusión por bandas** (validado el grafo con `acrossover`
   LR 4º orden, recombinación plana ±0.2 dB): **graves (< ~200 Hz) del original**
   (cuerpo y pecho reales que la IA adelgaza) **+ medios/agudos del enhanced** (la
   limpieza que queremos). Crossover configurable.
-- **Estrategia alternativa — cama global**: original completo a −15/−20 dB bajo el
+- **Estrategia alternativa — cama global**: original completo a peso ajustable bajo el
   enhanced (restaura respiraciones, naturalidad, silencios reales). Un `amix` con
-  pesos. Ambas estrategias se combinan: bandas + cama sutil es el candidato a default.
-- **Balance guiado por medición**: los detectores (§1.4) corren sobre ambas fuentes;
-  si el original trae mucho ruido (A10), la cama baja o se apaga; si el enhanced trae
-  esses rotas (A4) o inicios ahogados (A5), esos tramos toman más del original. El
-  usuario ve un solo control "Original: 0–40 %" + selector de estrategia; el informe
-  registra el balance elegido.
+  pesos. Ambas estrategias se combinan (`bands_bed`): bandas + cama sutil encima.
+- **Balance — hoy es un ajuste del usuario, no automático**: un control "Original:
+  0–40 %" + selector de estrategia (bandas / cama / ambas) en Settings, fijo para
+  todo el lote que se procese con esos ajustes. **No implementado todavía**: la idea
+  original de este documento — correr los detectores (§1.4) sobre cada fuente
+  *antes* de fusionar y ajustar el balance automáticamente (p. ej. enhanced con
+  esses rotas A4 → más original en esa banda) — sigue en el backlog; ver también
+  §2.2.
 - Riesgo controlado: Adobe re-sintetiza → no hay coherencia de fase garantizada con el
   original. La fusión por bandas (espectros separados) minimiza el peinado; la cama se
-  valida a oído con el A/B. Si `axcorrelate` indica desalineación > umbral, la fusión
-  se desactiva con aviso y el archivo se procesa como Modo 1 sobre el enhanced.
+  valida a oído con el A/B. Hoy, si la duración no coincide dentro de la tolerancia,
+  la fusión se desactiva y el archivo se procesa como Modo 1 sobre el **original**
+  (ver nota arriba sobre por qué probablemente debería ser sobre el enhanced) — y
+  como se explica arriba, ni siquiera esa comparación de duración cubre un
+  desalineamiento interno que no altere la duración total; una comprobación por
+  `axcorrelate` cerraría ese hueco.
 
 ### 2.5 Limpieza local: el corazón del Modo 1
 
@@ -314,14 +366,14 @@ de no degradar material que ya está bien:
   supera el umbral (propuesta inicial: > −55 dB). Material grabado en cabina limpia
   pasa intacto. El `mix` se escala con el exceso de ruido (poco ruido → mix 0.4;
   mucho → 0.9) en vez de todo-o-nada.
-- **Complementos según flags**: hum (A8) se trata con notch *antes* del denoise;
-  de-reverb no tiene solución FFmpeg decente — si la sala suena muy viva, el informe
-  QC lo dice y recomienda Modo 2 (Enhance de Adobe sí quita reverb).
+- **Complementos según flags**: hum (A8) se trata con notch — en la implementación
+  real corre *después* del denoise, no antes (`pipeline.js`: `denoiseSpec` va antes
+  de `repairChain` en la cadena); de-reverb no tiene solución FFmpeg decente — si la
+  sala suena muy viva, hoy no hay aviso automático de "sala viva" ni recomendación
+  de pasar a Modo 2 (ver nota de Fase 7 — sigue en el backlog).
 - **Expectativa honesta**: RNNoise limpia ruido estacionario y algo de no
-  estacionario; no compite con Enhance V2 en calidad de re-síntesis. El informe QC
-  del Modo 1 compara piso antes/después para que se vea qué se logró; si el material
-  lo pide, la recomendación es pasar a Modo 2. El modelo `.rnnn` se agrega a
-  `scripts/fetch-bin.*` con checksum, junto a ffmpeg/ffprobe.
+  estacionario; no compite con Enhance V2 en calidad de re-síntesis. El modelo
+  `.rnnn` se agrega a `scripts/fetch-bin.*` con checksum, junto a ffmpeg/ffprobe.
 
 ### 2.6 Ajustes de la cadena de tono (sobre lo que ya existe)
 
@@ -329,10 +381,15 @@ de no degradar material que ya está bien:
 - El **shelf de aire pasa a ser condicional al rolloff** medido (A13).
 - **De-esser**: migrar del corte estático opcional a `deesser`/`adynamicequalizer`
   (dinámico: solo actúa cuando hay sibilancia). Se activa solo si el detector A4 lo pide.
-- **Compresión niveladora**: `acompressor` ratio 2.5:1, ataque ~15 ms, release ~150 ms,
-  3–5 dB de reducción en picos de frase — entra solo si LRA de entrada > objetivo.
-- **Compresión paralela de cuerpo**: `asplit` + `acompressor` 8:1 + `amix` (validado).
-  Control único en UI: "Cuerpo" 0–100 % (mapea al peso de la rama comprimida).
+- **Compresión niveladora**: `acompressor` ratio 3:1, ataque 15 ms, release 250 ms
+  (valores finales en `pipeline.js` — se ajustaron desde el 2.5:1/~150 ms de este
+  diseño inicial durante la implementación) — entra solo si no está `FLAT_DYNAMICS`
+  (LRA de entrada ya por debajo del objetivo).
+- **Compresión paralela de cuerpo**: `asplit` + `acompressor` + `amix` (validado; ver
+  `pipeline.js` `assembleGraph` para los parámetros finales de la rama comprimida,
+  ligeramente distintos del ejemplo aislado en §6). Control único en UI: "Cuerpo"
+  **0–50 %** (el store interno acepta hasta 100 pero el slider expuesto llega a 50 —
+  no se validó a oído más allá de eso).
 - **Limitador**: `alimiter` con techo del preset, siempre al final. `loudnorm` deja de
   ser responsable del techo.
 
@@ -358,8 +415,10 @@ reanuda) y slider "Voz limpia %". Hallazgos que importan para AudioPro:
   Modo 2. El emparejado de AudioPro (§2.4) adopta esta convención tal cual.
 - **Su blend dry/wet es `amix` full-band a 48 k mono** (peso fijo, sin bandas ni
   medición). Confirma la decisión del §2.1: pedir el 100 % y fusionar en AudioPro,
-  donde hay crossover, detectores y verificación de alineación. El SOP para el
-  equipo queda: *en `adobe-podcast-batch`, dejar "Voz limpia" al 100 %*.
+  donde hay crossover configurable y verificación de duración del par (detectores
+  por fuente y verificación de fase/alineación reales siguen sin integrar, §2.4).
+  El SOP para el equipo queda: *en `adobe-podcast-batch`, dejar "Voz limpia" al
+  100 %*.
 - **El token de Adobe es un IMS JWT** extraído del login embebido, guardado
   localmente cifrado (`safeStorage`). El manejo de créditos (429/`limits` → espera
   con cuenta regresiva) y la re-autenticación silenciosa ya están resueltos ahí.
@@ -405,17 +464,23 @@ limpieza local), y al final el enhance embebido.
   truePeak, lra, crest, noiseFloor, dcOffset, rolloff, bands, silences, flags[] }`.
 - Implementar detectores A1, A8, A11, A12, A13, A14 (los deterministas) con umbrales
   en un solo objeto `QC_THRESHOLDS` comentado.
-- UI: fila de archivo muestra chips (p. ej. `CLIP`, `HUM`, `SIN AIRE`) con tooltip.
+- UI: fila de archivo muestra chips con el código de flag tal cual (p. ej. `CLIP`,
+  `HUM`, `NO_AIR`) y tooltip con el detalle medido.
 - **Aceptación:** procesar los WAV sintéticos del corpus (Fase 9 seed) produce
   exactamente los flags esperados; cero falsos positivos sobre el corpus limpio.
 
 ### Fase 2 — Presets de plataforma + verificación de salida ✅ implementada
 **Archivos:** `src/pipeline.js`, `main.js` (schema settings), renderer (selector).
 - `DELIVERY_PRESETS`, selector UI, normalización bidireccional (con opción legacy).
-- Post-render: re-medir I/TP con `ebur128` y emitir `file:verified {i, tp, delta}`;
-  badge verde si |delta| ≤ 0.5 LU y TP ≤ techo, naranja/rojo si no.
-- **Aceptación:** los 3 presets aterrizan en ±0.5 LU del target sobre el corpus; el
-  informe QC de salida aparece en la UI y en el log copiable.
+- Post-render: re-medir I/TP con `ebur128` (`verifyOutput` en `pipeline.js`) y
+  adjuntarlo como `verify: {i, tp, badge}` al evento `file:done` (no un evento
+  `file:verified` separado, ni un campo `delta`, ni LRA). Badge de solo dos
+  estados, `ok`/`warn` (no hay un tercer estado `fail`): `ok` si |I − target| ≤
+  0.7 LU **y** TP ≤ techo + 0.3 dB; `warn` en cualquier otro caso, incluido el
+  fallo de medición.
+- **Aceptación:** los 3 presets aterrizan dentro de esas tolerancias sobre el
+  corpus; el chip de verificación aparece en la fila del archivo y en el informe
+  QC exportable.
 
 ### Fase 3 — Dinámica: nivelador + limitador ✅ implementada
 **Archivos:** `src/pipeline.js`.
@@ -432,25 +497,39 @@ limpieza local), y al final el enhance embebido.
 - **Aceptación:** con "Cuerpo" al 30 %, `cuerpo_ratio` del master sube ≥ 2 dB vs
   cuerpo 0 %, sin cambiar el LUFS integrado (±0.3) ni el TP.
 
-### Fase 5 — Reparación condicional ✅ implementada
-**Archivos:** `src/metrics.js` (detectores A4, A7, A9), `src/pipeline.js` (inserción condicional).
-- `adeclip` si A1, `adeclick` si A9, `bandreject` si A8, trim si A11, de-esser
-  dinámico si A4, HPF dinámico si A7.
-- Cada reparación queda registrada en el log y en el informe del archivo ("se aplicó X
-  porque se midió Y").
-- **Aceptación:** corpus sintético con cada artefacto inyectado → el master sale sin el
-  artefacto (métricas antes/después en el informe) y los archivos limpios salen con
-  cadena idéntica a Fase 4 (bit-a-bit).
+### Fase 5 — Reparación condicional ✅ implementada (parcial — ver honestidad de estado)
+**Archivos:** `src/metrics.js` (detectores A1/`CLIP`, A8/`HUM`, A11/`SILENCE_HEAD`+`SILENCE_TAIL`), `src/pipeline.js` (inserción condicional).
+- Condicional de verdad: `adeclip` si A1 (`CLIP`), `bandreject` (notch + 2º armónico)
+  si A8 (`HUM`), trim de cabeza/cola si A11 (`SILENCE_HEAD`/`SILENCE_TAIL`), de-esser
+  dinámico si hay sibilancia medida (`SIBILANT`, o forzado en Settings).
+- `adeclick` corre **sin condición, en todos los archivos** — no existe un detector
+  directo de A9 (clicks de boca), así que en vez de esperar uno que puede que nunca
+  llegue, se dejó siempre activo (parámetros por defecto, seguros para voz). Esto
+  rompe la invariante "bit-a-bit idéntico si nada se detecta" para este filtro en
+  particular — verificado localmente: incluso una señal limpia (seno sintético)
+  cambia algunos bytes al pasar por `adeclick`, por falsos positivos mínimos de su
+  propio detector interno. El resto de la cadena condicional sí respeta la invariante.
+- **HPF dinámico si A7 — no implementado.** No hay detector de plosivos (A7); la
+  frecuencia del HPF es un valor fijo de Settings (80 Hz por defecto), igual para
+  todos los archivos, no un ajuste dinámico por archivo. Sigue en el backlog.
+- Cada reparación condicional queda registrada en el log y en el informe del archivo.
+- **Aceptación (ajustada a lo anterior):** corpus sintético con cada artefacto
+  inyectado → el master sale sin el artefacto (métricas antes/después en el informe);
+  los archivos limpios salen con la misma cadena condicional que Fase 4 **salvo
+  `adeclick`**, que se inserta siempre.
 
 ### Fase 6 — Modo 2: emparejado + fusión con el original ✅ implementada
 **Archivos:** `src/pipeline.js`, `src/pairing.js` (nuevo), `main.js`, renderer (emparejado + slider "Original").
 - Emparejado por nombre/duración con reconocimiento de la convención
   `X.wav ↔ Enhanced/X.wav` de `adobe-podcast-batch` (§3): soltar la carpeta del lote
-  activa Modo 2 automáticamente. Verificación `axcorrelate`; fallback a Modo 1 sobre
-  el enhanced si hay desalineación.
-- Estrategias de fusión: bandas (`acrossover`, default) y cama (`amix`), combinables.
-  Slider "Original: 0–40 %" + selector de estrategia; balance sugerido por los
-  detectores de cada fuente (§2.4).
+  activa Modo 2 automáticamente. Verificación por tolerancia de duración (±0.5 s);
+  fallback a Modo 1 sobre el **original** si no coincide (ver honestidad de estado
+  en §2.4 — probablemente debería caer sobre el enhanced en vez del original).
+  (Verificación real de alineación/fase por `axcorrelate` sigue sin integrar, §2.4.)
+- Estrategias de fusión: bandas (`acrossover`, default), cama (`amix`) y ambas
+  combinadas (`bands_bed`). Slider "Original: 0–40 %" + selector de estrategia; el
+  balance es un ajuste del usuario, no todavía sugerido por detectores de cada
+  fuente (esa parte de §2.4 sigue en el backlog).
 - **Aceptación:** con un par real (original + enhanced 100 % de Adobe), la fusión por
   bandas devuelve un master cuyos silencios contienen la respiración del original y
   cuyo `cuerpo_ratio` ≥ el del enhanced solo; sin comb audible en A/B; la carpeta
@@ -460,9 +539,13 @@ limpieza local), y al final el enhance embebido.
 **Archivos:** `src/pipeline.js`, `src/metrics.js` (gate por noise floor), `scripts/fetch-bin.sh` / `.ps1` (modelo `.rnnn`), renderer (indicador).
 - `arnndn` (RNNoise, modelo `somnolent-hogwash` ~290 KB) insertado antes de la
   reparación solo si `Noise_floor` > umbral; `mix` escalado con el exceso de ruido
-  (§2.5). Notch de hum siempre antes del denoise.
-- Informe QC: piso de ruido antes/después; recomendación "considerar Modo 2" si la
-  limpieza no alcanza (reverb, ruido no estacionario fuerte).
+  (§2.5). **Corrección de orden**: en `pipeline.js` el denoise corre *antes* del
+  notch de hum (denoise → reparación, que incluye el notch), no al revés como
+  decía una versión anterior de este párrafo.
+- **No implementado todavía**: el informe QC no compara piso de ruido antes/después
+  ni tiene una recomendación "considerar Modo 2" — el evento `qc` solo lleva los
+  flags (código + detalle) y el loudness de entrada. Sigue en el backlog si se
+  quiere ese nivel de feedback en Modo 1.
 - **Aceptación:** grabación cruda con ruido de fondo (corpus) baja su piso ≥ 10 dB
   sin voz acuosa audible en A/B; material limpio pasa **bit-a-bit idéntico** (gate
   cerrado, filtro ni siquiera se inserta).
@@ -472,7 +555,8 @@ limpieza local), y al final el enhance embebido.
 (nuevo), `src/qc-report.js` (nuevo), `main.js`/`preload.js` (IPC), `renderer/index.html`,
 `renderer/styles/app.css`.
 - ✅ Hecho: chips de flags QC por archivo (`renderer/js/app.js` → `renderFlagChips`),
-  badge de modo (pendiente/fusionado/fallback) y chip de verificación post-render
+  badge de modo ("Pair detected" / "Mode 2 · fused" / "Mode 1 · pair mismatch") y
+  chip de verificación post-render
   (I/TP re-medidos, badge ok/warn) junto a cada archivo de la cola.
 - ✅ Hecho: A/B con **nivel igualado** en el editor EQ — `analyzeSpectrum` (FFT offline,
   ya existente para el auto-fit) se reutiliza para calcular una ganancia de
@@ -564,7 +648,16 @@ avanzar en paralelo desde la Fase 2; 10 requiere 6 y la decisión D6 (§5).
 
 ## 6. Apéndice: comandos validados en este entorno (ffmpeg 6.1.1)
 
-Todos ejecutados y verificados hoy; son la base de `src/metrics.js`:
+Todos ejecutados y verificados en su momento. Los de detección (loudness,
+clipping, rolloff, hum, silencios) son la base directa de `src/metrics.js` y sus
+parámetros siguen alineados. Los de reparación/dinámica/de-esser/fusión de más
+abajo demuestran que la técnica funciona en este FFmpeg — **los parámetros finales
+de producción se afinaron durante la implementación y viven en `src/pipeline.js` /
+`src/fusion.js`, no necesariamente coinciden con estos ejemplos** (p. ej. la
+compresión paralela de cuerpo real usa `threshold=-28dB:ratio=6:attack=8:release=280:makeup=8`,
+no los valores del ejemplo aislado de abajo). Ante una duda sobre el comportamiento
+actual, el código en `src/` es la fuente de verdad; este apéndice es el registro de
+que la técnica es viable en ffmpeg, no una copia sincronizada de la configuración final.
 
 ```bash
 # Loudness + LRA + true peak en una pasada

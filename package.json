@@ -6,7 +6,9 @@
   "scripts": {
     "start": "electron .",
     "setup:bin": "bash scripts/fetch-bin.sh",
+    "setup:bin:win": "powershell -ExecutionPolicy Bypass -File scripts/fetch-bin.ps1",
     "build": "electron-builder --mac --arm64",
+    "build:win": "electron-builder --win --x64",
     "build:icon": "rsvg-convert -w 512 -h 512 build/icon.svg -o build/icons/512x512.png || convert build/icon.svg build/icons/512x512.png"
   },
   "dependencies": {
@@ -63,6 +65,25 @@
           "path": "/Applications"
         }
       ]
+    },
+    "win": {
+      "icon": "build/icons/1024x1024.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AudioPro"
     }
   }
 }

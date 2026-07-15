@@ -8,39 +8,25 @@ const binPaths = require('./src/bin-paths');
 const logger = require('./src/logger');
 
 const VALID_STORE_KEYS = new Set([
-  'processingMode', 'lufsTarget', 'hpfFrequency', 'deEsserEnabled',
-  'noiseGateEnabled', 'stereoToMonoEnabled', 'silenceTrimEnabled',
-  'breathReductionEnabled', 'multiBandCompEnabled', 'outputFormat',
-  'sampleRate', 'showNotifications',
+  'hpfFrequency', 'deEsserEnabled',
+  'outputFormat', 'sampleRate', 'showNotifications',
   // Manual EQ override (FFmpeg filter chain string + on/off flag).
   // When manualEqApply is true the pipeline uses manualEqChain in place
-  // of its built-in voice-warm EQ.
+  // of the built-in base EQ.
   'manualEqChain', 'manualEqApply',
-  // Adaptive EQ — when ON, appends voice-profile-derived notches to the
-  // static voice-warm EQ. OFF by default; the static curve is unchanged.
-  'adaptiveEqEnabled',
-  // Custom output directory ('' = default sibling Audio_Pro/ next to source)
+  // Custom output directory ('' = default sibling Audio_Pro/ next to source).
   'customOutputDir',
 ]);
 
 const store = new Store({
   defaults: {
-    processingMode: 'quality',
-    lufsTarget: -16,
     hpfFrequency: 80,
-    deEsserEnabled: true,
-    noiseGateEnabled: true,
-    stereoToMonoEnabled: true,
-    silenceTrimEnabled: true,
-    breathReductionEnabled: false,
-    multiBandCompEnabled: true,
+    deEsserEnabled: false,
     outputFormat: 'wav24',
     sampleRate: 48000,
     showNotifications: true,
     manualEqChain: '',
     manualEqApply: false,
-    adaptiveEqEnabled: false,
-    // Empty = sibling Audio_Pro/ behavior. Otherwise an absolute path.
     customOutputDir: '',
   },
 });
@@ -70,7 +56,6 @@ app.whenReady().then(() => {
   logger.init();
   logger.push('bin', `ffmpeg: ${binPaths.ffmpeg()}`);
   logger.push('bin', `ffprobe: ${binPaths.ffprobe()}`);
-  logger.push('bin', `deep-filter: ${binPaths.deepFilter()}`);
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -91,7 +76,6 @@ app.on('before-quit', () => {
 // ── Logger IPC ──
 ipcMain.handle('log:getFormatted', () => logger.formatForClipboard());
 ipcMain.handle('log:push', (_, category, message, data) => {
-  // Cap renderer log input to prevent abuse
   const cat = String(category ?? 'renderer').slice(0, 32);
   const msg = String(message ?? '').slice(0, 500);
   const d = data !== undefined ? String(typeof data === 'string' ? data : JSON.stringify(data)).slice(0, 2000) : undefined;
@@ -101,22 +85,16 @@ ipcMain.handle('log:push', (_, category, message, data) => {
 ipcMain.handle('store:get', (_, key) => store.get(key));
 ipcMain.handle('store:set', (_, key, value) => {
   if (typeof key !== 'string' || !VALID_STORE_KEYS.has(key)) return;
-  // Type-validate values to prevent store corruption
-  const BOOL_KEYS = new Set(['deEsserEnabled', 'noiseGateEnabled', 'stereoToMonoEnabled',
-    'silenceTrimEnabled', 'breathReductionEnabled', 'multiBandCompEnabled', 'showNotifications',
-    'manualEqApply', 'adaptiveEqEnabled']);
-  const STRING_KEYS = new Set(['processingMode', 'outputFormat', 'manualEqChain', 'customOutputDir']);
-  const INT_KEYS = new Set(['lufsTarget', 'hpfFrequency', 'sampleRate']);
+  const BOOL_KEYS = new Set(['deEsserEnabled', 'showNotifications', 'manualEqApply']);
+  const STRING_KEYS = new Set(['outputFormat', 'manualEqChain', 'customOutputDir']);
+  const INT_KEYS = new Set(['hpfFrequency', 'sampleRate']);
   if (BOOL_KEYS.has(key) && typeof value !== 'boolean') return;
   if (STRING_KEYS.has(key) && typeof value !== 'string') return;
   if (INT_KEYS.has(key) && (typeof value !== 'number' || !Number.isFinite(value))) return;
-  // manualEqChain: cap length and reject obvious shell metacharacters that
-  // could break out of the FFmpeg `-af` argument.
   if (key === 'manualEqChain') {
     if (value.length > 4096) return;
     if (/[`$;&|<>\\\n\r]/.test(value)) return;
   }
-  // customOutputDir: empty (= default behavior) or an absolute path.
   if (key === 'customOutputDir') {
     if (value !== '' && (!path.isAbsolute(value) || value.includes('..') || value.length > 1024)) return;
   }
@@ -152,7 +130,6 @@ ipcMain.handle('files:open', async (event) => {
 
 ipcMain.handle('shell:openPath', (_, filePath) => {
   if (typeof filePath !== 'string' || !filePath) return;
-  // Block path traversal — only allow absolute paths without .. components
   const resolved = path.resolve(filePath);
   if (resolved !== filePath && resolved !== path.normalize(filePath)) return;
   if (filePath.includes('..')) return;
@@ -203,7 +180,6 @@ let pipelineState = null;
 
 ipcMain.handle('pipeline:start', (event, files) => {
   if (pipelineState?.running) return { error: 'Already processing' };
-  // Validate files array from renderer
   if (!Array.isArray(files) || files.length === 0 || files.length > 10000) {
     return { error: 'Invalid files list' };
   }
@@ -215,41 +191,30 @@ ipcMain.handle('pipeline:start', (event, files) => {
 
   const win = BrowserWindow.fromWebContents(event.sender);
   const settings = {
-    mode:                  store.get('processingMode'),
-    lufsTarget:            store.get('lufsTarget'),
-    hpfFrequency:          store.get('hpfFrequency'),
-    deEsserEnabled:        store.get('deEsserEnabled'),
-    noiseGateEnabled:      store.get('noiseGateEnabled'),
-    stereoToMonoEnabled:   store.get('stereoToMonoEnabled'),
-    silenceTrimEnabled:    store.get('silenceTrimEnabled'),
-    breathReductionEnabled:store.get('breathReductionEnabled'),
-    multiBandCompEnabled:  store.get('multiBandCompEnabled'),
-    outputFormat:          store.get('outputFormat'),
-    sampleRate:            store.get('sampleRate'),
-    manualEqChain:         store.get('manualEqChain'),
-    manualEqApply:         store.get('manualEqApply'),
-    adaptiveEqEnabled:     store.get('adaptiveEqEnabled'),
-    customOutputDir:       store.get('customOutputDir'),
+    hpfFrequency:    store.get('hpfFrequency'),
+    deEsserEnabled:  store.get('deEsserEnabled'),
+    outputFormat:    store.get('outputFormat'),
+    sampleRate:      store.get('sampleRate'),
+    manualEqChain:   store.get('manualEqChain'),
+    manualEqApply:   store.get('manualEqApply'),
+    customOutputDir: store.get('customOutputDir'),
   };
 
   pipelineState = { running: true, cancelled: false, currentProc: null };
 
   logger.push('pipeline', `Starting batch: ${files.length} files`, {
-    mode: settings.mode,
-    lufsTarget: settings.lufsTarget,
     outputFormat: settings.outputFormat,
     sampleRate: settings.sampleRate,
+    manualEq: settings.manualEqApply,
   });
 
   const emit = (type, data) => {
     if (!win.isDestroyed()) win.webContents.send('pipeline:event', { type, ...data });
-    // Log significant pipeline events
     if (type === 'file:start') logger.push('pipeline', `▶ Processing: ${data.file}`, `${data.index + 1}/${data.total}`);
     if (type === 'file:done') logger.push('pipeline', `✓ Done: ${data.file}`, `→ ${data.outputPath}`);
     if (type === 'file:error') logger.push('pipeline', `✗ Error: ${data.file}`, data.error);
-    if (type === 'analysis') logger.push('analysis', `Analysis: ${data.file}`, data.recommendations?.reasoning);
+    if (type === 'loudness') logger.push('loudness', data.message, path.basename(data.file));
     if (type === 'progress' && data.stepIndex !== undefined) {
-      // Log step transitions (first progress event per step, identified by low pct or new step name)
       const stepKey = `${data.file}:${data.stepIndex}`;
       if (!emit._loggedSteps) emit._loggedSteps = new Set();
       if (!emit._loggedSteps.has(stepKey)) {

@@ -11,21 +11,184 @@
 
 (function () {
 
+  // Mirrors BASE_EQ_BANDS in src/pipeline.js — replica of the Waves F6
+  // reference curve. 6 bands: HPF + 3 low-mid cuts + presence peak + air shelf.
   const DEFAULT_BANDS = [
-    { id: 'hpf', enabled: true, type: 'highpass',  f: 80,    g: 0,    q: 0.707, label: 'HPF',     color: '#888' },
-    { id: 'b1',  enabled: true, type: 'peaking',   f: 150,   g: -3,   q: 8,     label: '150',     color: '#ff6b6b' },
-    { id: 'b2',  enabled: true, type: 'peaking',   f: 250,   g: -3.5, q: 8,     label: '250',     color: '#ffaa55' },
-    { id: 'b3',  enabled: true, type: 'peaking',   f: 400,   g: -3,   q: 8,     label: '400',     color: '#ff6b6b' },
-    { id: 'b4',  enabled: true, type: 'peaking',   f: 700,   g: -3,   q: 8,     label: '700',     color: '#ff6b6b' },
-    { id: 'b5',  enabled: true, type: 'peaking',   f: 2500,  g: 1,    q: 1.4,   label: 'Pres',    color: '#7afe9f' },
-    { id: 'b6',  enabled: true, type: 'highshelf', f: 10000, g: 3,    q: 0.707, label: 'Air',     color: '#c79bff' },
+    { id: 'hpf',  enabled: true, type: 'highpass',  f: 80,    g: 0,    q: 0.707, label: 'HPF',  color: '#888'    },
+    { id: 'mud',  enabled: true, type: 'peaking',   f: 150,   g: -3,   q: 2,     label: 'Mud',  color: '#ffaa55' },
+    { id: 'box',  enabled: true, type: 'peaking',   f: 280,   g: -3,   q: 2.5,   label: 'Box',  color: '#ff6b6b' },
+    { id: 'honk', enabled: true, type: 'peaking',   f: 500,   g: -4,   q: 2,     label: 'Honk', color: '#3aa6ff' },
+    { id: 'pres', enabled: true, type: 'peaking',   f: 3589,  g: 1,    q: 1.0,   label: 'Pres', color: '#7afe9f' },
+    { id: 'air',  enabled: true, type: 'highshelf', f: 10000, g: 1.5,  q: 0.707, label: 'Air',  color: '#c79bff' },
   ];
+
+  // Bands eligible for auto-fit (the three surgical cuts). Boosts and HPF
+  // stay at their defaults — moving them per-source would change the
+  // character of the curve, not just target a resonance.
+  const AUTO_FIT_BAND_IDS = ['mud', 'box', 'honk'];
+  // Search radius around each band's default centre, in octaves. ±1/3 octave
+  // (ratio 2^(1/3) ≈ 1.26) keeps the moves musically meaningful without
+  // letting bands wander across each other.
+  const AUTO_FIT_HALF_OCTAVE = 1 / 3;
 
   const LAYOUT = {
     ML: 48, MR: 18, MT: 18, MB: 28,
     fLo: 30, fHi: 22000,
     dbMax: 30, dbMin: -30,
   };
+
+  // ── FFT (Radix-2 Cooley-Tukey, in-place) ──
+  // Size must be a power of 2. Operates on two parallel Float32Arrays for
+  // real/imag parts. Standard textbook implementation — adequate for the
+  // one-shot offline analysis we do per file (no need for SIMD or wasm).
+  function fft(re, im) {
+    const N = re.length;
+    for (let i = 1, j = 0; i < N; i++) {
+      let bit = N >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        const tr = re[i]; re[i] = re[j]; re[j] = tr;
+        const ti = im[i]; im[i] = im[j]; im[j] = ti;
+      }
+    }
+    for (let len = 2; len <= N; len <<= 1) {
+      const half = len >> 1;
+      const angle = -2 * Math.PI / len;
+      const wnRe = Math.cos(angle);
+      const wnIm = Math.sin(angle);
+      for (let i = 0; i < N; i += len) {
+        let wRe = 1, wIm = 0;
+        for (let k = 0; k < half; k++) {
+          const xr = re[i + k];
+          const xi = im[i + k];
+          const yr = re[i + k + half] * wRe - im[i + k + half] * wIm;
+          const yi = re[i + k + half] * wIm + im[i + k + half] * wRe;
+          re[i + k]        = xr + yr;
+          im[i + k]        = xi + yi;
+          re[i + k + half] = xr - yr;
+          im[i + k + half] = xi - yi;
+          const nwRe = wRe * wnRe - wIm * wnIm;
+          wIm        = wRe * wnIm + wIm * wnRe;
+          wRe        = nwRe;
+        }
+      }
+    }
+  }
+
+  // ── Offline spectrum analysis ──
+  // Decode the source file, slice into 50%-overlapped windows of FFT_SIZE
+  // samples, apply a Hann window, FFT each, and average the magnitude-
+  // squared spectra. Returns the averaged power spectrum + the source
+  // sample rate so we can convert bin indices to Hz.
+  const FFT_SIZE = 16384;
+  async function analyzeSpectrum(filePath) {
+    const url = fileUrlFor(filePath);
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`fetch failed (${resp.status})`);
+    const buf = await resp.arrayBuffer();
+    const tempCtx = new OfflineAudioContext(1, 1, 48000);
+    const audioBuf = await tempCtx.decodeAudioData(buf);
+    const data = audioBuf.getChannelData(0);
+    const sr = audioBuf.sampleRate;
+    if (data.length < FFT_SIZE) throw new Error('file too short for analysis');
+
+    const N = FFT_SIZE;
+    const hop = N >> 1;
+    const half = N >> 1;
+    const window = new Float32Array(N);
+    for (let i = 0; i < N; i++) window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (N - 1)));
+
+    const power = new Float32Array(half);
+    const re = new Float32Array(N);
+    const im = new Float32Array(N);
+    let frames = 0;
+    for (let pos = 0; pos + N <= data.length; pos += hop) {
+      for (let i = 0; i < N; i++) {
+        re[i] = data[pos + i] * window[i];
+        im[i] = 0;
+      }
+      fft(re, im);
+      for (let i = 0; i < half; i++) power[i] += re[i] * re[i] + im[i] * im[i];
+      frames++;
+    }
+    if (frames === 0) throw new Error('no FFT frames produced');
+    for (let i = 0; i < half; i++) power[i] /= frames;
+    return { power, sr, fftSize: N, frames };
+  }
+
+  // Find the bin with the highest power inside a window of ±halfOctaves
+  // octaves around fCenter. Returns the bin's centre frequency in Hz, or
+  // null if the window falls outside the analyzed spectrum.
+  function findPeakAround(spec, fCenter, halfOctaves) {
+    const ratio = Math.pow(2, halfOctaves);
+    const fMin = fCenter / ratio;
+    const fMax = fCenter * ratio;
+    const binWidth = spec.sr / spec.fftSize;
+    const iMin = Math.max(1, Math.floor(fMin / binWidth));
+    const iMax = Math.min(spec.power.length - 1, Math.ceil(fMax / binWidth));
+    if (iMax <= iMin) return null;
+    let maxPow = -Infinity, maxIdx = -1;
+    for (let i = iMin; i <= iMax; i++) {
+      if (spec.power[i] > maxPow) { maxPow = spec.power[i]; maxIdx = i; }
+    }
+    return maxIdx === -1 ? null : maxIdx * binWidth;
+  }
+
+  // Files we've already auto-fitted in this session. Re-selecting the same
+  // file in the dropdown shouldn't re-run analysis (would clobber any
+  // manual band tweaks the user made after the initial fit).
+  const autoFittedFiles = new Set();
+
+  async function autoFitToFile(filePath) {
+    if (!filePath || autoFittedFiles.has(filePath)) return;
+    autoFittedFiles.add(filePath);
+    const fileName = filePath.split('/').pop();
+    const prevReadout = readoutEl.textContent;
+    readoutEl.textContent = `Analyzing source spectrum for ${fileName}…`;
+    try {
+      const spec = await analyzeSpectrum(filePath);
+      const moves = [];
+      for (const id of AUTO_FIT_BAND_IDS) {
+        const band = bands.find(b => b.id === id);
+        const def  = DEFAULT_BANDS.find(b => b.id === id);
+        if (!band || !def) continue;
+        const peak = findPeakAround(spec, def.f, AUTO_FIT_HALF_OCTAVE);
+        if (peak === null) continue;
+        const newF = Math.round(peak);
+        if (newF !== band.f) {
+          moves.push({ label: band.label, from: band.f, to: newF });
+          band.f = newF;
+        }
+      }
+      if (moves.length) {
+        onBandsChanged();
+        const summary = moves.map(m => `${m.label} ${m.from}→${m.to} Hz`).join(', ');
+        readoutEl.textContent = `Auto-fit on ${fileName}: ${summary}`;
+        if (window.api?.log) {
+          window.api.log.push('autofit',
+            `Spectrum-fit on ${fileName} (${spec.frames} FFT frames @ ${spec.sr} Hz)`,
+            summary);
+        }
+      } else {
+        readoutEl.textContent = `Auto-fit on ${fileName}: bands already centred on local peaks`;
+        if (window.api?.log) {
+          window.api.log.push('autofit',
+            `Spectrum-fit on ${fileName} — no bands moved`,
+            `${spec.frames} FFT frames @ ${spec.sr} Hz`);
+        }
+      }
+    } catch (err) {
+      readoutEl.textContent = `Auto-fit failed: ${err.message}`;
+      if (window.api?.log) {
+        window.api.log.push('autofit', `Spectrum-fit failed for ${fileName}`, err.message);
+      }
+      // Allow retry on next selection if it errored.
+      autoFittedFiles.delete(filePath);
+      // Restore the readout after a moment so the failure message doesn't stick.
+      setTimeout(() => { if (readoutEl.textContent.startsWith('Auto-fit failed')) readoutEl.textContent = prevReadout; }, 4000);
+    }
+  }
 
   // ── Math (RBJ analog approximation; matches the standalone HTML) ──
   function gainDb(f, b) {
@@ -67,7 +230,6 @@
   const timeLabel   = document.getElementById('eq-time');
   const bypassChk   = document.getElementById('eq-bypass');
   const resetBtn    = document.getElementById('eq-reset');
-  const applyBtn    = document.getElementById('eq-apply');
   const statusVal   = document.getElementById('eq-status-value');
   const readoutEl   = document.getElementById('eq-readout');
   const tabEq       = document.querySelector('[data-tab="eq"]');
@@ -84,11 +246,10 @@
   function dbOfY(y)   { const { PH } = plotArea(); return LAYOUT.dbMax - (y - LAYOUT.MT) / PH * (LAYOUT.dbMax - LAYOUT.dbMin); }
 
   function handlePos(b) {
-    // Each handle sits on the curve where its band has maximum effect.
-    if (b.type === 'highpass')  return { x: xOf(b.f), y: yOf(-3) };          // anchored to the −3 dB cutoff
-    if (b.type === 'highshelf') return { x: xOf(b.f), y: yOf(b.g / 2) };     // shelf "knee"
+    if (b.type === 'highpass')  return { x: xOf(b.f), y: yOf(-3) };
+    if (b.type === 'highshelf') return { x: xOf(b.f), y: yOf(b.g / 2) };
     if (b.type === 'lowshelf')  return { x: xOf(b.f), y: yOf(b.g / 2) };
-    return { x: xOf(b.f), y: yOf(b.g) };                                      // peaking
+    return { x: xOf(b.f), y: yOf(b.g) };
   }
 
   // ── Audio (single, fixed topology — bypass swaps gains) ──
@@ -103,6 +264,15 @@
     audioEl.addEventListener('timeupdate', updateTime);
     audioEl.addEventListener('loadedmetadata', updateTime);
     audioEl.addEventListener('ended', () => { playBtn.textContent = '▶'; });
+    audioEl.addEventListener('error', () => {
+      const err = audioEl.error;
+      const code = err?.code;
+      const codeMap = { 1: 'aborted', 2: 'network', 3: 'decode', 4: 'src not supported' };
+      const msg = `Playback failed: ${codeMap[code] ?? 'unknown'} (${audioEl.src})`;
+      console.warn('[EQ]', msg, err);
+      readoutEl.textContent = msg;
+      playBtn.textContent = '▶';
+    });
     sourceNode = audioCtx.createMediaElementSource(audioEl);
     filterNodes = bands.map(b => {
       const n = audioCtx.createBiquadFilter();
@@ -121,6 +291,7 @@
     applyBypass();
   }
   function applyBandToNode(b, n) {
+    if (n.type !== b.type) n.type = b.type;
     if (b.type === 'highpass') {
       n.frequency.value = b.enabled ? b.f : 5;
       n.Q.value         = b.q;
@@ -152,11 +323,9 @@
     }
     ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // BG
     ctx2d.fillStyle = '#1a1f28';
     ctx2d.fillRect(0, 0, W, H);
 
-    // Grid: dB ticks
     ctx2d.font = '10px -apple-system, sans-serif';
     ctx2d.textBaseline = 'middle';
     const dbTicks = [-30, -24, -18, -12, -6, 0, 6, 12, 18, 24, 30];
@@ -179,7 +348,6 @@
     }
     ctx2d.setLineDash([]);
 
-    // Grid: frequency ticks
     const fTicks = [30, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
     ctx2d.textAlign = 'center';
     ctx2d.textBaseline = 'top';
@@ -195,7 +363,6 @@
       ctx2d.fillText(lbl, x, H - LAYOUT.MB + 6);
     }
 
-    // Individual bands (faint dashed)
     const N = 280;
     ctx2d.lineWidth = 1;
     ctx2d.setLineDash([3, 4]);
@@ -215,7 +382,6 @@
     ctx2d.globalAlpha = 1;
     ctx2d.setLineDash([]);
 
-    // Total curve
     ctx2d.lineWidth = 2.4;
     ctx2d.strokeStyle = '#7afe9f';
     ctx2d.shadowBlur = 6;
@@ -230,7 +396,6 @@
     ctx2d.stroke();
     ctx2d.shadowBlur = 0;
 
-    // Handles (numbered circles, drag targets)
     ctx2d.font = 'bold 11px -apple-system, sans-serif';
     ctx2d.textAlign = 'center';
     ctx2d.textBaseline = 'middle';
@@ -239,18 +404,15 @@
       const p = handlePos(b);
       const isHover = b.id === hoveredId || b.id === draggingId;
       const r = isHover ? 14 : 11;
-      // Filled circle
       ctx2d.beginPath();
       ctx2d.arc(p.x, p.y, r, 0, Math.PI * 2);
       ctx2d.fillStyle = b.enabled ? b.color : '#33384a';
       ctx2d.globalAlpha = isHover ? 1 : 0.9;
       ctx2d.fill();
-      // White ring
       ctx2d.lineWidth = isHover ? 2.5 : 1.5;
       ctx2d.strokeStyle = isHover ? '#fff' : 'rgba(255,255,255,.5)';
       ctx2d.stroke();
       ctx2d.globalAlpha = 1;
-      // Number / label
       ctx2d.fillStyle = '#0d0f14';
       ctx2d.fillText(String(bi + 1), p.x, p.y + 0.5);
     }
@@ -271,7 +433,6 @@
     return best;
   }
 
-  // ── Readout (status line under the canvas) ──
   function fmtFreq(f) {
     if (f >= 1000) return (Math.round(f / 10) / 100).toFixed(2).replace(/\.?0+$/, '') + ' kHz';
     return Math.round(f) + ' Hz';
@@ -297,7 +458,6 @@
     readoutEl.textContent = parts.join('   ·   ');
   }
 
-  // ── Mouse interactions on the canvas ──
   canvas.addEventListener('mousemove', (e) => {
     const { x, y } = getMousePos(e);
     if (draggingId) {
@@ -309,12 +469,9 @@
         b.g = clamp(dbOfY(y - dragOffset.y), -30, 30);
         b.g = Math.round(b.g * 10) / 10;
       } else if (b.type === 'highshelf' || b.type === 'lowshelf') {
-        // For shelves, dragging Y maps to the shelf's max gain.
-        // The handle sits at g/2 visually, so the cursor's Y maps to g/2.
         b.g = clamp(dbOfY(y - dragOffset.y) * 2, -30, 30);
         b.g = Math.round(b.g * 10) / 10;
       }
-      // HPF: only X changes (no gain control)
       onBandsChanged();
       updateReadout();
     } else {
@@ -360,33 +517,80 @@
       updateReadout();
     }
   });
+  function findBandForWheel(x, y) {
+    if (draggingId) return bands.find(b => b.id === draggingId);
+    const exact = findBandAt(x, y, 18);
+    if (exact) return exact;
+    let best = null, bestDx = Infinity;
+    for (const b of bands) {
+      if (!b.enabled) continue;
+      const dx = Math.abs(xOf(b.f) - x);
+      if (dx < bestDx) { bestDx = dx; best = b; }
+    }
+    return best;
+  }
+
   canvas.addEventListener('wheel', (e) => {
     const { x, y } = getMousePos(e);
-    const hit = findBandAt(x, y) || (draggingId && bands.find(b => b.id === draggingId));
+    const hit = findBandForWheel(x, y);
     if (!hit) return;
     e.preventDefault();
-    // Q: log step. Up scroll → tighter Q (higher value).
     const factor = Math.exp(-e.deltaY * 0.0015);
     hit.q = clamp(hit.q * factor, 0.3, 24);
     hit.q = Math.round(hit.q * 100) / 100;
+    hoveredId = hit.id;
     onBandsChanged();
     updateReadout();
   }, { passive: false });
 
-  // ── Bands changed → audio + redraw ──
   function onBandsChanged() {
     applyAllBandsToNodes();
     drawCurve();
+    scheduleAutoSave();
   }
 
-  // ── File selector — pick processed file when available ──
+  // ── Auto-save (debounced) ──
+  // Every band tweak persists the manual chain immediately so "Process All"
+  // always reflects what the user is hearing in the editor. When the bands
+  // match the built-in defaults, manualEqApply is set to false so the
+  // pipeline uses its base EQ path (semantically the same audio, less
+  // moving parts to debug).
+  let saveTimer = null;
+  function scheduleAutoSave() {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(persistEqState, 250);
+  }
+  function bandsMatchDefault() {
+    if (bands.length !== DEFAULT_BANDS.length) return false;
+    for (let i = 0; i < bands.length; i++) {
+      const a = bands[i], b = DEFAULT_BANDS[i];
+      if (a.enabled !== b.enabled || a.type !== b.type) return false;
+      if (Math.abs(a.f - b.f) > 0.5) return false;
+      if (Math.abs((a.g ?? 0) - (b.g ?? 0)) > 0.05) return false;
+      if (Math.abs(a.q - b.q) > 0.01) return false;
+    }
+    return true;
+  }
+  async function persistEqState() {
+    if (!window.api?.store) return;
+    const useBase = bandsMatchDefault();
+    if (useBase) {
+      await window.api.store.set('manualEqApply', false);
+    } else {
+      await window.api.store.set('manualEqChain', buildFfmpegChain());
+      await window.api.store.set('manualEqApply', true);
+    }
+    manualEqApply = !useBase;
+    updateStatus();
+  }
+
+  // ── File selector — always preview the SOURCE file ──
+  // The preview must match what the pipeline will produce: source + current
+  // editor EQ. Auditioning the already-processed output would stack two EQs.
   function refreshFileSelect() {
     let opts = [];
     if (window.audioProQueue?.listFiles) {
-      opts = window.audioProQueue.listFiles().map(f => ({
-        path: f.output || f.path,
-        name: f.name + (f.output ? ' · processed' : ' · source'),
-      }));
+      opts = window.audioProQueue.listFiles().map(f => ({ path: f.path, name: f.name }));
     } else {
       document.querySelectorAll('#queue-list .file-item').forEach(it => {
         const path = it.dataset.filePath;
@@ -399,22 +603,45 @@
       ? opts.map(o => `<option value="${escapeHtml(o.path)}">${escapeHtml(o.name)}</option>`).join('')
       : '<option value="">No files in queue — add one in Processing tab</option>';
     if (opts.find(o => o.path === prevValue)) fileSelect.value = prevValue;
+    // Fire auto-fit when a value is freshly available (e.g. first file
+    // added to the queue while the EQ tab was already mounted). The Set
+    // inside autoFitToFile prevents re-running for the same path.
+    if (fileSelect.value) autoFitToFile(fileSelect.value);
   }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
   // ── Playback ──
+  // The source file path may contain spaces, reserved characters, or
+  // backslashes (Windows). HTMLAudioElement requires a proper URL — raw
+  // spaces or backslashes in `file://` URLs fail silently in Chromium.
+  function fileUrlFor(p) {
+    // Normalize Windows backslashes to forward slashes. A path like
+    // `C:\Users\test\a.wav` becomes `C:/Users/test/a.wav`, then the
+    // URL is `file:///C:/Users/test/a.wav` (drive-letter paths get an
+    // extra leading `/` so the host portion is empty).
+    const fwd = p.replace(/\\/g, '/');
+    const prefix = fwd.startsWith('/') ? 'file://' : 'file:///';
+    return prefix + encodeURI(fwd);
+  }
   async function playPause() {
     const path = fileSelect.value;
     if (!path) return;
     ensureAudio();
     if (audioCtx.state === 'suspended') await audioCtx.resume();
-    if (audioEl.src !== 'file://' + path && !audioEl.src.endsWith(encodeURI(path))) {
-      audioEl.src = 'file://' + path;
+    const desired = fileUrlFor(path);
+    if (audioEl.src !== desired) {
+      audioEl.src = desired;
     }
     if (audioEl.paused) {
-      try { await audioEl.play(); playBtn.textContent = '⏸'; } catch (err) { console.warn('play failed', err); }
+      try {
+        await audioEl.play();
+        playBtn.textContent = '⏸';
+      } catch (err) {
+        console.warn('[EQ] play() rejected', err);
+        readoutEl.textContent = `Playback failed: ${err.message || err.name || err}`;
+      }
     } else {
       audioEl.pause();
       playBtn.textContent = '▶';
@@ -450,31 +677,24 @@
     return parts.length ? parts.join(',') : 'acopy';
   }
 
-  // ── Persistence ──
-  async function applyToAll() {
-    if (!window.api?.store) return;
-    await window.api.store.set('manualEqChain', buildFfmpegChain());
-    await window.api.store.set('manualEqApply', true);
-    manualEqApply = true;
-    updateStatus();
-  }
+  // ── Reset to defaults ──
   async function resetToAuto() {
     for (let i = 0; i < bands.length; i++) Object.assign(bands[i], DEFAULT_BANDS[i]);
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     if (window.api?.store) await window.api.store.set('manualEqApply', false);
     manualEqApply = false;
-    onBandsChanged();
+    applyAllBandsToNodes();
+    drawCurve();
     updateStatus();
     updateReadout();
   }
   function updateStatus() {
     if (manualEqApply) {
-      statusVal.textContent = 'on — manual EQ added on top of auto EQ for all queued files';
+      statusVal.textContent = 'custom — your EQ will be applied when you Process All';
       statusVal.className = 'eq-status-on';
-      applyBtn.textContent = 'Update';
     } else {
-      statusVal.textContent = 'off — pipeline uses only the automatic EQ';
+      statusVal.textContent = 'base — pipeline will use the built-in EQ when you Process All';
       statusVal.className = 'eq-status-off';
-      applyBtn.textContent = 'Apply to all';
     }
   }
 
@@ -497,11 +717,13 @@
   }
   window.addEventListener('audiopro:queue-changed', refreshFileSelect);
   refreshFileSelect();
+  fileSelect.addEventListener('change', () => {
+    if (fileSelect.value) autoFitToFile(fileSelect.value);
+  });
   playBtn.addEventListener('click', playPause);
   stopBtn.addEventListener('click', stop);
   bypassChk.addEventListener('change', applyBypass);
   resetBtn.addEventListener('click', resetToAuto);
-  applyBtn.addEventListener('click', applyToAll);
 
   document.addEventListener('keydown', (e) => {
     const eqActive = document.getElementById('view-eq') && !document.getElementById('view-eq').hidden;

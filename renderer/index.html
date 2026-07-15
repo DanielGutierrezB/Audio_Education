@@ -17,7 +17,6 @@
             Processing
             <span class="tab-badge" id="badge-done" hidden></span>
           </button>
-          <button class="tab" data-tab="preview" role="tab" aria-selected="false">Preview</button>
           <button class="tab" data-tab="eq" role="tab" aria-selected="false">EQ</button>
           <button class="tab" data-tab="about" role="tab" aria-selected="false">About</button>
         </nav>
@@ -58,11 +57,6 @@
             title="Remove all files from the queue">Clear All</button>
           <button class="btn btn-secondary btn-sm" id="btn-open-output" hidden
             title="Open the custom output folder in Finder">Open output</button>
-          <div class="mode-toggle" title="Quality / Fast / Auto — affects per-file processing decisions made by the analyzer (compression, EQ, normalization). Denoise is currently disabled in all modes.">
-            <button class="mode-btn" id="mode-quality" data-mode="quality">Quality</button>
-            <button class="mode-btn" id="mode-fast" data-mode="fast">Fast</button>
-            <button class="mode-btn" id="mode-auto" data-mode="auto">Auto</button>
-          </div>
           <button class="btn-icon-only" id="btn-copy-log"
             title="Copy debug log to clipboard">&#128203;</button>
           <button class="btn-icon-only" id="btn-settings"
@@ -90,64 +84,15 @@
                   <option value="44100">44.1 kHz</option>
                 </select>
               </div>
-              <div class="settings-row">
-                <span class="settings-label" title="Target integrated loudness. -16 LUFS = podcast standard. -14 LUFS = streaming platforms.">LUFS Target</span>
-                <div class="range-row">
-                  <input type="range" id="set-lufs" min="-20" max="-14" step="1" value="-16"
-                    aria-label="LUFS target">
-                  <span class="range-value" id="lufs-value">-16 LUFS</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="settings-category">
-              <div class="settings-cat-title">Noise Reduction</div>
-              <div class="settings-row">
-                <label class="settings-label" for="set-noisegate"
-                  title="Adaptive noise gate: closes the audio signal during very quiet passages to eliminate low-level background noise between words.">
-                  Noise Gate
-                </label>
-                <label class="toggle">
-                  <input type="checkbox" id="set-noisegate" checked>
-                  <span class="toggle-track"></span>
-                </label>
-              </div>
-              <div class="settings-row">
-                <label class="settings-label" for="set-silencetrim"
-                  title="Automatically removes leading and trailing silence from each file. Cleans up dead air at the start and end of recordings.">
-                  Silence Trim
-                </label>
-                <label class="toggle">
-                  <input type="checkbox" id="set-silencetrim" checked>
-                  <span class="toggle-track"></span>
-                </label>
-              </div>
-              <div class="settings-row">
-                <label class="settings-label" for="set-breathreduction"
-                  title="Gently attenuates breath sounds between sentences by ~6 dB. Subtle — use when breaths are audible and distracting.">
-                  Breath Reduction
-                </label>
-                <label class="toggle">
-                  <input type="checkbox" id="set-breathreduction">
-                  <span class="toggle-track"></span>
-                </label>
+              <div class="settings-row settings-row-note">
+                <span class="settings-note">Loudness normalize to &minus;16 LUFS (TP &le; &minus;2 dBTP). Files already at target are kept as-is.</span>
               </div>
             </div>
 
             <div class="settings-category">
               <div class="settings-cat-title">EQ</div>
               <div class="settings-row">
-                <label class="settings-label" for="set-stereomono"
-                  title="Converts stereo recordings to mono. Recommended for educational content — voice is always mono and saves file size.">
-                  Stereo &rarr; Mono
-                </label>
-                <label class="toggle">
-                  <input type="checkbox" id="set-stereomono" checked>
-                  <span class="toggle-track"></span>
-                </label>
-              </div>
-              <div class="settings-row">
-                <span class="settings-label" title="High-pass filter removes low-frequency rumble below this frequency. 80 Hz is ideal for voice. Lower for music-adjacent content.">HPF Frequency</span>
+                <span class="settings-label" title="High-pass filter removes low-frequency rumble below this frequency. 80 Hz is ideal for voice.">HPF Frequency</span>
                 <div class="range-row">
                   <input type="range" id="set-hpf" min="60" max="120" step="5" value="80"
                     aria-label="HPF frequency">
@@ -156,43 +101,16 @@
               </div>
               <div class="settings-row">
                 <label class="settings-label" for="set-deesser"
-                  title="De-esser reduces harsh sibilance (S, Sh, Ch sounds) in the 6–7 kHz range. Disable if voice sounds too dull.">
+                  title="Optional de-esser at 6.5 kHz. Off by default — enable only if sibilance is harsh.">
                   De-esser
                 </label>
                 <label class="toggle">
-                  <input type="checkbox" id="set-deesser" checked>
-                  <span class="toggle-track"></span>
-                </label>
-              </div>
-              <div class="settings-row">
-                <label class="settings-label" for="set-adaptive-eq"
-                  title="Adaptive EQ: analyses each file's spectrum and adds narrow notches at detected resonances on top of the standard voice-warm curve. Off by default — try on recordings with audible boxiness or room ring.">
-                  Adaptive EQ (per-file)
-                </label>
-                <label class="toggle">
-                  <input type="checkbox" id="set-adaptive-eq">
-                  <span class="toggle-track"></span>
-                </label>
-              </div>
-            </div>
-
-            <div class="settings-category">
-              <div class="settings-cat-title">Dynamics</div>
-              <div class="settings-row">
-                <label class="settings-label" for="set-mbc"
-                  title="3-band compressor: separate compression for low (0–300 Hz), mid (300–3500 Hz), and high (3500+ Hz) frequencies. Gives more control than a single compressor.">
-                  Multi-band Comp
-                </label>
-                <label class="toggle">
-                  <input type="checkbox" id="set-mbc" checked>
+                  <input type="checkbox" id="set-deesser">
                   <span class="toggle-track"></span>
                 </label>
               </div>
               <div class="settings-row settings-row-note">
-                <span class="settings-note">Low: 5:1 &middot; Mid: 3.5:1 &middot; High: 2:1</span>
-              </div>
-              <div class="settings-row settings-row-note">
-                <span class="settings-note">Limiter at &minus;1 dBTP always active</span>
+                <span class="settings-note">For finer control use the EQ tab &mdash; "Apply to all" overrides the base curve.</span>
               </div>
             </div>
 
@@ -231,63 +149,6 @@
         </div>
       </section>
 
-      <!-- ── Preview View ── -->
-      <section class="view" id="view-preview" role="tabpanel" hidden>
-
-        <!-- Processed files list -->
-        <div class="preview-file-list" id="preview-file-list">
-          <div class="preview-file-list-empty" id="preview-list-empty">
-            <span class="text-muted">No processed files yet &mdash; process files first</span>
-          </div>
-        </div>
-
-        <!-- A/B toggle bar -->
-        <div class="preview-topbar" id="preview-topbar" hidden>
-          <div class="ab-toggle">
-            <button class="ab-btn active" id="ab-original" title="Listen to original recording (A)">Original</button>
-            <button class="ab-btn" id="ab-processed" title="Listen to processed audio (A to toggle)">Processed</button>
-          </div>
-        </div>
-
-        <!-- Waveform — full width, takes remaining space -->
-        <div class="preview-waveform-section">
-          <div class="preview-waveform-wrap" id="preview-waveform-wrap">
-            <canvas id="preview-waveform"></canvas>
-            <div class="preview-waveform-loading" id="preview-loading" hidden>Loading waveform&hellip;</div>
-          </div>
-        </div>
-
-        <!-- Transport controls -->
-        <div class="preview-transport">
-          <div class="transport-time">
-            <span id="preview-current-time" class="time-mono">0:00</span>
-            <span class="time-sep">/</span>
-            <span id="preview-total-time" class="time-mono">0:00</span>
-          </div>
-          <div class="transport-buttons">
-            <button class="btn-transport" id="btn-skip-back" title="Skip back 5 seconds (&#8592;)">
-              &#9664;&#9664; 5s
-            </button>
-            <button class="btn-transport btn-transport-play" id="btn-play-main" title="Play / Pause (Space)">
-              &#9654;
-            </button>
-            <button class="btn-transport" id="btn-stop-main" title="Stop and return to start (S)">
-              &#9632;
-            </button>
-            <button class="btn-transport" id="btn-skip-fwd" title="Skip forward 5 seconds (&#8594;)">
-              5s &#9654;&#9654;
-            </button>
-          </div>
-          <div class="transport-volume">
-            <span class="volume-icon" title="Volume">&#128266;</span>
-            <input type="range" id="preview-volume" class="volume-slider"
-              min="0" max="1" step="0.01" value="1" title="Volume" aria-label="Volume">
-          </div>
-        </div>
-
-        <audio id="audio-player" preload="none"></audio>
-      </section>
-
       <!-- ── EQ View ── -->
       <section class="view" id="view-eq" role="tabpanel" hidden>
         <div class="eq-editor">
@@ -296,6 +157,7 @@
             <select class="eq-file-select" id="eq-file-select" aria-label="File to preview">
               <option value="">No files in queue</option>
             </select>
+            <span class="eq-auto-info" id="eq-auto-info" hidden></span>
             <div class="eq-transport">
               <button class="btn-transport" id="eq-play" title="Play / Pause (Space)">&#9654;</button>
               <button class="btn-transport" id="eq-stop" title="Stop">&#9632;</button>
@@ -306,13 +168,12 @@
               <input type="checkbox" id="eq-bypass">
               <span>Bypass</span>
             </label>
-            <button class="btn btn-secondary btn-sm" id="eq-reset" title="Reset to AudioPro's automatic EQ">Reset</button>
-            <button class="btn btn-accent btn-sm" id="eq-apply" title="Use this manual EQ for all queued files when processing">Apply to all</button>
+            <button class="btn btn-secondary btn-sm" id="eq-reset" title="Reset to AudioPro's base EQ">Reset</button>
           </div>
 
           <div class="eq-canvas-wrap">
             <canvas id="eq-canvas" width="980" height="380"></canvas>
-            <div class="eq-status" id="eq-status">Manual EQ override: <span id="eq-status-value" class="eq-status-off">off</span></div>
+            <div class="eq-status" id="eq-status">EQ for batch: <span id="eq-status-value" class="eq-status-off">base — pipeline will use the built-in EQ when you Process All</span></div>
             <div class="eq-readout" id="eq-readout">Click and drag a band — scroll to change Q</div>
           </div>
 
@@ -329,33 +190,21 @@
 
           <div class="pipeline-diagram">
             <div class="pipe-node">
-              <span class="pipe-icon">&#129504;</span>
-              <span class="pipe-label">Smart Analyze</span>
-              <span class="pipe-sub">AI Profiling</span>
-            </div>
-            <div class="pipe-arrow">&#8594;</div>
-            <div class="pipe-node">
-              <span class="pipe-icon">&#127908;</span>
-              <span class="pipe-label">Pre-process</span>
-              <span class="pipe-sub">Mono &middot; Gate &middot; Trim</span>
-            </div>
-            <div class="pipe-arrow">&#8594;</div>
-            <div class="pipe-node">
-              <span class="pipe-icon">&#127931;</span>
-              <span class="pipe-label">BodyGen</span>
-              <span class="pipe-sub">Harmonics &middot; Sub-bass</span>
+              <span class="pipe-icon">&#128203;</span>
+              <span class="pipe-label">Probe</span>
+              <span class="pipe-sub">Metadata</span>
             </div>
             <div class="pipe-arrow">&#8594;</div>
             <div class="pipe-node">
               <span class="pipe-icon">&#9000;</span>
-              <span class="pipe-label">EQ Measure</span>
-              <span class="pipe-sub">Loudnorm 2-pass</span>
+              <span class="pipe-label">Measure</span>
+              <span class="pipe-sub">EQ + loudnorm pass 1</span>
             </div>
             <div class="pipe-arrow">&#8594;</div>
             <div class="pipe-node">
               <span class="pipe-icon">&#128190;</span>
               <span class="pipe-label">Render</span>
-              <span class="pipe-sub">EQ &middot; MBC &middot; Loudnorm</span>
+              <span class="pipe-sub">EQ + loudnorm to &minus;16 LUFS</span>
             </div>
           </div>
 
@@ -365,40 +214,32 @@
             <div class="pipeline-step">
               <div class="step-number">1</div>
               <div class="step-body">
-                <h3>Smart Analysis</h3>
-                <p>Runs six parallel measurements: format metadata (FFprobe), integrated loudness (LUFS), noise floor, sibilance level (4–10 kHz energy ratio), reverb estimation (crest factor), and dynamic range. Results automatically configure every subsequent step for this specific file. In <strong>Auto</strong> mode, the analyzer has full control over all settings.</p>
+                <h3>Probe</h3>
+                <p>FFprobe reads basic format metadata (duration, sample rate, channels). No further analysis &mdash; processing decisions are fixed, not adapted per file.</p>
               </div>
             </div>
 
             <div class="pipeline-step">
               <div class="step-number">2</div>
               <div class="step-body">
-                <h3>Pre-process</h3>
-                <p><strong>Stereo&rarr;Mono:</strong> Mixes channels to mono (voice is always mono). <strong>Noise Gate:</strong> Closes signal during silent passages (&lt;0.5% threshold) to eliminate background hum between words. <strong>Silence Trim:</strong> Removes leading and trailing silence using a double-pass areverse technique to preserve natural mid-speech pauses.</p>
+                <h3>Measure</h3>
+                <p>Runs the file through mono mixdown + EQ + <code>loudnorm</code> in measurement mode and parses the JSON summary &mdash; integrated loudness (LUFS), true peak (dBFS), loudness range (LRA), gating threshold. These values feed the render pass for a single linear-gain normalisation.</p>
               </div>
             </div>
 
             <div class="pipeline-step">
               <div class="step-number">3</div>
               <div class="step-body">
-                <h3>BodyGen <span class="step-badge">New in 0.1.2</span></h3>
-                <p><strong>Harmonic Exciter:</strong> Extracts the 80&ndash;350&nbsp;Hz voice body range, then applies analog-style waveshaping (soft saturation) to generate new odd and even harmonics &mdash; the same technique used in tube preamps and tape machines. <strong>Sub-Harmonic Synthesis:</strong> Creates sub-octave content from voice fundamentals (80&ndash;200&nbsp;Hz) via half-wave rectification. The result is a fuller, warmer voice with real new frequency content &mdash; not just an EQ boost. Powered by PyTorch for precision DSP.</p>
+                <h3>Render</h3>
+                <p>Mono mixdown &rarr; resample (only if source isn't at target rate) &rarr; <strong>EQ chain</strong> (HPF, mud, box, honk, presence, air) &rarr; <code>loudnorm</code> in linear mode using measured stats to land on &minus;16 LUFS integrated with TP &le; &minus;2 dBTP. Sources already at or above &minus;16 LUFS skip the loudnorm step entirely. Output: WAV 24-bit 48&nbsp;kHz in <code>Audio_Pro/</code>.</p>
               </div>
             </div>
 
             <div class="pipeline-step">
               <div class="step-number">4</div>
               <div class="step-body">
-                <h3>EQ Measure</h3>
-                <p>Applies the full EQ and dynamics chain in measurement mode (no output file) to gather loudness statistics for the two-pass <code>loudnorm</code> algorithm. <strong>EQ chain:</strong> HPF &rarr; warmth shelf (120 Hz) &rarr; body boost (180 Hz) &rarr; boxiness cut (300 Hz) &rarr; clarity (2 kHz) &rarr; presence (3.5 kHz) &rarr; optional de-esser (6.5 kHz) &rarr; harshness tame (8 kHz).</p>
-              </div>
-            </div>
-
-            <div class="pipeline-step">
-              <div class="step-number">5</div>
-              <div class="step-body">
-                <h3>Render</h3>
-                <p>EQ chain (HPF &rarr; warmth &rarr; boxiness cut &rarr; clarity &rarr; presence) &rarr; <strong>Parallel compression</strong> (100&ndash;350&nbsp;Hz heavily compressed and blended at low volume for consistent body) &rarr; Single-band or multi-band compressor &rarr; Hard limiter at &minus;1&nbsp;dBTP &rarr; Loudness normalization to your LUFS target. Output: WAV 24-bit 48&nbsp;kHz in <code>Audio_Pro/</code> next to the source folder.</p>
+                <h3>EQ editor</h3>
+                <p>Open the EQ tab, pick a source file from the dropdown, hit Play and drag bands in real time. Every band change auto-saves &mdash; when you go back to Processing and hit <strong>Process All</strong>, the pipeline uses whatever curve the editor is currently showing. <strong>Reset</strong> returns to the base EQ; <strong>Bypass</strong> A/Bs the preview without touching the saved state.</p>
               </div>
             </div>
           </div>
@@ -406,26 +247,6 @@
           <div class="keyboard-shortcuts">
             <h2>Keyboard Shortcuts</h2>
             <div class="shortcuts-grid">
-              <div class="shortcut-row">
-                <div class="shortcut-context">Preview tab</div>
-                <kbd>Space</kbd>
-                <span class="shortcut-desc">Play / Pause</span>
-              </div>
-              <div class="shortcut-row">
-                <div class="shortcut-context">Preview tab</div>
-                <kbd>&#8592;</kbd>
-                <span class="shortcut-desc">Skip back 5 seconds</span>
-              </div>
-              <div class="shortcut-row">
-                <div class="shortcut-context">Preview tab</div>
-                <kbd>&#8594;</kbd>
-                <span class="shortcut-desc">Skip forward 5 seconds</span>
-              </div>
-              <div class="shortcut-row">
-                <div class="shortcut-context">Preview tab</div>
-                <kbd>A</kbd>
-                <span class="shortcut-desc">Toggle Original / Processed A&frasl;B</span>
-              </div>
               <div class="shortcut-row">
                 <div class="shortcut-context">Anywhere</div>
                 <kbd>Esc</kbd>

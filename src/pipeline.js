@@ -3,133 +3,50 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
-const crypto = require('crypto');
 const binPaths = require('./bin-paths');
 
-// ── Filter builders ──
+// ── Base EQ ──
+// Single fixed curve for voice — replica of the Waves F6 reference:
+//   HPF + three surgical low-mid cuts (mud/box/honk) + gentle presence
+//   peak + air highshelf. User overrides via the EQ editor →
+//   manualEqChain + manualEqApply.
+const BASE_EQ_BANDS = [
+  // freq, Q, gain (dB) — peaking unless noted
+  { f: 150,   q: 2,    g: -3   },  // mud cut
+  { f: 280,   q: 2.5,  g: -3   },  // box cut
+  { f: 500,   q: 2,    g: -4   },  // honk cut
+  { f: 3589,  q: 1.0,  g: 1    },  // presence
+];
+const AIR_SHELF = { f: 10000, g: 1.5 };  // highshelf
+const DEFAULT_HPF_HZ = 80;
 
-function buildPreChain(settings) {
-  const parts = [];
-  if (settings.stereoToMonoEnabled !== false) {
-    parts.push('pan=mono|c0=0.5*c0+0.5*c1');
+// Loudness targets. Files quieter than TARGET_LUFS get normalized via
+// FFmpeg's two-pass loudnorm; files already at or above the target are
+// passed through untouched (preserves the "only raise, never attenuate"
+// contract).
+const TARGET_LUFS = -16;
+const TARGET_TP_DB = -2;
+const TARGET_LRA = 11;
+
+function buildBaseEqChain(settings) {
+  const hpfF = settings.hpfFrequency ?? DEFAULT_HPF_HZ;
+  const filters = [`highpass=f=${hpfF}:poles=2`];
+  for (const b of BASE_EQ_BANDS) {
+    filters.push(`equalizer=f=${b.f}:width_type=q:width=${b.q}:g=${b.g}`);
   }
-  // Denoise stages disabled — DeepFilterNet and FFmpeg afftdn were both
-  // degrading the source. Voice-warm EQ + noise gate handle residual
-  // hum without the artefacts that ML/spectral denoise introduce.
-  if (settings.noiseGateEnabled !== false && settings.mode !== 'clean') {
-    // Gentler noise gate — less aggressive range to avoid cutting natural room tone
-    parts.push('agate=threshold=0.003:ratio=3:attack=8:release=120:range=0.01');
+  filters.push(`highshelf=f=${AIR_SHELF.f}:g=${AIR_SHELF.g}`);
+  if (settings.deEsserEnabled === true) {
+    filters.push('equalizer=f=6500:width_type=q:width=3.25:g=-2');
   }
-  if (settings.silenceTrimEnabled !== false) {
-    // Trim leading silence only; trailing uses areverse trick to avoid cutting mid-speech pauses
-    parts.push('silenceremove=start_periods=1:start_threshold=-60dB:start_silence=0.15');
-    parts.push('areverse');
-    parts.push('silenceremove=start_periods=1:start_threshold=-60dB:start_silence=0.3');
-    parts.push('areverse');
-  }
-  return parts.length ? parts.join(',') : 'acopy';
-}
-
-/**
- * Convert a voice-profile notch ({ freq, q, prominenceDb, fixedCutDb? })
- * into an FFmpeg `equalizer=` filter string. LOW-band peaks carry a
- * fixed −3 dB cut; the rest scale their cut from prominence with a
- * conservative ceiling so dynamic notches never overpower the static
- * voice-warm shape.
- */
-function notchToFilter(n) {
-  const f = Math.max(40, Math.min(20000, Math.round(n.freq)));
-  const q = Math.max(0.5, Math.min(20, n.q ?? 8));
-  let g;
-  if (Number.isFinite(n.fixedCutDb)) {
-    g = n.fixedCutDb;
-  } else {
-    // Map prominence (dB above local average) to cut amount, capped at −3.5 dB.
-    const prom = Math.max(0, Math.min(12, n.prominenceDb ?? 4));
-    g = -Math.min(3.5, 1.5 + prom * 0.18);
-  }
-  return `equalizer=f=${f}:width_type=q:width=${q.toFixed(2)}:g=${g.toFixed(2)}`;
-}
-
-function buildEqChain(settings, voiceProfileNotches) {
-  // Manual override — when the user has built a chain in the EQ editor
-  // and toggled "Apply to all", that chain replaces the entire built-in
-  // voice-warm EQ (and the adaptive notches below). The breath gate
-  // (if requested) is still appended so the user doesn't lose downstream
-  // functionality.
-  if (settings.manualEqApply === true && typeof settings.manualEqChain === 'string'
-      && settings.manualEqChain.trim()) {
-    const parts = [settings.manualEqChain.trim()];
-    if (settings.breathReductionEnabled === true) {
-      parts.push('agate=threshold=0.02:ratio=2:attack=5:release=150');
-    }
-    return parts.join(',');
-  }
-
-  const hpfFreq = settings.hpfFrequency ?? 80;
-  const deEsser = settings.deEsserEnabled !== false;
-  const breathReduction = settings.breathReductionEnabled === true;
-
-  // Voice-optimized EQ curve — warm, full, broadcast-quality
-  // Low shelf at 120Hz targets voice fundamentals (80-150Hz)
-  // NOT at 250Hz which is the "boxy" zone that sounds hollow/echoey
-  const filters = [
-    `highpass=f=${hpfFreq}:poles=2`,
-    'lowshelf=f=120:width_type=o:width=0.7:g=4',       // voice warmth (fundamentals only)
-    'equalizer=f=300:width_type=o:width=1.5:g=-2',     // cut boxiness / room resonance
-    'equalizer=f=800:width_type=o:width=2.0:g=0.5',    // lower mids, subtle body
-    'equalizer=f=2000:width_type=o:width=1.5:g=2',     // upper-mid clarity
-    'equalizer=f=3500:width_type=o:width=1.2:g=1',     // presence / intelligibility
-    'equalizer=f=8000:width_type=o:width=2.0:g=-0.5',  // tame harshness
-  ];
-
-  if (deEsser) {
-    const deEsserGain = settings.deEsserGain ?? -2;
-    filters.splice(6, 0, `equalizer=f=6500:width_type=h:width=2000:g=${deEsserGain}`);
-  }
-
-  // Adaptive EQ — append voice-profile-derived narrow notches AFTER the
-  // static voice-warm shape. Only applied when caller passes a non-empty
-  // array, gated upstream by settings.adaptiveEqEnabled.
-  if (Array.isArray(voiceProfileNotches) && voiceProfileNotches.length) {
-    for (const n of voiceProfileNotches) filters.push(notchToFilter(n));
-  }
-
-  if (breathReduction) {
-    filters.push('agate=threshold=0.02:ratio=2:attack=5:release=150');
-  }
-
   return filters.join(',');
 }
 
-const LIMITER = 'alimiter=level_in=1:limit=0.891:level_out=1:attack=5:release=50';
-
-function buildSingleBandComp(settings = {}) {
-  const ratio = settings.compressionRatio ?? 2.5;
-  const makeup = ratio <= 2 ? 1.5 : ratio <= 3 ? 2 : 2.5;
-  return `acompressor=threshold=0.08:ratio=${ratio}:attack=15:release=200:makeup=${makeup},${LIMITER}`;
-}
-
-function buildLoudnormBase(lufsTarget) {
-  return `I=${lufsTarget ?? -16}:TP=-1.5:LRA=11`;
-}
-
-function parseLoudnormStats(stderr) {
-  const m = stderr.match(/\{[^{}]*"input_i"[^{}]*\}/s);
-  if (!m) return null;
-  try { return JSON.parse(m[0]); } catch { return null; }
-}
-
-function buildLoudnormFilter(stats, loudnormBase) {
-  if (!stats) return `loudnorm=${loudnormBase}`;
-  return (
-    `loudnorm=${loudnormBase}:linear=true` +
-    `:measured_I=${stats.input_i}` +
-    `:measured_LRA=${stats.input_lra}` +
-    `:measured_TP=${stats.input_tp}` +
-    `:measured_thresh=${stats.input_thresh}`
-  );
+function buildEqChain(settings) {
+  if (settings.manualEqApply === true && typeof settings.manualEqChain === 'string'
+      && settings.manualEqChain.trim()) {
+    return settings.manualEqChain.trim();
+  }
+  return buildBaseEqChain(settings);
 }
 
 function buildOutputCodecArgs(settings) {
@@ -146,8 +63,6 @@ function resolveOutputPath(inputPath, settings) {
   const format = settings.outputFormat ?? 'wav24';
   const ext = format === 'flac' ? '.flac' : '.wav';
   const baseName = path.basename(inputPath, path.extname(inputPath)) + ext;
-  // Custom output dir override — empty string falls back to default behavior
-  // of writing into a sibling Audio_Pro/ folder next to each source.
   const customDir = settings.customOutputDir;
   if (typeof customDir === 'string' && customDir) {
     fs.mkdirSync(customDir, { recursive: true });
@@ -160,23 +75,19 @@ function resolveOutputPath(inputPath, settings) {
 }
 
 // ── Spawn helper ──
-
-const RUN_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes max per FFmpeg pass
+const RUN_TIMEOUT_MS = 10 * 60 * 1000;
 
 function run(cmd, args, opts = {}) {
-  // Resolve bundled binary paths
   if (cmd === 'ffmpeg')  cmd = binPaths.ffmpeg();
   if (cmd === 'ffprobe') cmd = binPaths.ffprobe();
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd, args);
     if (opts.setCurrent) opts.setCurrent(proc);
-
     const timer = setTimeout(() => {
       proc.kill('SIGTERM');
       if (opts.setCurrent) opts.setCurrent(null);
       reject(new Error(`${path.basename(cmd)} timed out after ${RUN_TIMEOUT_MS / 1000}s`));
     }, opts.timeout ?? RUN_TIMEOUT_MS);
-
     let stderr = '';
     proc.stderr.on('data', chunk => {
       const text = chunk.toString();
@@ -194,7 +105,6 @@ function run(cmd, args, opts = {}) {
       if (opts.setCurrent) opts.setCurrent(null);
       if (code === 0 || code === null) resolve(stderr);
       else {
-        // Include last 300 chars of stderr for troubleshooting
         const tail = stderr.slice(-300).trim();
         reject(new Error(`${path.basename(cmd)} exited ${code}${tail ? ': ' + tail : ''}`));
       }
@@ -207,225 +117,92 @@ function run(cmd, args, opts = {}) {
   });
 }
 
-// ── Analysis ──
-
-async function analyzeFile(filePath, setCurrent) {
+// ── ffprobe basic metadata ──
+async function probeBasic(filePath) {
   const out = await new Promise((resolve, reject) => {
     const proc = spawn(binPaths.ffprobe(), [
       '-v', 'quiet', '-print_format', 'json', '-show_streams', '-show_format', filePath,
     ]);
-    setCurrent(proc);
     let buf = '';
     proc.stdout.on('data', c => { buf += c; });
-    proc.on('close', code => {
-      setCurrent(null);
-      code === 0 ? resolve(buf) : reject(new Error('ffprobe failed'));
-    });
-    proc.on('error', err => { setCurrent(null); reject(err); });
+    proc.on('close', code => code === 0 ? resolve(buf) : reject(new Error('ffprobe failed')));
+    proc.on('error', reject);
   });
-
   const probe = JSON.parse(out);
   const audio = probe.streams?.find(s => s.codec_type === 'audio');
   return {
     duration:   parseFloat(probe.format?.duration) || null,
     sampleRate: parseInt(audio?.sample_rate) || null,
     channels:   parseInt(audio?.channels) || 1,
-    bitDepth:   parseInt(audio?.bits_per_sample) || null,
   };
 }
 
-// ── Step 0 — Canonical input normalisation ──
-
-/**
- * Normalise the source file to AudioPro's canonical working format:
- * mono / 48 kHz / pcm_s16le. Every downstream stage (DeepFilterNet,
- * preprocess, BodyGen, EQ measure, render) operates on this format.
- *
- * 16-bit is required by the bundled deep-filter binary, which panics
- * with `TooWide` on anything wider. Keeping the whole pipeline at 16-bit
- * also avoids quality-degrading bit-depth round-trips between stages
- * (the final render still emits 24-bit / FLAC if the user requested it).
- */
-async function normaliseInput(inputPath, outputPath) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(binPaths.ffmpeg(), [
-      '-y', '-v', 'error',
-      '-i', inputPath,
-      '-ac', '1',
-      '-ar', '48000',
-      '-c:a', 'pcm_s16le',
-      '-f', 'wav',
-      outputPath,
-    ]);
-    let stderr = '';
-    proc.stderr.on('data', c => { stderr += c.toString(); });
-    proc.on('close', code => {
-      if (code === 0) resolve();
-      else reject(new Error(`Input normalisation failed (${code}): ${stderr.slice(-200).trim()}`));
-    });
-    proc.on('error', reject);
-  });
+// Shared pre-EQ chain: downmix to mono and resample to target SR if
+// needed. Used by both measure and render passes so the EQ sees the same
+// sample rate (biquad coefficients are SR-dependent — running EQ at
+// 44.1 kHz in measure and 48 kHz in render would produce slightly
+// different peaks and break the linear-gain guarantee).
+function buildPreEqChain(meta, settings) {
+  const targetSr = parseInt(settings.sampleRate ?? 48000, 10);
+  const parts = ['aformat=channel_layouts=mono'];
+  if (meta.sampleRate !== targetSr) {
+    parts.push(`aresample=${targetSr}:filter_size=64`);
+  }
+  return parts.join(',');
 }
 
-// ── DeepFilterNet denoise ──
-
-async function runDeepFilterNet(inputPath, outputPath, setCurrent, opts = {}) {
-  // deep-filter writes to an output directory, so we use a temp dir
-  const tmpDir = path.join(os.tmpdir(), `audiopro_dfn_${crypto.randomBytes(6).toString('hex')}`);
-  fs.mkdirSync(tmpDir, { recursive: true });
-
-  // DFN 0.5.x crashes on 24-bit WAV ("TooWide") — convert to 16-bit first
-  let dfnInput = inputPath;
-  let convertedInput = null;
-  try {
-    const probeOut = await new Promise((res, rej) => {
-      const p = spawn(binPaths.ffprobe(), ['-v', 'quiet', '-print_format', 'json', '-show_streams', inputPath]);
-      let buf = '';
-      p.stdout.on('data', c => { buf += c; });
-      p.on('close', code => code === 0 ? res(buf) : rej(new Error('ffprobe failed')));
-      p.on('error', rej);
-    });
-    const streams = JSON.parse(probeOut).streams || [];
-    const audio = streams.find(s => s.codec_type === 'audio');
-    const bps = parseInt(audio?.bits_per_sample) || 16;
-    if (bps > 16) {
-      convertedInput = path.join(tmpDir, `input_16bit_${path.basename(inputPath)}`);
-      await new Promise((res, rej) => {
-        const p = spawn(binPaths.ffmpeg(), ['-y', '-i', inputPath, '-acodec', 'pcm_s16le', '-ar', String(audio?.sample_rate || 48000), convertedInput]);
-        p.on('close', code => code === 0 ? res() : rej(new Error('16-bit conversion failed')));
-        p.on('error', rej);
-      });
-      dfnInput = convertedInput;
-    }
-  } catch { /* proceed with original file */ }
-
-  return new Promise((resolve, reject) => {
-    // --atten-lim-db caps how much DFN can attenuate the noisy signal.
-    // The upstream default is 100 dB (full reduction), which produces
-    // an "over-processed" / robotic sound on speech. Adobe Podcast and
-    // similar tools sit around 12-20 dB. Default to 18 dB — enough to
-    // strip obvious background noise while keeping the room tone
-    // natural. Callers can override via opts.attenLimitDb.
-    const attenLimDb = String(opts.attenLimitDb ?? 18);
-    const args = [
-      dfnInput,
-      '-o', tmpDir,
-      '--compensate-delay',
-      '--atten-lim-db', attenLimDb,
-    ];
-    const proc = spawn(binPaths.deepFilter(), args);
-    if (setCurrent) setCurrent(proc);
-    let stderr = '';
-    proc.stderr.on('data', chunk => { stderr += chunk.toString(); });
-    proc.on('close', code => {
-      if (setCurrent) setCurrent(null);
-      if (code !== 0) {
-        try { fs.rmSync(tmpDir, { recursive: true }); } catch { /* ok */ }
-        return reject(new Error(`DeepFilterNet failed (code ${code}): ${stderr.slice(-200)}`));
-      }
-      // deep-filter outputs to tmpDir with the same filename as the input
-      const outName = path.basename(dfnInput);
-      const dfnOutput = path.join(tmpDir, outName);
-      try {
-        fs.copyFileSync(dfnOutput, outputPath);
-        fs.rmSync(tmpDir, { recursive: true });
-      } catch (e) {
-        try { fs.rmSync(tmpDir, { recursive: true }); } catch { /* ok */ }
-        return reject(new Error(`DeepFilterNet output not found: ${e.message}`));
-      }
-      resolve();
-    });
-    proc.on('error', err => {
-      if (setCurrent) setCurrent(null);
-      try { fs.rmSync(tmpDir, { recursive: true }); } catch { /* ok */ }
-      reject(err);
-    });
-  });
-}
-
-// ── BodyGen: harmonic exciter + sub-harmonic synthesis ──
-
-async function runBodyGen(inputPath, outputPath, setCurrent, opts = {}) {
-  const pythonScript = path.join(__dirname, 'python', 'bodygen.py');
-  const args = [
-    pythonScript, inputPath, outputPath,
-    '--mix', String(opts.mix ?? 0.12),
-    '--sub-mix', String(opts.subMix ?? 0.06),
-  ];
-  if (opts.lowFreq) args.push('--low-freq', String(opts.lowFreq));
-  if (opts.highFreq) args.push('--high-freq', String(opts.highFreq));
-
-  await run('python3', args, { setCurrent, timeout: 2 * 60 * 1000 });
-}
-
-// ── Pre-process: mono + [denoise] + noise gate + silence trim ──
-
-async function preprocessFile(inputPath, outputPath, settings, duration, onProgress, setCurrent) {
-  const chain = buildPreChain(settings);
-  await run('ffmpeg', [
+// ── Measure loudness after EQ ──
+// Runs the file through pre-EQ + EQ + loudnorm in measurement mode. The
+// loudnorm filter prints a JSON block with input_i, input_tp, input_lra,
+// input_thresh, target_offset — those feed the render pass to perform a
+// single-pass linear normalisation when possible (loudnorm falls back to
+// dynamic gain riding only when the linear gain would clip the TP target).
+async function measureLoudnessAfterEq(inputPath, preChain, eqChain, duration, onProgress, setCurrent) {
+  const chain = `${preChain},${eqChain},loudnorm=I=${TARGET_LUFS}:TP=${TARGET_TP_DB}:LRA=${TARGET_LRA}:print_format=json`;
+  const stderr = await run('ffmpeg', [
     '-y', '-i', inputPath,
     '-af', chain,
-    '-acodec', 'pcm_s24le', '-ar', '48000',
+    '-f', 'null', '-',
+  ], { duration, onProgress, setCurrent });
+  // loudnorm prints a JSON object at the end of stderr. Be lenient with
+  // surrounding whitespace and capture the first object containing input_i.
+  const m = stderr.match(/\{[\s\S]*?"input_i"[\s\S]*?\}/);
+  if (!m) return null;
+  try {
+    const j = JSON.parse(m[0]);
+    return {
+      inputI:       parseFloat(j.input_i),
+      inputLra:     parseFloat(j.input_lra),
+      inputTp:      parseFloat(j.input_tp),
+      inputThresh:  parseFloat(j.input_thresh),
+      targetOffset: parseFloat(j.target_offset ?? '0'),
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ── Render: pre-EQ + EQ + (optional) loudnorm ──
+async function renderFile(inputPath, outputPath, preChain, eqChain, stats, applyLoudnorm, settings, duration, onProgress, setCurrent) {
+  const codecArgs = buildOutputCodecArgs(settings);
+  const filters = [preChain, eqChain];
+  if (applyLoudnorm && stats) {
+    filters.push(
+      `loudnorm=I=${TARGET_LUFS}:TP=${TARGET_TP_DB}:LRA=${TARGET_LRA}:` +
+      `measured_I=${stats.inputI}:measured_LRA=${stats.inputLra}:` +
+      `measured_TP=${stats.inputTp}:measured_thresh=${stats.inputThresh}:` +
+      `offset=${stats.targetOffset}`
+    );
+  }
+  await run('ffmpeg', [
+    '-y', '-i', inputPath,
+    '-af', filters.join(','),
+    ...codecArgs,
     outputPath,
   ], { duration, onProgress, setCurrent });
 }
 
-// ── Loudness measure pass ──
-
-async function measureLoudness(filePath, duration, eqChain, loudnormBase, settings, onProgress, setCurrent) {
-  const chain = `${eqChain},${buildSingleBandComp(settings)},loudnorm=${loudnormBase}:print_format=json`;
-  const stderr = await run('ffmpeg', [
-    '-y', '-i', filePath,
-    '-af', chain,
-    '-f', 'null', '-',
-  ], { duration, onProgress, setCurrent });
-  return parseLoudnormStats(stderr);
-}
-
-// ── Render: EQ → multi-band or single-band comp → limiter → loudnorm ──
-
-async function renderFile(inputPath, outputPath, stats, eqChain, loudnormBase, settings, duration, onProgress, setCurrent) {
-  const loudnorm = buildLoudnormFilter(stats, loudnormBase);
-  const codecArgs = buildOutputCodecArgs(settings);
-  const useMBC = settings.multiBandCompEnabled !== false;
-
-  if (useMBC) {
-    // Multi-band compressor via filter_complex
-    // Gentler ratios to avoid over-processing
-    const ratio = settings.compressionRatio ?? 2.5;
-    const lowRatio = Math.min(ratio + 0.5, 4);    // was 5
-    const midRatio = ratio;                         // was 3.5
-    const highRatio = Math.max(ratio - 0.5, 1.5);  // was 2
-    const parts = [
-      `[0:a]${eqChain},asplit=3[la][ma][ha]`,
-      '[la]lowpass=f=300:poles=2[lf]',
-      '[ma]highpass=f=250:poles=2,lowpass=f=3500:poles=2[mf]',
-      '[ha]highpass=f=3000:poles=2[hf]',
-      `[lf]acompressor=threshold=0.06:ratio=${lowRatio}:attack=20:release=300:makeup=2[lc]`,
-      `[mf]acompressor=threshold=0.1:ratio=${midRatio}:attack=10:release=150:makeup=1.5[mc]`,
-      `[hf]acompressor=threshold=0.15:ratio=${highRatio}:attack=5:release=100:makeup=1[hc]`,
-      `[lc][mc][hc]amix=inputs=3:normalize=0,volume=1.0,${LIMITER},${loudnorm}[out]`,
-    ];
-    await run('ffmpeg', [
-      '-y', '-i', inputPath,
-      '-filter_complex', parts.join(';'),
-      '-map', '[out]',
-      ...codecArgs,
-      outputPath,
-    ], { duration, onProgress, setCurrent });
-  } else {
-    const chain = `${eqChain},${buildSingleBandComp(settings)},${loudnorm}`;
-    await run('ffmpeg', [
-      '-y', '-i', inputPath,
-      '-af', chain,
-      ...codecArgs,
-      outputPath,
-    ], { duration, onProgress, setCurrent });
-  }
-}
-
 // ── ETA ──
-
 function calcEta(startMs, done, total) {
   if (done === 0) return null;
   const elapsed = (Date.now() - startMs) / 1000;
@@ -433,10 +210,7 @@ function calcEta(startMs, done, total) {
 }
 
 // ── Queue runner ──
-
 async function processQueue(files, { emit, isCancelled, setCurrent, settings = {} }) {
-  const { analyzeAudio } = require('./analyzer');
-
   const total = files.length;
   let done = 0;
   const t0 = Date.now();
@@ -444,7 +218,6 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
   for (const file of files) {
     if (isCancelled()) break;
 
-    // Validate file is readable before starting
     try { fs.accessSync(file.path, fs.constants.R_OK); } catch {
       emit('file:error', { file: file.path, error: 'File not readable or not found' });
       done++;
@@ -452,188 +225,65 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
     }
 
     emit('file:start', { file: file.path, index: done, total });
-    let tempPath = null;
-    let dfnTempPath = null;
-    let bodyGenTempPath = null;
-    let normalisedPath = null;
 
     try {
-      // Step 1 — Smart Analysis
       emit('progress', {
-        file: file.path, step: 'Analyzing audio...', stepIndex: 1, stepTotal: 6,
+        file: file.path, step: 'Reading metadata', stepIndex: 1, stepTotal: 3,
         pct: 2, eta: null,
       });
 
-      // Run deep analysis to determine optimal workflow
-      const { analysis, recommendations } = await analyzeAudio(file.path, (status) => {
-        emit('progress', {
-          file: file.path, step: `Analyzing: ${status}`, stepIndex: 1, stepTotal: 6,
-          pct: 3, eta: null,
-        });
-      });
-
-      // Merge analyzer recommendations with user overrides
-      const fileSettings = { ...recommendations.settings, ...settings };
-      // But let analyzer win on auto-detected things unless user explicitly set them
-      if (settings.mode === 'auto' || !settings.mode) {
-        Object.assign(fileSettings, recommendations.settings);
-      }
-
-      // Emit analysis results for UI
-      emit('analysis', {
-        file: file.path,
-        analysis,
-        recommendations,
-      });
+      const meta = await probeBasic(file.path);
+      const duration = meta.duration ?? file.duration ?? null;
 
       if (isCancelled()) break;
 
-      const duration = analysis.basic.duration ?? file.duration ?? null;
-      // ML denoise (DeepFilterNet) and FFmpeg afftdn are both disabled —
-      // they were degrading clean source material. The noise gate inside
-      // pre-process still suppresses obvious silences.
-      const useMLDenoise = false;
-      const useBodyGen = fileSettings.bodyGenEnabled !== false; // on by default
-      let stepCount = 4; // base: analyze + preprocess + EQ measure + render
-      if (useBodyGen) stepCount++;
-      const STEP_TOTAL = stepCount;
-      let stepIdx = 2;
+      const preChain = buildPreEqChain(meta, settings);
+      const eqChain = buildEqChain(settings);
 
-      // Step 0 — Canonical input. Lock the file into mono / 48 kHz /
-      // 16-bit pcm before any downstream stage touches it. This
-      // guarantees DeepFilterNet doesn't panic ("TooWide" on 24-bit
-      // input) and removes per-stage type confusion.
-      normalisedPath = path.join(os.tmpdir(),
-        `audiopro_in_${crypto.randomBytes(8).toString('hex')}_${path.basename(file.path)}`);
-      await normaliseInput(file.path, normalisedPath);
-      let pipelineInput = normalisedPath;
-
-      // Build chains from per-file settings.
-      // Adaptive EQ: when ON, append voice-profile-derived notches to the
-      // static voice-warm curve. Default OFF — zero behaviour change unless
-      // the user opts in.
-      const adaptiveEqOn = fileSettings.adaptiveEqEnabled === true;
-      const voiceNotches = adaptiveEqOn ? recommendations?.voiceProfile?.notches : null;
-      const eqChain = buildEqChain(fileSettings, voiceNotches);
-      const loudnormBase = buildLoudnormBase(fileSettings.lufsTarget);
-
-      // Log what the pipeline decided
-      console.log(`[AudioPro] ${path.basename(file.path)}: mode=${fileSettings.mode}, denoise=${fileSettings.denoiseStrength ?? 'default'}, compression=${fileSettings.compressionLevel ?? (fileSettings.multiBandCompEnabled ? 'multiband' : 'single')} ratio=${fileSettings.compressionRatio ?? '?'}`);
-
-      // Step 2 — DeepFilterNet ML Denoise (if recommended and not clean audio)
-      if (useMLDenoise) {
-        emit('progress', {
-          file: file.path, step: 'AI Denoise (DeepFilterNet)', stepIndex: stepIdx, stepTotal: STEP_TOTAL,
-          pct: 8, eta: calcEta(t0, done, total),
-        });
-
-        dfnTempPath = path.join(os.tmpdir(), `audiopro_dfn_${crypto.randomBytes(8).toString('hex')}_${path.basename(file.path)}`);
-
-        try {
-          const dfnOpts = {};
-          // For light denoise, use reduced attenuation
-          if (fileSettings.denoiseStrength === 'light') {
-            dfnOpts.attenLimitDb = 12;  // limit attenuation to 12 dB (subtle)
-          }
-          await runDeepFilterNet(pipelineInput, dfnTempPath, setCurrent, dfnOpts);
-          pipelineInput = dfnTempPath;
-        } catch (dfnErr) {
-          console.warn(`DeepFilterNet failed, falling back to FFmpeg: ${dfnErr.message}`);
-          // Force FFmpeg denoise in pre-process
-          fileSettings.mode = 'fast';
-        }
-
-        if (isCancelled()) break;
-        stepIdx++;
-      }
-
-      // Step 3 — Pre-process (mono + gate + trim) — denoise stages disabled
-      const prepLabel = 'Gate + Trim';
       emit('progress', {
-        file: file.path, step: prepLabel, stepIndex: stepIdx, stepTotal: STEP_TOTAL,
-        pct: 25, eta: calcEta(t0, done + 0.1, total),
+        file: file.path, step: 'Measuring loudness', stepIndex: 2, stepTotal: 3,
+        pct: 10, eta: calcEta(t0, done, total),
       });
 
-      tempPath = path.join(os.tmpdir(), `audiopro_${crypto.randomBytes(8).toString('hex')}_${path.basename(file.path)}`);
-
-      await preprocessFile(pipelineInput, tempPath, fileSettings, duration,
+      const stats = await measureLoudnessAfterEq(file.path, preChain, eqChain, duration,
         frac => {
           if (isCancelled()) return;
           emit('progress', {
-            file: file.path, step: prepLabel, stepIndex: stepIdx, stepTotal: STEP_TOTAL,
-            pct: Math.round(25 + frac * 15),
-            eta: calcEta(t0, done + frac * 0.2, total),
+            file: file.path, step: 'Measuring loudness', stepIndex: 2, stepTotal: 3,
+            pct: Math.round(10 + frac * 40),
+            eta: calcEta(t0, done + frac * 0.5, total),
           });
         }, setCurrent);
 
       if (isCancelled()) break;
-      stepIdx++;
 
-      // Step N — BodyGen (harmonic exciter + sub-harmonic synthesis)
-      if (useBodyGen) {
-        emit('progress', {
-          file: file.path, step: 'BodyGen (harmonics)', stepIndex: stepIdx, stepTotal: STEP_TOTAL,
-          pct: Math.round(25 + 15 * (useMLDenoise ? 1 : 0.7)),
-          eta: calcEta(t0, done + 0.25, total),
-        });
+      // Only normalize when the source is quieter than the target — files
+      // that already meet or exceed −16 LUFS pass through with EQ only.
+      const applyLoudnorm = stats !== null && stats.inputI < TARGET_LUFS;
+      const verb = stats === null
+        ? 'measure failed — render with EQ only'
+        : applyLoudnorm
+          ? `→ loudnorm to ${TARGET_LUFS} LUFS, TP ≤ ${TARGET_TP_DB} dBTP`
+          : `already at/above ${TARGET_LUFS} LUFS — keep as-is`;
+      const summary = stats === null
+        ? 'loudness measure failed'
+        : `I=${stats.inputI.toFixed(1)} LUFS, TP=${stats.inputTp.toFixed(1)} dBFS, LRA=${stats.inputLra.toFixed(1)} LU ${verb}`;
+      console.log(`[AudioPro] ${path.basename(file.path)}: ${summary}`);
+      emit('loudness', { file: file.path, message: summary });
 
-        bodyGenTempPath = path.join(os.tmpdir(), `audiopro_bg_${crypto.randomBytes(8).toString('hex')}_${path.basename(file.path)}`);
+      const outputPath = resolveOutputPath(file.path, settings);
 
-        try {
-          await runBodyGen(tempPath, bodyGenTempPath, setCurrent, {
-            mix: fileSettings.bodyGenMix ?? 0.12,
-            subMix: fileSettings.bodyGenSubMix ?? 0.06,
-          });
-          // Replace tempPath with bodygen output for subsequent steps
-          const oldTemp = tempPath;
-          tempPath = bodyGenTempPath;
-          bodyGenTempPath = oldTemp; // swap so old gets cleaned up
-        } catch (bgErr) {
-          console.warn(`BodyGen failed, continuing without: ${bgErr.message}`);
-          // Continue with unprocessed tempPath
-          if (bodyGenTempPath) {
-            try { fs.unlinkSync(bodyGenTempPath); } catch { /* ignore */ }
-            bodyGenTempPath = null;
-          }
-        }
-
-        if (isCancelled()) break;
-        stepIdx++;
-      }
-
-      // Step N — EQ Measure
       emit('progress', {
-        file: file.path, step: 'EQ Measure', stepIndex: stepIdx, stepTotal: STEP_TOTAL,
-        pct: 42, eta: calcEta(t0, done + 0.3, total),
+        file: file.path, step: 'Rendering', stepIndex: 3, stepTotal: 3,
+        pct: 55, eta: calcEta(t0, done + 0.5, total),
       });
 
-      const stats = await measureLoudness(tempPath, duration, eqChain, loudnormBase, fileSettings,
+      await renderFile(file.path, outputPath, preChain, eqChain, stats, applyLoudnorm, settings, duration,
         frac => {
           if (isCancelled()) return;
           emit('progress', {
-            file: file.path, step: 'EQ Measure', stepIndex: stepIdx, stepTotal: STEP_TOTAL,
-            pct: Math.round(42 + frac * 20),
-            eta: calcEta(t0, done + 0.3 + frac * 0.2, total),
-          });
-        }, setCurrent);
-
-      if (isCancelled()) break;
-      stepIdx++;
-
-      // Step 5 — Render
-      const outputPath = resolveOutputPath(file.path, fileSettings);
-
-      emit('progress', {
-        file: file.path, step: 'Render', stepIndex: stepIdx, stepTotal: STEP_TOTAL,
-        pct: 64, eta: calcEta(t0, done + 0.5, total),
-      });
-
-      await renderFile(tempPath, outputPath, stats, eqChain, loudnormBase, fileSettings, duration,
-        frac => {
-          if (isCancelled()) return;
-          emit('progress', {
-            file: file.path, step: 'Render', stepIndex: stepIdx, stepTotal: STEP_TOTAL,
-            pct: Math.round(64 + frac * 35),
+            file: file.path, step: 'Rendering', stepIndex: 3, stepTotal: 3,
+            pct: Math.round(55 + frac * 44),
             eta: calcEta(t0, done + 0.5 + frac * 0.5, total),
           });
         }, setCurrent);
@@ -644,19 +294,6 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
     } catch (err) {
       done++;
       emit('file:error', { file: file.path, error: err.message });
-    } finally {
-      if (tempPath) {
-        try { fs.unlinkSync(tempPath); } catch { /* ignore */ }
-      }
-      if (dfnTempPath) {
-        try { fs.unlinkSync(dfnTempPath); } catch { /* ignore */ }
-      }
-      if (bodyGenTempPath) {
-        try { fs.unlinkSync(bodyGenTempPath); } catch { /* ignore */ }
-      }
-      if (normalisedPath) {
-        try { fs.unlinkSync(normalisedPath); } catch { /* ignore */ }
-      }
     }
   }
 

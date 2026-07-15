@@ -8,10 +8,13 @@ try {
 } catch { /* running outside Electron (CLI/tests) */ }
 
 /**
- * Resolve paths to bundled binaries (ffmpeg, ffprobe, deep-filter).
+ * Resolve paths to bundled binaries (ffmpeg, ffprobe).
  * In development, look in the project's bin/ folder.
  * In production (packaged app), look in the app's extraResources/bin/.
+ * On Windows the binaries carry a `.exe` suffix; on macOS/Linux they don't.
  */
+
+const EXE = process.platform === 'win32' ? '.exe' : '';
 
 function getBinDir() {
   if (app && app.isPackaged) {
@@ -22,15 +25,15 @@ function getBinDir() {
 
 function resolve(name) {
   const binDir = getBinDir();
-  const fullPath = path.join(binDir, name);
+  const fullPath = path.join(binDir, name + EXE);
   if (fs.existsSync(fullPath)) return fullPath;
-  // Fallback to PATH (dev convenience)
-  return name;
+  // Fallback to PATH (dev convenience). Spawn on Windows still needs the
+  // .exe suffix otherwise CreateProcess can't find the executable.
+  return name + EXE;
 }
 
 module.exports = {
-  ffmpeg:     () => resolve('ffmpeg'),
-  ffprobe:    () => resolve('ffprobe'),
-  deepFilter: () => resolve('deep-filter'),
+  ffmpeg:  () => resolve('ffmpeg'),
+  ffprobe: () => resolve('ffprobe'),
   getBinDir,
 };

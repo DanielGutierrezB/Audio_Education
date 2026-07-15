@@ -23,6 +23,7 @@
     "appId": "com.platzi.audiopro",
     "productName": "AudioPro",
     "icon": "build/icon.icns",
+    "publish": null,
     "files": [
       "main.js",
       "preload.js",

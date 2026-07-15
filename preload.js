@@ -27,9 +27,6 @@ contextBridge.exposeInMainWorld('api', {
   ffprobe: {
     getMetadata: (filePath) => ipcRenderer.invoke('ffprobe:metadata', filePath),
   },
-  audio: {
-    peaks: (filePath, numPeaks) => ipcRenderer.invoke('audio:peaks', filePath, numPeaks),
-  },
   pipeline: {
     start: (files) => ipcRenderer.invoke('pipeline:start', files),
     cancel: () => ipcRenderer.invoke('pipeline:cancel'),

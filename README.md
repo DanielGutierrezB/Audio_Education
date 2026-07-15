@@ -1,75 +1,94 @@
 # AudioPro
 
-Professional voice processing for educational audio content. Drop WAV files, get podcast-quality output in seconds.
+Professional voice processing for educational audio content. Drop WAV files (typically exported from Adobe Podcast), get course-ready output with consistent loudness and a polished voice EQ.
 
-Current version: **v0.1.2** (macOS arm64).
+Current version: **v0.2.0** (macOS arm64 · Windows x64).
+
+## Purpose
+
+The intended workflow is:
+
+1. Record and clean the voice with **Adobe Podcast** (or any clean source).
+2. Drop the resulting WAV files into **AudioPro**.
+3. AudioPro applies a fixed, transparent finishing chain — voice EQ + loudness
+   normalization — so every class lands at **−16 LUFS** with the same tonal
+   character and good presence, without re-denoising or re-generating audio
+   that is already clean.
+
+The app deliberately does **not** run ML denoise/enhancement: those stages
+degraded already-clean Adobe Podcast material. FFmpeg is the only runtime
+dependency; there is no Python and no neural network involved.
+
+## Pipeline
+
+Each file goes through 3 steps:
+
+| Step | What it does |
+|------|-------------|
+| **Probe** | FFprobe reads duration / sample rate / channels. |
+| **Measure** | Runs mono mixdown + EQ + `loudnorm` in measurement mode to capture integrated loudness (LUFS), true peak, LRA and threshold. |
+| **Render** | Mono mixdown → resample (if needed) → EQ chain → `loudnorm` in linear mode to −16 LUFS / TP ≤ −2 dBTP. Files already at or above −16 LUFS skip loudnorm (only raise, never attenuate). |
+
+The base EQ replicates a Waves F6 voice reference: HPF 80 Hz + three surgical
+low-mid cuts (mud 150 Hz, box 280 Hz, honk 500 Hz) + presence peak (3.6 kHz)
++ air shelf (10 kHz), with an optional de-esser.
+
+## EQ controls
+
+- **EQ tab** — drag bands on a canvas with real-time Web Audio preview of the
+  *source* file. On file selection the three cut bands auto-fit to the local
+  spectral peaks of that voice (FFT analysis, ±1/3 octave). Every tweak
+  auto-saves; **Process All** always renders what the editor shows.
+- **Reset** returns to the base curve; **Bypass** A/Bs the preview without
+  touching saved state.
+
+## Output
+
+- WAV 24-bit (default), WAV 16-bit, or FLAC — 48 kHz or 44.1 kHz.
+- Files land in **`Audio_Pro/`** next to the source folder, or in a custom
+  folder picked from the toolbar.
 
 ## Requirements
 
-- macOS 10.12+ on Apple Silicon (M1 / M2 / M3)
-- Node.js 18+
-- _Optional_ — Python 3.10+ with `torch` and `torchaudio` for the BodyGen harmonic exciter step. Without these, BodyGen is silently skipped and the rest of the pipeline runs unaffected.
+- **macOS** 10.12+ on Apple Silicon (M1/M2/M3), or **Windows 10+** x64
+- Node.js 18+ (development)
 
-`ffmpeg`, `ffprobe`, and `deep-filter` are downloaded as **arm64-native, statically-linked binaries** by `npm run setup:bin` (no Homebrew, no Rosetta).
+`ffmpeg` / `ffprobe` are downloaded as static binaries by the setup scripts —
+no Homebrew, no Rosetta, no system installs.
 
 ## Setup
 
 ```bash
 npm install          # install Node deps
-npm run setup:bin    # fetch arm64 ffmpeg / ffprobe / deep-filter into bin/ (SHA256-verified)
+npm run setup:bin    # macOS: fetch arm64 ffmpeg/ffprobe into bin/ (SHA256-verified)
 npm start            # run the app
+```
+
+On Windows:
+
+```powershell
+npm install
+npm run setup:bin:win   # fetch ffmpeg.exe/ffprobe.exe into bin/
+npm start
 ```
 
 > **Heads-up for Cursor / VSCode users:** the integrated terminal sets `ELECTRON_RUN_AS_NODE=1`, which breaks Electron startup. Either `unset ELECTRON_RUN_AS_NODE` first, or launch from a regular Terminal.app window.
 
-## Build (macOS arm64 DMG)
+## Build
 
 ```bash
-npm run build
+npm run build        # macOS arm64 DMG → dist/
+npm run build:win    # Windows x64 NSIS installer → dist/
 ```
 
-The output `.dmg` lands in `dist/`. The DMG is unsigned — first-time users need to right-click → **Open** to bypass Gatekeeper.
-
-## Pipeline
-
-Each file passes through up to 6 steps:
-
-| Step | What it does |
-|------|-------------|
-| **Smart Analyze** | Measures loudness, noise floor, sibilance, reverb, dynamic range, plus an FFT voice-profile (pitch + resonant peaks). The analyzer can recommend per-file settings in Auto mode. |
-| **Canonical Input** | Locks the file into AudioPro's working format: mono / 48 kHz / 16-bit pcm. Every downstream stage operates on this. |
-| **AI Denoise** | DeepFilterNet3 neural denoise (Quality / Auto mode). Defaults to a soft `--atten-lim-db 18` to avoid the robotic / over-processed sound. Falls back to FFmpeg `afftdn` in Fast mode. |
-| **Pre-process** | Stereo→Mono, noise gate, silence trim. |
-| **BodyGen** | Harmonic exciter + sub-harmonic synthesis via analog-style waveshaping. Adds body and fullness to thin voice recordings. Requires Python with torch / torchaudio at runtime; skipped silently otherwise. |
-| **EQ Measure → Render** | Voice-warm EQ chain (calibrated against Adobe Podcast spectral profile) → optional adaptive notches from voice-profile → optional manual override → 3-band compressor → limiter → two-pass `loudnorm` → output file. |
-
-Output files land in **`Audio_Pro/`** next to the source folder, or in a custom folder if the user picks one in the toolbar.
-
-## Processing Modes
-
-- **Quality** — DeepFilterNet AI denoise + full pipeline.
-- **Fast** — FFmpeg `afftdn` denoise + full pipeline.
-- **Auto** — Smart analyzer chooses Quality or Fast per file based on measured noise floor.
-
-## EQ controls
-
-Three layers, in priority order:
-
-1. **Manual EQ override** (EQ tab) — drag bands on a canvas with real-time Web Audio preview, then **Apply to all** to persist the FFmpeg filter chain. Replaces the entire built-in EQ when active.
-2. **Adaptive EQ** (settings → EQ → "Adaptive EQ (per-file)") — appends per-file resonant notches derived from the voice-profile FFT to the static voice-warm curve. OFF by default.
-3. **Voice-warm static curve** (always-on baseline) — HPF → +4 dB @120 Hz warmth → −2 dB @300 Hz boxiness cut → mild presence boosts → optional de-esser. Calibrated against Adobe Podcast spectral matching.
-
-## Output
-
-- WAV 24-bit 48 kHz (default)
-- WAV 16-bit 48 kHz
-- FLAC
-
-Custom output directory configurable from the toolbar; the default is a sibling `Audio_Pro/` folder next to each source folder.
+The artifacts are unsigned — first-time macOS users need to right-click →
+**Open** to bypass Gatekeeper.
 
 ## Settings
 
-All settings persist across sessions via `electron-store`. Defaults match podcast production standards (−16 LUFS, 48 kHz, WAV 24-bit, voice-warm EQ on, adaptive EQ off, manual EQ off).
+All settings persist across sessions via `electron-store`: HPF frequency,
+de-esser on/off, output format, sample rate, custom output dir, manual EQ
+chain. Loudness target is fixed at −16 LUFS / TP ≤ −2 dBTP (podcast standard).
 
 ## Architecture
 
@@ -77,26 +96,21 @@ All settings persist across sessions via `electron-store`. Defaults match podcas
 main.js                       Electron main process, IPC handlers, electron-store
 preload.js                    Context bridge (renderer ↔ main)
 renderer/
-  index.html                  UI markup (Processing / Preview / EQ / About tabs)
+  index.html                  UI markup (Processing / EQ / About tabs)
   js/app.js                   Renderer logic — queue, settings, processing UI
-  js/eq-editor.js             Canvas EQ editor with Web Audio preview
+  js/eq-editor.js             Canvas EQ editor + spectrum auto-fit + Web Audio preview
   styles/app.css              Styling
 src/
-  pipeline.js                 Processing orchestration (FFmpeg + Python sidecars)
-  analyzer.js                 Smart audio analysis (parallel measurements + voice profile)
-  voice-profile.js            FFT-based pitch + resonant-peak detection
+  pipeline.js                 Probe → measure → render orchestration (FFmpeg)
   bin-paths.js                Resolves paths to bundled binaries (dev vs packaged)
   logger.js                   Structured logging (copyable from the app)
-  python/
-    bodygen.py                Harmonic exciter (used in main pipeline)
-    denoise.py                Legacy DFN wrapper (not used by current pipeline)
-    enhance.py                Resemble Enhance wrapper (deferred, not wired up)
 scripts/
-  fetch-bin.sh                Downloads arm64 ffmpeg / ffprobe / deep-filter
-bin/                          (gitignored) populated by fetch-bin.sh
+  fetch-bin.sh                Downloads macOS arm64 ffmpeg / ffprobe (SHA256-pinned)
+  fetch-bin.ps1               Downloads Windows x64 ffmpeg / ffprobe
+bin/                          (gitignored) populated by the fetch scripts
 ```
 
 ## Known limitations
 
-- DMG is not code-signed. Distribute over a trusted channel and instruct users to right-click → Open the first time.
-- Resemble Enhance speech regeneration is **deferred** to a follow-up release. The infrastructure exists in `src/python/enhance.py` but is not wired to the pipeline. Tracked in repo issues.
+- Installers are not code-signed. Distribute over a trusted channel and
+  instruct users to right-click → Open the first time (macOS).

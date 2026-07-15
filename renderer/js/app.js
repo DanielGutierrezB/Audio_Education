@@ -257,10 +257,8 @@ function updateQueueSummary() {
     ? `${(totalBytes / (1024 * 1024)).toFixed(1)} MB`
     : `${Math.round(totalBytes / 1024)} KB`;
 
-  // Rough estimate: quality ≈ 0.75× realtime, fast ≈ 0.12× realtime
-  const mode = modeQuality.classList.contains('active') ? 'quality' : 'fast';
-  const mul = mode === 'quality' ? 0.75 : 0.12;
-  const estSec = totalDuration > 0 ? Math.round(totalDuration * mul) : null;
+  // Rough estimate: measure + render ≈ 0.12× realtime (two FFmpeg passes)
+  const estSec = totalDuration > 0 ? Math.round(totalDuration * 0.12) : null;
   const estStr = estSec != null ? ` · ~${formatEta(estSec)} est.` : '';
 
   const selStr = selCount > 0 ? `${selCount} of ${totalFiles} selected · ` : `${totalFiles} file${totalFiles !== 1 ? 's' : ''} · `;
@@ -507,7 +505,7 @@ function startProcessing() {
   btnAddFiles.disabled = true;
 
   progressSection.hidden = false;
-  setProgress(0, 'Starting…', 1, 6, files[0].path.split('/').pop(), null);
+  setProgress(0, 'Starting…', 1, 3, files[0].path.split('/').pop(), null);
 
   unsubPipeline = window.api.pipeline.onEvent(handlePipelineEvent);
 

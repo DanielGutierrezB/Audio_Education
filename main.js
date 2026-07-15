@@ -255,54 +255,6 @@ ipcMain.handle('pipeline:cancel', () => {
   }
 });
 
-ipcMain.handle('audio:peaks', (_, filePath, numPeaks) => {
-  if (typeof filePath !== 'string' || !filePath || filePath.includes('..')) return null;
-  if (typeof numPeaks !== 'number' || numPeaks < 10 || numPeaks > 10000) numPeaks = 800;
-  logger.push('waveform', `Generating peaks: ${path.basename(filePath)} (${numPeaks} points)`);
-  return new Promise(resolve => {
-    const timer = setTimeout(() => resolve(null), 30_000);
-    const done = (val) => { clearTimeout(timer); resolve(val); };
-    const probeProc = spawn(binPaths.ffprobe(), [
-      '-v', 'quiet', '-print_format', 'json', '-show_format', filePath,
-    ]);
-    let probeOut = '';
-    probeProc.stdout.on('data', c => { probeOut += c; });
-    probeProc.on('close', code => {
-      if (code !== 0) return done(null);
-      let duration = 1;
-      try { duration = parseFloat(JSON.parse(probeOut).format?.duration) || 1; } catch { /* ok */ }
-
-      const rate = Math.max(50, Math.ceil(numPeaks / duration));
-      const proc = spawn(binPaths.ffmpeg(), [
-        '-i', filePath,
-        '-af', `aresample=${rate}`,
-        '-f', 'f32le', '-ac', '1', 'pipe:1',
-      ]);
-      const chunks = [];
-      proc.stdout.on('data', chunk => chunks.push(chunk));
-      proc.on('close', code2 => {
-        if (code2 !== 0) return done(null);
-        const buf = Buffer.concat(chunks);
-        const count = Math.floor(buf.length / 4);
-        const floats = new Float32Array(buf.buffer, buf.byteOffset, count);
-        const step = Math.max(1, Math.floor(count / numPeaks));
-        const peaks = [];
-        for (let i = 0; i < numPeaks; i++) {
-          let max = 0;
-          for (let j = 0; j < step; j++) {
-            const v = Math.abs(floats[i * step + j] ?? 0);
-            if (v > max) max = v;
-          }
-          peaks.push(max);
-        }
-        done(peaks);
-      });
-      proc.on('error', (err) => { logger.push('waveform', `ffmpeg error: ${err.message}`); done(null); });
-    });
-    probeProc.on('error', (err) => { logger.push('waveform', `ffprobe error: ${err.message}`); done(null); });
-  });
-});
-
 ipcMain.handle('ffprobe:metadata', (_, filePath) => {
   if (typeof filePath !== 'string' || !filePath || filePath.includes('..')) return null;
   return new Promise(resolve => {

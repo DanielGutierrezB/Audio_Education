@@ -19,6 +19,13 @@ const { runFfmpeg } = require('../src/ffmpeg-run');
 const SR = 48000;
 const BUILD_TIMEOUT_MS = 60 * 1000;
 
+// anoisesrc defaults to a time-seeded RNG (seed=-1), which made the "clean"
+// fixture's measured DC offset drift randomly between runs — occasionally
+// past the 0.003 detection threshold and flaking the "zero false positives"
+// test in CI. Every anoisesrc call below is pinned to this fixed seed so the
+// whole synthetic corpus renders byte-for-byte the same on every run.
+const NOISE_SEED = 20260715;
+
 function tmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `audiopro-${prefix}-`));
 }
@@ -26,7 +33,7 @@ function tmpDir(prefix) {
 function voiceSegmentGraph(duration, peakDb, { fundamental = 180, presence = 2400, air = 9000 } = {}) {
   const lin = Math.pow(10, peakDb / 20);
   return `sine=frequency=${fundamental}:sample_rate=${SR}:duration=${duration},volume=${(lin * 1.1).toFixed(5)}[a];` +
-    `anoisesrc=color=pink:sample_rate=${SR}:duration=${duration}:amplitude=${(lin * 0.9).toFixed(5)}[b];` +
+    `anoisesrc=color=pink:sample_rate=${SR}:duration=${duration}:amplitude=${(lin * 0.9).toFixed(5)}:seed=${NOISE_SEED}[b];` +
     `sine=frequency=${presence}:sample_rate=${SR}:duration=${duration},volume=${(lin * 0.22).toFixed(5)}[c];` +
     `sine=frequency=${air}:sample_rate=${SR}:duration=${duration},volume=${(lin * 0.05).toFixed(5)}[d];` +
     `[a][b][c][d]amix=inputs=4:normalize=0[out]`;
@@ -34,7 +41,7 @@ function voiceSegmentGraph(duration, peakDb, { fundamental = 180, presence = 240
 
 function silenceSegmentGraph(duration, floorDb = -75) {
   const lin = Math.pow(10, floorDb / 20);
-  return `anoisesrc=color=white:sample_rate=${SR}:duration=${duration}:amplitude=${lin.toFixed(7)}[out]`;
+  return `anoisesrc=color=white:sample_rate=${SR}:duration=${duration}:amplitude=${lin.toFixed(7)}:seed=${NOISE_SEED}[out]`;
 }
 
 async function concatSegments(segmentGraphs, outPath) {
@@ -87,7 +94,7 @@ async function buildSibilant(outPath, workDir) {
   await buildClean(base);
   await runFfmpeg([
     '-y', '-i', base,
-    '-f', 'lavfi', '-i', `anoisesrc=color=white:sample_rate=${SR}:duration=5.1:amplitude=0.09`,
+    '-f', 'lavfi', '-i', `anoisesrc=color=white:sample_rate=${SR}:duration=5.1:amplitude=0.09:seed=${NOISE_SEED}`,
     '-filter_complex', '[1:a]bandpass=f=7000:width_type=h:w=4000[hf];[0:a][hf]amix=inputs=2:normalize=0[out]',
     '-map', '[out]', '-ac', '1', '-ar', String(SR), outPath,
   ], { timeout: BUILD_TIMEOUT_MS });

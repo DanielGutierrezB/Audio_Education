@@ -63,6 +63,8 @@
             title="Remove all files from the queue">Clear All</button>
           <button class="btn btn-secondary btn-sm" id="btn-open-output" hidden
             title="Open the custom output folder in Finder">Open output</button>
+          <button class="btn-icon-only" id="btn-qc-report"
+            title="Export a Markdown QC report for this batch — modes, flags, and loudness check per file">&#128196;</button>
           <button class="btn-icon-only" id="btn-copy-log"
             title="Copy debug log to clipboard">&#128203;</button>
           <button class="btn-icon-only" id="btn-settings"
@@ -254,6 +256,12 @@
             <select class="eq-file-select" id="eq-file-select" aria-label="File to preview">
               <option value="">No files in queue</option>
             </select>
+            <div class="mode-toggle eq-source-toggle" id="eq-source-toggle"
+              title="Mode 2 three-way A/B — audition the raw original, the raw Adobe-enhanced track, or the fused blend before any EQ/mastering" hidden>
+              <button class="mode-btn" data-source="original" type="button">Original</button>
+              <button class="mode-btn" data-source="enhanced" type="button">Enhanced</button>
+              <button class="mode-btn active" data-source="fusion" type="button">Fusion</button>
+            </div>
             <span class="eq-auto-info" id="eq-auto-info" hidden></span>
             <div class="eq-transport">
               <button class="btn-transport" id="eq-play" title="Play / Pause (Space)">&#9654;</button>
@@ -261,7 +269,8 @@
               <span class="eq-time" id="eq-time">0:00 / 0:00</span>
             </div>
             <span class="toolbar-spacer"></span>
-            <label class="eq-bypass-label" title="Bypass — hear the file with no EQ applied">
+            <span class="eq-makeup-info" id="eq-makeup-info" title="Bypass A/B loudness compensation">level-matched</span>
+            <label class="eq-bypass-label" title="Bypass — hear the current source with no EQ applied, level-matched so only tone changes">
               <input type="checkbox" id="eq-bypass">
               <span>Bypass</span>
             </label>
@@ -376,7 +385,15 @@
               <div class="step-number">5</div>
               <div class="step-body">
                 <h3>EQ editor</h3>
-                <p>Open the EQ tab, pick a source file from the dropdown, hit Play and drag bands in real time. Every band change auto-saves &mdash; when you go back to Processing and hit <strong>Process All</strong>, the pipeline uses whatever curve the editor is currently showing. <strong>Reset</strong> returns to the base EQ; <strong>Bypass</strong> A/Bs the preview without touching the saved state.</p>
+                <p>Open the EQ tab, pick a source file from the dropdown, hit Play and drag bands in real time. Every band change auto-saves &mdash; when you go back to Processing and hit <strong>Process All</strong>, the pipeline uses whatever curve the editor is currently showing. <strong>Reset</strong> returns to the base EQ; <strong>Bypass</strong> A/Bs the preview level-matched to the current curve (a make-up gain measured on that file&rsquo;s own spectrum cancels the average loudness the EQ adds, so the A/B judges tone, not volume). Mode 2 pairs add an <strong>Original / Enhanced / Fusion</strong> switch to audition the three raw sources before any EQ is applied.</p>
+              </div>
+            </div>
+
+            <div class="pipeline-step">
+              <div class="step-number">6</div>
+              <div class="step-body">
+                <h3>QC tools</h3>
+                <p>Right-click any queued file for a <strong>spectrogram</strong> &mdash; hum shows as a solid horizontal line, clipping as bright full-band smears, denoise artefacts as speckle in what should be silence. The document icon in the toolbar exports a Markdown <strong>QC report</strong> for the whole batch (mode, flags, output loudness check per file) to attach to the course deliverable.</p>
               </div>
             </div>
           </div>
@@ -407,7 +424,25 @@
     <button class="ctx-item" data-action="move-up" role="menuitem">Move up</button>
     <button class="ctx-item" data-action="move-down" role="menuitem">Move down</button>
     <div class="ctx-separator" role="separator"></div>
+    <button class="ctx-item" data-action="spectrogram" role="menuitem">View spectrogram&hellip;</button>
     <button class="ctx-item" data-action="open-finder" role="menuitem">Open in Finder</button>
+  </div>
+
+  <!-- Spectrogram viewer (Fase 8c — visual QC inspection) -->
+  <div class="modal-overlay" id="spectrogram-modal" hidden>
+    <div class="modal-card modal-card-wide">
+      <div class="modal-header">
+        <span class="modal-title" id="spectrogram-title">Spectrogram</span>
+        <button class="btn-icon-only" id="spectrogram-close" title="Close">&#10005;</button>
+      </div>
+      <div class="modal-body" id="spectrogram-body">
+        <div class="spectrogram-loading" id="spectrogram-loading">Rendering spectrogram&hellip;</div>
+        <img class="spectrogram-image" id="spectrogram-image" alt="Spectrogram" hidden>
+      </div>
+      <div class="modal-footer">
+        <span class="text-muted small">Bright horizontal lines &rarr; hum/tonal noise &middot; bright smears at peaks &rarr; clipping &middot; speckle in quiet passages &rarr; musical noise from denoise</span>
+      </div>
+    </div>
   </div>
 
   <script src="js/app.js"></script>

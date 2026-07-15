@@ -27,6 +27,15 @@ contextBridge.exposeInMainWorld('api', {
   ffprobe: {
     getMetadata: (filePath) => ipcRenderer.invoke('ffprobe:metadata', filePath),
   },
+  spectrogram: {
+    generate: (filePath) => ipcRenderer.invoke('spectrogram:generate', filePath),
+  },
+  fusion: {
+    preview: (originalPath, pairPath) => ipcRenderer.invoke('fusion:preview', originalPath, pairPath),
+  },
+  qc: {
+    saveReport: (fileSummaries) => ipcRenderer.invoke('qc:saveReport', fileSummaries),
+  },
   pipeline: {
     start: (files) => ipcRenderer.invoke('pipeline:start', files),
     cancel: () => ipcRenderer.invoke('pipeline:cancel'),

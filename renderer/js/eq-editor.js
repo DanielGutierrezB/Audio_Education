@@ -137,17 +137,31 @@
 
   // Files we've already auto-fitted in this session. Re-selecting the same
   // file in the dropdown shouldn't re-run analysis (would clobber any
-  // manual band tweaks the user made after the initial fit).
+  // manual band tweaks the user made after the initial fit). Note that
+  // Mode 2's three-way A/B (below) resolves to a *different* path per
+  // source kind (original / enhanced / a fusion temp file whose name
+  // changes when fusion settings change), so this naturally re-fits and
+  // re-caches whenever the actually-audible signal changes.
   const autoFittedFiles = new Set();
 
-  async function autoFitToFile(filePath) {
-    if (!filePath || autoFittedFiles.has(filePath)) return;
+  // Power spectra keyed by resolved path, reused by the A/B gain
+  // compensation below (Fase 8a) so switching sources or nudging a band
+  // doesn't require re-decoding the file each time.
+  const spectrumCache = new Map();
+
+  async function autoFitToFile(filePath, displayName) {
+    const fileName = displayName ?? filePath.split('/').pop();
+    if (!filePath || autoFittedFiles.has(filePath)) {
+      if (spectrumCache.has(filePath)) updateGainCompensation();
+      return;
+    }
     autoFittedFiles.add(filePath);
-    const fileName = filePath.split('/').pop();
     const prevReadout = readoutEl.textContent;
     readoutEl.textContent = `Analyzing source spectrum for ${fileName}…`;
     try {
       const spec = await analyzeSpectrum(filePath);
+      spectrumCache.set(filePath, spec);
+      if (filePath === currentPreviewPath) updateGainCompensation();
       const moves = [];
       for (const id of AUTO_FIT_BAND_IDS) {
         const band = bands.find(b => b.id === id);
@@ -214,6 +228,52 @@
   const totalDb = (bands, f) => bands.reduce((s, b) => s + gainDb(f, b), 0);
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
+  // ── A/B gain compensation (Fase 8a) ──────────────────────────────────
+  // Bypass used to just swap gain 0/1 between the dry and EQ'd paths, so
+  // a boost-heavy curve could "win" an A/B purely by being louder — not
+  // by sounding better. Instead of guessing with a generic pink-noise
+  // correction, we measure how much the *current* EQ curve would shift
+  // this specific file's own power spectrum (already computed for
+  // auto-fit) and apply the inverse as make-up gain on the wet path, so
+  // Bypass A/Bs tone only. See docs/PLAN.md §4 Fase 8 acceptance: "A/B no
+  // cambia de loudness percibido".
+  function computeGainCompensationDb(spec, currentBands) {
+    const { power, sr, fftSize } = spec;
+    const binWidth = sr / fftSize;
+    let weightedLinPower = 0;
+    let totalPower = 0;
+    for (let i = 1; i < power.length; i++) {
+      const p = power[i];
+      if (p <= 0) continue;
+      const f = i * binWidth;
+      if (f < 20 || f > 20000) continue;
+      const gDb = totalDb(currentBands, f);
+      weightedLinPower += p * Math.pow(10, gDb / 10);
+      totalPower += p;
+    }
+    if (totalPower <= 0) return 0;
+    const ratioDb = 10 * Math.log10(weightedLinPower / totalPower);
+    return clamp(-ratioDb, -18, 18);
+  }
+
+  function updateGainCompensation() {
+    const spec = currentPreviewPath && spectrumCache.get(currentPreviewPath);
+    const db = spec ? computeGainCompensationDb(spec, bands) : 0;
+    if (makeupGain) makeupGain.gain.value = Math.pow(10, db / 20);
+    if (!makeupInfoEl) return;
+    if (!spec) {
+      makeupInfoEl.textContent = 'level match: analyzing…';
+      makeupInfoEl.title = 'Waiting for the source spectrum to compute A/B make-up gain.';
+    } else if (Math.abs(db) < 0.05) {
+      makeupInfoEl.textContent = 'level-matched';
+      makeupInfoEl.title = 'No measurable average level shift from the current EQ on this file\u2019s spectrum \u2014 Bypass A/Bs tone only.';
+    } else {
+      const sign = db >= 0 ? '+' : '';
+      makeupInfoEl.textContent = `level-matched (${sign}${db.toFixed(1)} dB)`;
+      makeupInfoEl.title = 'Make-up gain applied to the EQ\u2019d signal (measured on this file\u2019s own spectrum) so Bypass A/Bs tone, not loudness.';
+    }
+  }
+
   // ── State ──
   const bands = JSON.parse(JSON.stringify(DEFAULT_BANDS));
   let manualEqApply = false;
@@ -221,14 +281,25 @@
   let draggingId = null;
   let dragOffset = { x: 0, y: 0 };
 
+  // Three-way A/B for Mode 2 pairs (Fase 8b) — which raw source is
+  // currently loaded into the preview. Irrelevant (stays 'original')
+  // for files with no detected pair.
+  let sourceKind = 'original'; // 'original' | 'enhanced' | 'fusion'
+  let currentPreviewPath = null; // resolved path actually loaded into audioEl
+  let resolvingSource = false;
+  let sourceChangedWhileResolving = false;
+  const filesInfo = new Map(); // nominal path -> { path, name, pairPath }
+
   // ── DOM refs ──
   const canvas      = document.getElementById('eq-canvas');
   const ctx2d       = canvas.getContext('2d');
   const fileSelect  = document.getElementById('eq-file-select');
+  const sourceToggle    = document.getElementById('eq-source-toggle');
   const playBtn     = document.getElementById('eq-play');
   const stopBtn     = document.getElementById('eq-stop');
   const timeLabel   = document.getElementById('eq-time');
   const bypassChk   = document.getElementById('eq-bypass');
+  const makeupInfoEl    = document.getElementById('eq-makeup-info');
   const resetBtn    = document.getElementById('eq-reset');
   const statusVal   = document.getElementById('eq-status-value');
   const readoutEl   = document.getElementById('eq-readout');
@@ -254,7 +325,7 @@
 
   // ── Audio (single, fixed topology — bypass swaps gains) ──
   let audioCtx = null, audioEl = null, sourceNode = null;
-  let filterNodes = [], wetGain = null, dryGain = null;
+  let filterNodes = [], makeupGain = null, wetGain = null, dryGain = null;
 
   function ensureAudio() {
     if (audioCtx) return;
@@ -282,13 +353,19 @@
     });
     sourceNode.connect(filterNodes[0]);
     for (let i = 0; i < filterNodes.length - 1; i++) filterNodes[i].connect(filterNodes[i + 1]);
+    // Make-up gain sits between the EQ chain and the wet bus so Bypass
+    // A/Bs tone, not overall loudness (Fase 8a) — see
+    // computeGainCompensationDb / updateGainCompensation below.
+    makeupGain = audioCtx.createGain();
     wetGain = audioCtx.createGain();
     dryGain = audioCtx.createGain();
-    filterNodes[filterNodes.length - 1].connect(wetGain);
+    filterNodes[filterNodes.length - 1].connect(makeupGain);
+    makeupGain.connect(wetGain);
     sourceNode.connect(dryGain);
     wetGain.connect(audioCtx.destination);
     dryGain.connect(audioCtx.destination);
     applyBypass();
+    updateGainCompensation();
   }
   function applyBandToNode(b, n) {
     if (n.type !== b.type) n.type = b.type;
@@ -545,6 +622,7 @@
 
   function onBandsChanged() {
     applyAllBandsToNodes();
+    updateGainCompensation();
     drawCurve();
     scheduleAutoSave();
   }
@@ -584,32 +662,107 @@
     updateStatus();
   }
 
-  // ── File selector — always preview the SOURCE file ──
+  // ── File selector — always preview the SOURCE (Fase 8b: or one of the
+  // three raw Mode 2 sources, see below) ──
   // The preview must match what the pipeline will produce: source + current
   // editor EQ. Auditioning the already-processed output would stack two EQs.
+  let lastSelectedPath = null;
+
   function refreshFileSelect() {
     let opts = [];
     if (window.audioProQueue?.listFiles) {
-      opts = window.audioProQueue.listFiles().map(f => ({ path: f.path, name: f.name }));
+      opts = window.audioProQueue.listFiles().map(f => ({ path: f.path, name: f.name, pairPath: f.pairPath || null }));
     } else {
       document.querySelectorAll('#queue-list .file-item').forEach(it => {
         const path = it.dataset.filePath;
         const name = it.querySelector('.file-name')?.textContent ?? path;
-        if (path) opts.push({ path, name });
+        if (path) opts.push({ path, name, pairPath: null });
       });
     }
+    filesInfo.clear();
+    for (const o of opts) filesInfo.set(o.path, o);
     const prevValue = fileSelect.value;
     fileSelect.innerHTML = opts.length
       ? opts.map(o => `<option value="${escapeHtml(o.path)}">${escapeHtml(o.name)}</option>`).join('')
       : '<option value="">No files in queue — add one in Processing tab</option>';
     if (opts.find(o => o.path === prevValue)) fileSelect.value = prevValue;
-    // Fire auto-fit when a value is freshly available (e.g. first file
-    // added to the queue while the EQ tab was already mounted). The Set
-    // inside autoFitToFile prevents re-running for the same path.
-    if (fileSelect.value) autoFitToFile(fileSelect.value);
+    onFileSelectionChanged();
   }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // ── Three-way A/B for Mode 2 pairs (Fase 8b) ──────────────────────────
+  // A detected pair's sensible default is 'fusion' — that's what Process
+  // All will actually render. Re-running refreshFileSelect() (e.g. another
+  // file in the queue changing status) must NOT reset the toggle while the
+  // same file stays selected, or an in-progress A/B would keep jumping
+  // back to fusion; it only resets on a genuine selection change.
+  function currentFileInfo() { return filesInfo.get(fileSelect.value) ?? null; }
+
+  function onFileSelectionChanged() {
+    const changed = fileSelect.value !== lastSelectedPath;
+    lastSelectedPath = fileSelect.value;
+    if (changed) sourceKind = currentFileInfo()?.pairPath ? 'fusion' : 'original';
+    syncSource();
+  }
+
+  function updateSourceToggleUI() {
+    const hasPair = !!currentFileInfo()?.pairPath;
+    sourceToggle.hidden = !hasPair;
+    if (!hasPair) return;
+    for (const btn of sourceToggle.querySelectorAll('.mode-btn')) {
+      btn.classList.toggle('active', btn.dataset.source === sourceKind);
+    }
+  }
+
+  // Resolves which actual file the editor should analyze/play for the
+  // current (nominal file, sourceKind) pair. 'fusion' requires a render
+  // round-trip through main (src/fusion.js) — cached there per settings,
+  // so re-picking "Fusion" without changing fusion settings is instant.
+  async function resolveEffectivePath() {
+    const info = currentFileInfo();
+    if (!info) return null;
+    if (sourceKind === 'enhanced' && info.pairPath) {
+      return { path: info.pairPath, displayName: `${info.name} \u00b7 enhanced` };
+    }
+    if (sourceKind === 'fusion' && info.pairPath) {
+      if (!window.api?.fusion?.preview) return { path: info.path, displayName: info.name };
+      readoutEl.textContent = `Rendering fusion preview for ${info.name}\u2026`;
+      try {
+        const res = await window.api.fusion.preview(info.path, info.pairPath);
+        if (res?.path) return { path: res.path, displayName: `${info.name} \u00b7 fusion` };
+        readoutEl.textContent = `Fusion preview failed: ${res?.error ?? 'unknown error'} \u2014 showing original instead`;
+      } catch (err) {
+        readoutEl.textContent = `Fusion preview failed: ${err.message} \u2014 showing original instead`;
+      }
+      return { path: info.path, displayName: `${info.name} \u00b7 original (fusion preview failed)` };
+    }
+    return { path: info.path, displayName: info.name };
+  }
+
+  async function syncSource() {
+    updateSourceToggleUI();
+    if (resolvingSource) { sourceChangedWhileResolving = true; return; }
+    resolvingSource = true;
+    try {
+      // A toggle click (or file change) that lands while we're still
+      // awaiting a slow resolution (typically the fusion IPC render) must
+      // not be dropped, or the in-flight result could apply stale audio
+      // over the newer selection once it lands. Loop until a resolution
+      // finishes with no further changes queued up behind it.
+      do {
+        sourceChangedWhileResolving = false;
+        const resolved = await resolveEffectivePath();
+        if (!resolved) { currentPreviewPath = null; break; }
+        currentPreviewPath = resolved.path;
+        autoFitToFile(resolved.path, resolved.displayName);
+        updateGainCompensation();
+        await applyPreviewSource(resolved.path);
+      } while (sourceChangedWhileResolving);
+    } finally {
+      resolvingSource = false;
+    }
   }
 
   // ── Playback ──
@@ -625,8 +778,42 @@
     const prefix = fwd.startsWith('/') ? 'file://' : 'file:///';
     return prefix + encodeURI(fwd);
   }
+
+  function waitForLoadedMetadata(el, timeoutMs = 4000) {
+    return new Promise(resolve => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        el.removeEventListener('loadedmetadata', finish);
+        resolve();
+      };
+      el.addEventListener('loadedmetadata', finish, { once: true });
+      setTimeout(finish, timeoutMs);
+    });
+  }
+
+  // Hot-swaps audioEl's source in place, preserving playback position and
+  // play/pause state — switching original/enhanced/fusion mid-listen is
+  // the entire point of the three-way A/B (a hard reset to 0:00 on every
+  // click would make it useless for comparing the same passage).
+  async function applyPreviewSource(path) {
+    const desired = fileUrlFor(path);
+    if (!audioEl || audioEl.src === desired) return;
+    const wasPlaying = !audioEl.paused;
+    const wasTime = audioEl.currentTime || 0;
+    audioEl.src = desired;
+    if (wasTime > 0) {
+      await waitForLoadedMetadata(audioEl);
+      if (Number.isFinite(audioEl.duration)) audioEl.currentTime = Math.min(wasTime, Math.max(0, audioEl.duration - 0.05));
+    }
+    if (wasPlaying) {
+      try { await audioEl.play(); } catch (err) { console.warn('[EQ] resume after source swap failed', err); }
+    }
+  }
+
   async function playPause() {
-    const path = fileSelect.value;
+    const path = currentPreviewPath || fileSelect.value;
     if (!path) return;
     ensureAudio();
     if (audioCtx.state === 'suspended') await audioCtx.resume();
@@ -684,6 +871,7 @@
     if (window.api?.store) await window.api.store.set('manualEqApply', false);
     manualEqApply = false;
     applyAllBandsToNodes();
+    updateGainCompensation();
     drawCurve();
     updateStatus();
     updateReadout();
@@ -717,8 +905,12 @@
   }
   window.addEventListener('audiopro:queue-changed', refreshFileSelect);
   refreshFileSelect();
-  fileSelect.addEventListener('change', () => {
-    if (fileSelect.value) autoFitToFile(fileSelect.value);
+  fileSelect.addEventListener('change', onFileSelectionChanged);
+  sourceToggle.addEventListener('click', (e) => {
+    const btn = e.target.closest('.mode-btn');
+    if (!btn || btn.classList.contains('active')) return;
+    sourceKind = btn.dataset.source;
+    syncSource();
   });
   playBtn.addEventListener('click', playPause);
   stopBtn.addEventListener('click', stop);

@@ -1,10 +1,13 @@
 #requires -Version 5.0
-# Fetches the Windows x64 binaries that AudioPro bundles (ffmpeg, ffprobe).
+# Fetches the Windows x64 binaries that AudioPro bundles (ffmpeg, ffprobe)
+# plus the RNNoise model used for Mode 1's conditional local denoise.
 # The bin/ directory is gitignored, so this script is what populates it
 # after a fresh clone, before `npm run build:win`.
 #
 # Source:
 #   - BtbN/FFmpeg-Builds GitHub releases (static GPL builds, ffmpeg + ffprobe)
+#   - RNNoise model "somnolent-hogwash" (public domain, ~290 KB):
+#       https://github.com/GregorR/rnnoise-models
 #
 # Usage (from project root):
 #   npm run setup:bin:win
@@ -20,6 +23,8 @@ $Bin       = Join-Path $Root 'bin'
 # Always fetches the latest BtbN auto-build. If that URL ever 404s, pin to a
 # specific release tag from https://github.com/BtbN/FFmpeg-Builds/releases
 $FfmpegUrl = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip'
+$RnnoiseUrl = 'https://raw.githubusercontent.com/GregorR/rnnoise-models/master/somnolent-hogwash-2018-09-01/sh.rnnn'
+$RnnoiseSha256 = '70BB6685EB0C2A1D18E2918DCA3FBFBD39317010B1802EB1B6EA73A92F3FDEC0'
 
 Write-Host ''
 Write-Host '════════════════════════════════════════'
@@ -62,9 +67,18 @@ try {
   Copy-Item -Path $ffmpegExe.FullName  -Destination (Join-Path $Bin 'ffmpeg.exe')  -Force
   Copy-Item -Path $ffprobeExe.FullName -Destination (Join-Path $Bin 'ffprobe.exe') -Force
 
+  Write-Host '→ Downloading RNNoise model…'
+  $RnnoiseFile = Join-Path $Tmp 'rnnoise-model.rnnn'
+  Invoke-WebRequest -Uri $RnnoiseUrl -OutFile $RnnoiseFile -UseBasicParsing
+  $ActualSha256 = (Get-FileHash -Path $RnnoiseFile -Algorithm SHA256).Hash
+  if ($ActualSha256 -ne $RnnoiseSha256) {
+    throw "RNNoise model SHA256 mismatch (expected $RnnoiseSha256, got $ActualSha256) — refusing to install a possibly tampered file."
+  }
+  Copy-Item -Path $RnnoiseFile -Destination (Join-Path $Bin 'rnnoise-model.rnnn') -Force
+
   Write-Host ''
   Write-Host '✓ Done. Staged binaries:'
-  Get-Item -Path (Join-Path $Bin 'ffmpeg.exe'), (Join-Path $Bin 'ffprobe.exe') |
+  Get-Item -Path (Join-Path $Bin 'ffmpeg.exe'), (Join-Path $Bin 'ffprobe.exe'), (Join-Path $Bin 'rnnoise-model.rnnn') |
     Format-Table Name, @{Name='Size (MB)'; Expression={[math]::Round($_.Length/1MB,1)}}, LastWriteTime
 }
 finally {

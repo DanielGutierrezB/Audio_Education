@@ -1,10 +1,11 @@
 {
   "name": "audiopro",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Professional voice processing for educational content",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test test/*.test.js",
     "setup:bin": "bash scripts/fetch-bin.sh",
     "setup:bin:win": "powershell -ExecutionPolicy Bypass -File scripts/fetch-bin.ps1",
     "build": "electron-builder --mac --arm64",

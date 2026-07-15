@@ -5,7 +5,7 @@ recording, or the raw recording **plus** its Adobe Podcast Enhance Speech
 counterpart, and get course-ready output with consistent loudness and a
 polished, full-bodied voice.
 
-Current version: **v0.3.0** (macOS arm64 · Windows x64).
+Current version: **v0.3.1** (macOS arm64 · Windows x64).
 
 ## Purpose
 

@@ -1,5 +1,15 @@
 'use strict';
 
+// Mirrors AUDIO_EXTS in src/pairing.js — kept in sync manually since the
+// renderer has no direct access to Node modules across the context
+// bridge. Used only to accept/reject dropped files client-side; the main
+// process re-validates everything server-side regardless.
+const AUDIO_EXTS = ['.wav', '.mp3', '.m4a', '.aac', '.flac', '.ogg', '.aiff', '.aif'];
+function isAudioFileName(name) {
+  const lower = name.toLowerCase();
+  return AUDIO_EXTS.some(ext => lower.endsWith(ext));
+}
+
 // ── DOM refs ──
 const tabs           = document.querySelectorAll('.tab');
 const views          = document.querySelectorAll('.view');
@@ -257,8 +267,9 @@ function updateQueueSummary() {
     ? `${(totalBytes / (1024 * 1024)).toFixed(1)} MB`
     : `${Math.round(totalBytes / 1024)} KB`;
 
-  // Rough estimate: measure + render ≈ 0.12× realtime (two FFmpeg passes)
-  const estSec = totalDuration > 0 ? Math.round(totalDuration * 0.12) : null;
+  // Rough estimate: analyze + measure + render (+ fusion for Mode 2 pairs)
+  // ≈ 0.18× realtime across 3-5 FFmpeg passes per file.
+  const estSec = totalDuration > 0 ? Math.round(totalDuration * 0.18) : null;
   const estStr = estSec != null ? ` · ~${formatEta(estSec)} est.` : '';
 
   const selStr = selCount > 0 ? `${selCount} of ${totalFiles} selected · ` : `${totalFiles} file${totalFiles !== 1 ? 's' : ''} · `;
@@ -318,10 +329,36 @@ function buildFolderGroup(folderPath, group) {
   return wrap;
 }
 
+// Mode badge reflects `file.resolvedMode` once known (set from the 'qc'
+// or 'file:done' pipeline events) and falls back to "pending pair"
+// styling when a `pairPath` was auto-detected but processing hasn't
+// started yet — see docs/PLAN.md §2.1 for the detection rules.
+function buildModeBadge(file) {
+  if (!file.pairPath && file.resolvedMode !== 2) return null;
+  const badge = document.createElement('span');
+  if (file.resolvedMode === 2) {
+    badge.className = 'file-mode-badge mode-2';
+    badge.textContent = 'Mode 2 · fused';
+    badge.title = `Fused with ${file.pairPath ? file.pairPath.split('/').pop() : 'Adobe Enhance'}`;
+  } else if (file.resolvedMode === 1 && file.pairPath) {
+    badge.className = 'file-mode-badge mode-fallback';
+    badge.textContent = 'Mode 1 · pair mismatch';
+    badge.title = 'Original and Enhanced/ duration mismatch — processed as Mode 1 on the original';
+  } else {
+    badge.className = 'file-mode-badge mode-pending';
+    badge.textContent = 'Pair detected';
+    badge.title = `Will fuse with ${file.pairPath.split('/').pop()} on Process All`;
+  }
+  return badge;
+}
+
 function buildFileItem(file) {
   const item = document.createElement('div');
   item.className = 'file-item' + (selectedFiles.has(file.path) ? ' selected' : '');
   item.dataset.filePath = file.path;
+
+  const main = document.createElement('div');
+  main.className = 'file-item-main';
 
   const cb = document.createElement('input');
   cb.type = 'checkbox';
@@ -359,7 +396,15 @@ function buildFileItem(file) {
   removeBtn.textContent = '✕';
   removeBtn.addEventListener('click', (e) => { e.stopPropagation(); removeFile(file.path); });
 
-  item.append(cb, statusEl, name, dur, size, removeBtn);
+  const badge = buildModeBadge(file);
+  main.append(cb, statusEl, name, ...(badge ? [badge] : []), dur, size, removeBtn);
+  item.appendChild(main);
+
+  const flags = document.createElement('div');
+  flags.className = 'file-flags';
+  flags.hidden = true;
+  if (file.qcFlags?.length) renderFlagChips(flags, file.qcFlags);
+  item.appendChild(flags);
 
   // Right-click context menu
   item.addEventListener('contextmenu', (e) => {
@@ -368,6 +413,31 @@ function buildFileItem(file) {
   });
 
   return item;
+}
+
+// QC flag codes worth calling out with a "needs attention" color; the
+// rest render as neutral info chips. Mirrors the artefact catalogue in
+// docs/PLAN.md §1.4.
+const FLAG_SEVERITY = {
+  CLIP: 'warn', HUM: 'warn', SIBILANT: 'warn', NOISY: 'warn', DC_OFFSET: 'warn',
+};
+
+function renderFlagChips(container, flags) {
+  container.innerHTML = '';
+  if (!flags.length) {
+    const ok = document.createElement('span');
+    ok.className = 'flag-chip flag-ok';
+    ok.textContent = 'clean — no flags';
+    container.appendChild(ok);
+    return;
+  }
+  for (const f of flags) {
+    const chip = document.createElement('span');
+    chip.className = `flag-chip flag-${FLAG_SEVERITY[f.code] ?? 'info'}`;
+    chip.textContent = f.code;
+    if (f.detail) chip.title = f.detail;
+    container.appendChild(chip);
+  }
 }
 
 function patchFileDuration(file) {
@@ -383,6 +453,63 @@ function patchFileStatus(filePath, status) {
     icon.textContent = statusIcon(status);
     icon.title = status;
   }
+}
+
+// Re-renders a single file-item's mode badge in place once the pipeline
+// resolves whether a detected pair actually fused (or fell back to
+// Mode 1 on a duration mismatch — see pipeline.js's pairing check).
+function patchFileMode(filePath, mode, findFile) {
+  const file = findFile(filePath);
+  if (file) file.resolvedMode = mode;
+  const el = queueList.querySelector(`.file-item[data-file-path="${CSS.escape(filePath)}"]`);
+  if (!el || !file) return;
+  const main = el.querySelector('.file-item-main');
+  const existing = main.querySelector('.file-mode-badge');
+  const badge = buildModeBadge(file);
+  if (existing) existing.replaceWith(...(badge ? [badge] : []));
+  else if (badge) main.insertBefore(badge, main.querySelector('.file-duration'));
+}
+
+function patchFileFlags(filePath, flags, findFile) {
+  const file = findFile(filePath);
+  if (file) file.qcFlags = flags;
+  const el = queueList.querySelector(`.file-item[data-file-path="${CSS.escape(filePath)}"]`);
+  if (!el) return;
+  const container = el.querySelector('.file-flags');
+  renderFlagChips(container, flags);
+  container.hidden = false;
+}
+
+// Appends (rather than replaces) the post-render loudness check emitted
+// with 'file:done' — arrives after the QC flag chips from the earlier
+// 'qc' event, so it always renders as a trailing chip. See docs/PLAN.md
+// §4 Fase 2 acceptance: "el informe QC de salida aparece en la UI".
+function patchFileVerify(filePath, verify, findFile) {
+  if (!verify) return;
+  const file = findFile(filePath);
+  if (file) file.verify = verify;
+  const el = queueList.querySelector(`.file-item[data-file-path="${CSS.escape(filePath)}"]`);
+  if (!el) return;
+  const container = el.querySelector('.file-flags');
+  container.hidden = false;
+  let chip = container.querySelector('.flag-chip-verify');
+  if (!chip) {
+    chip = document.createElement('span');
+    chip.className = 'flag-chip-verify';
+    container.appendChild(chip);
+  }
+  const ok = verify.badge === 'ok';
+  chip.className = `flag-chip flag-chip-verify flag-${ok ? 'ok' : 'warn'}`;
+  chip.textContent = verify.i != null ? `${ok ? '✓' : '⚠'} out ${verify.i.toFixed(1)} LUFS` : 'verify: n/a';
+  chip.title = verify.tp != null ? `True peak: ${verify.tp.toFixed(1)} dBFS` : 'Loudness re-measure unavailable';
+}
+
+function findQueuedFile(filePath) {
+  for (const [, group] of queue) {
+    const f = group.files.find(f => f.path === filePath);
+    if (f) return f;
+  }
+  return null;
 }
 
 // ── Context menu ──
@@ -443,7 +570,7 @@ queueContainer.addEventListener('drop', async e => {
   if (!window.api) return;
 
   const folderPaths = [];
-  const wavFileInfos = [];
+  const audioFileInfos = [];
 
   for (const item of e.dataTransfer.items) {
     if (item.kind !== 'file') continue;
@@ -452,13 +579,13 @@ queueContainer.addEventListener('drop', async e => {
     const entry = item.webkitGetAsEntry();
     if (entry?.isDirectory) {
       folderPaths.push(file.path);
-    } else if (file.name.toLowerCase().endsWith('.wav')) {
-      wavFileInfos.push({ path: file.path, name: file.name, size: file.size });
+    } else if (isAudioFileName(file.name)) {
+      audioFileInfos.push({ path: file.path, name: file.name, size: file.size });
     }
   }
 
   if (folderPaths.length) await processFolderPaths(folderPaths);
-  if (wavFileInfos.length) addIndividualFiles(wavFileInfos);
+  if (audioFileInfos.length) addIndividualFiles(audioFileInfos);
 });
 
 // ── Progress bar ──
@@ -494,7 +621,9 @@ function startProcessing() {
   const files = [];
   for (const [, group] of queue) {
     for (const file of group.files) {
-      if (file.status !== 'done') files.push({ path: file.path, duration: file.duration });
+      if (file.status !== 'done') {
+        files.push({ path: file.path, duration: file.duration, ...(file.pairPath ? { pairPath: file.pairPath } : {}) });
+      }
     }
   }
   if (!files.length) { processing = false; return; }
@@ -504,8 +633,9 @@ function startProcessing() {
   btnAddFolders.disabled = true;
   btnAddFiles.disabled = true;
 
+  const firstStepTotal = (files[0].pairPath && prefs.fusionEnabled !== false) ? 5 : 4;
   progressSection.hidden = false;
-  setProgress(0, 'Starting…', 1, 3, files[0].path.split('/').pop(), null);
+  setProgress(0, 'Starting…', 1, firstStepTotal, files[0].path.split('/').pop(), null);
 
   unsubPipeline = window.api.pipeline.onEvent(handlePipelineEvent);
 
@@ -550,8 +680,15 @@ function handlePipelineEvent(event) {
       setProgress(event.pct, event.step, event.stepIndex, event.stepTotal, filename, event.eta);
       break;
 
+    case 'qc':
+      patchFileMode(event.file, event.mode, findQueuedFile);
+      patchFileFlags(event.file, event.flags, findQueuedFile);
+      break;
+
     case 'file:done':
       patchFileStatus(event.file, 'done');
+      patchFileMode(event.file, event.mode, findQueuedFile);
+      patchFileVerify(event.file, event.verify, findQueuedFile);
       for (const [, group] of queue) {
         const f = group.files.find(f => f.path === event.file);
         if (f) f.status = 'done';
@@ -593,6 +730,21 @@ const setFormat        = document.getElementById('set-format');
 const setSampleRate    = document.getElementById('set-samplerate');
 const hpfValue         = document.getElementById('hpf-value');
 
+const toolbarPreset    = document.getElementById('toolbar-preset');
+const setCompression   = document.getElementById('set-compression');
+const setDenoise       = document.getElementById('set-denoise');
+const setBody          = document.getElementById('set-body');
+const bodyValue        = document.getElementById('body-value');
+const setAirExtra      = document.getElementById('set-air-extra');
+const setTrimSilence   = document.getElementById('set-trim-silence');
+const setNormalize     = document.getElementById('set-normalize');
+const setFusionEnabled = document.getElementById('set-fusion-enabled');
+const setFusionMode    = document.getElementById('set-fusion-mode');
+const setFusionCrossover     = document.getElementById('set-fusion-crossover');
+const fusionCrossoverValue   = document.getElementById('fusion-crossover-value');
+const setFusionOriginal      = document.getElementById('set-fusion-original');
+const fusionOriginalValue    = document.getElementById('fusion-original-value');
+
 btnSettings.addEventListener('click', () => {
   const open = !settingsPanel.hidden;
   settingsPanel.hidden = open;
@@ -606,9 +758,25 @@ function applySettingsUI(p) {
   setFormat.value = p.outputFormat ?? 'wav24';
   setSampleRate.value = String(p.sampleRate ?? 48000);
   applyOutputDirUI(p.customOutputDir || '');
+
+  toolbarPreset.value = p.platformPreset ?? 'platzi';
+  setCompression.value = p.compressionMode ?? 'auto';
+  setDenoise.value = p.denoiseMode ?? 'auto';
+  setBody.value = p.bodyPct ?? 0;
+  bodyValue.textContent = `${setBody.value}%`;
+  setAirExtra.checked = p.airExtraEnabled === true;
+  setTrimSilence.checked = p.trimSilence !== false;
+  setNormalize.value = p.normalizeMode ?? 'both';
+  setFusionEnabled.checked = p.fusionEnabled !== false;
+  setFusionMode.value = p.fusionMode ?? 'bands';
+  setFusionCrossover.value = p.fusionCrossoverHz ?? 200;
+  fusionCrossoverValue.textContent = `${setFusionCrossover.value} Hz`;
+  setFusionOriginal.value = p.fusionOriginalPct ?? 20;
+  fusionOriginalValue.textContent = `${setFusionOriginal.value}%`;
 }
 
 function savePref(key, value) {
+  prefs[key] = value;
   if (window.api) window.api.store.set(key, value);
 }
 
@@ -621,6 +789,30 @@ setHpf.addEventListener('input', () => {
 setDeEsser.addEventListener('change', () => savePref('deEsserEnabled', setDeEsser.checked));
 setFormat.addEventListener('change', () => savePref('outputFormat', setFormat.value));
 setSampleRate.addEventListener('change', () => savePref('sampleRate', parseInt(setSampleRate.value)));
+
+toolbarPreset.addEventListener('change', () => savePref('platformPreset', toolbarPreset.value));
+setCompression.addEventListener('change', () => savePref('compressionMode', setCompression.value));
+setDenoise.addEventListener('change', () => savePref('denoiseMode', setDenoise.value));
+setBody.addEventListener('input', () => {
+  const v = parseInt(setBody.value);
+  bodyValue.textContent = `${v}%`;
+  savePref('bodyPct', v);
+});
+setAirExtra.addEventListener('change', () => savePref('airExtraEnabled', setAirExtra.checked));
+setTrimSilence.addEventListener('change', () => savePref('trimSilence', setTrimSilence.checked));
+setNormalize.addEventListener('change', () => savePref('normalizeMode', setNormalize.value));
+setFusionEnabled.addEventListener('change', () => savePref('fusionEnabled', setFusionEnabled.checked));
+setFusionMode.addEventListener('change', () => savePref('fusionMode', setFusionMode.value));
+setFusionCrossover.addEventListener('input', () => {
+  const v = parseInt(setFusionCrossover.value);
+  fusionCrossoverValue.textContent = `${v} Hz`;
+  savePref('fusionCrossoverHz', v);
+});
+setFusionOriginal.addEventListener('input', () => {
+  const v = parseInt(setFusionOriginal.value);
+  fusionOriginalValue.textContent = `${v}%`;
+  savePref('fusionOriginalPct', v);
+});
 
 // ── Event listeners — toolbar / empty state ──
 btnAddFolders.addEventListener('click', addFoldersViaDialog);

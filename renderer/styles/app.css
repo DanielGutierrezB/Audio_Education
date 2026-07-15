@@ -257,10 +257,16 @@ body {
 .settings-categories {
   display: flex;
   gap: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
+.settings-categories::-webkit-scrollbar { height: 5px; }
+.settings-categories::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
 .settings-category {
-  flex: 1;
+  flex: 1 1 210px;
+  min-width: 210px;
   padding: 0 14px;
   border-right: 1px solid var(--border);
 }
@@ -502,8 +508,8 @@ body {
 
 .file-item {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 3px;
   padding: 6px 12px;
   font-size: 12.5px;
   transition: background 0.1s;
@@ -511,6 +517,12 @@ body {
 }
 .file-item:hover { background: rgba(255,255,255,0.03); }
 .file-item.selected { background: rgba(74, 143, 232, 0.08); }
+
+.file-item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 
 .file-checkbox {
   flex-shrink: 0;
@@ -560,6 +572,45 @@ body {
 }
 .file-item:hover .btn-remove-file { color: var(--text-3); }
 .btn-remove-file:hover { color: var(--error) !important; background: rgba(232, 74, 90, 0.12); }
+
+/* ── Mode badge (Mode 2 pairing / fusion status — docs/PLAN.md §2.1) ── */
+.file-mode-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  cursor: help;
+  white-space: nowrap;
+}
+.file-mode-badge.mode-2       { background: var(--accent-dim); color: var(--accent); }
+.file-mode-badge.mode-pending { background: rgba(255, 255, 255, 0.07); color: var(--text-2); }
+.file-mode-badge.mode-fallback { background: rgba(232, 168, 74, 0.16); color: var(--warning); }
+
+/* ── QC flag chips (artefact catalogue — docs/PLAN.md §1.4) ── */
+.file-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-left: 40px; /* aligns under file name, past checkbox + status icon */
+}
+
+.flag-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  line-height: 1.6;
+  cursor: help;
+  white-space: nowrap;
+}
+.flag-warn { background: rgba(232, 74, 90, 0.14); color: var(--error); }
+.flag-info { background: rgba(255, 255, 255, 0.06); color: var(--text-2); }
+.flag-ok   { background: rgba(74, 184, 126, 0.14); color: var(--success); }
 
 /* ── Context menu ── */
 .ctx-menu {

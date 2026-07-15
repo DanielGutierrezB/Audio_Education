@@ -32,8 +32,19 @@ function resolve(name) {
   return name + EXE;
 }
 
+const RNNOISE_MODEL_NAME = 'rnnoise-model.rnnn';
+
+// Returns null when the model isn't bundled — callers treat that as
+// "local denoise unavailable" rather than crashing. Unlike ffmpeg/ffprobe
+// there's no PATH fallback: it's a data file, not an executable.
+function rnnoiseModel() {
+  const fullPath = path.join(getBinDir(), RNNOISE_MODEL_NAME);
+  return fs.existsSync(fullPath) ? fullPath : null;
+}
+
 module.exports = {
   ffmpeg:  () => resolve('ffmpeg'),
   ffprobe: () => resolve('ffprobe'),
+  rnnoiseModel,
   getBinDir,
 };

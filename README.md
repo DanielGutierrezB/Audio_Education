@@ -15,7 +15,9 @@ rationale):
 1. **Mode 1 — Original only.** Drop the raw take with no Adobe Podcast step.
    AudioPro analyzes it, applies conditional local denoise (RNNoise) only when
    the measured noise floor calls for it, repairs whatever the detectors
-   actually flag (clipping, hum, clicks, silence padding), then masters it.
+   actually flag (clipping, hum, silence padding — mouth clicks get a safe,
+   unconditional de-click pass since there's no reliable detector for those),
+   then masters it.
 2. **Mode 2 — Original + Adobe Podcast at 100%.** Drop a folder containing the
    raw recordings **and** the `Enhanced/` subfolder that
    [`adobe-podcast-batch`](https://github.com/DanielGutierrezB/adobe-podcast-batch)
@@ -49,8 +51,9 @@ Mode 2: original + enhanced ─▶ 0. Fuse (bands / bed crossover) ┤
                 2. Clean — Mode 1 only: RNNoise, gated by measured noise
                    floor, strength scaled to how far over threshold it is
                                    │
-                3. Repair — only the filters whose detector actually fired:
-                   de-click (always, cheap) / de-clip / hum notch / silence trim
+                3. Repair — de-click always runs (cheap, no reliable click
+                   detector exists); de-clip / hum notch / silence trim only
+                   when their own detector actually fired
                                    │
                 4. Tone + dynamics — HPF → EQ cuts (mud/box/honk) → leveling
                    compressor (skipped if already dense) → parallel "body"
@@ -60,12 +63,12 @@ Mode 2: original + enhanced ─▶ 0. Fuse (bands / bed crossover) ┤
                 5. Loudness — two-pass loudnorm to the selected delivery
                    preset, then a true-peak safety limiter
                                    │
-                6. Verify — re-measure the render, badge ok/warn on the log
+                6. Verify — re-measure the render, badge ok/warn on the file row
 ```
 
-Nothing fires unless its detector actually flagged the input — already-clean
-material takes the same path with the conditional stages skipped, not a
-different code path.
+Nothing else fires unless its detector actually flagged the input (de-click above
+is the one always-on exception) — already-clean material takes the same path
+with the conditional stages skipped, not a different code path.
 
 ## QC flags & artifact catalogue
 
@@ -105,7 +108,8 @@ target, or "raise only" as a conservative legacy mode.
 ## EQ controls
 
 - **EQ tab** — drag bands on a canvas with real-time Web Audio preview of the
-  *source* file. On file selection the three cut bands auto-fit to the local
+  *source* file (scroll over a band to change its Q, shift-click to toggle it
+  on/off). On file selection the three cut bands auto-fit to the local
   spectral peaks of that voice (FFT analysis, ±1/3 octave). Every tweak
   auto-saves; **Process All** always renders what the editor shows.
 - **Reset** returns to the base curve; **Bypass** A/Bs the preview without
@@ -215,6 +219,8 @@ All settings persist across sessions via `electron-store`:
   crossover frequency, original blend percentage.
 - Manual EQ chain override (set from the EQ tab, not directly exposed as a
   toggle here).
+- `showNotifications` (default on) — desktop notification when a batch
+  finishes. Store-only for now; there's no toggle in the Settings panel yet.
 
 ## Architecture
 

@@ -1,4 +1,4 @@
-#requires -Version 5.0
+﻿#requires -Version 5.0
 # Fetches the Windows x64 binaries that AudioPro bundles (ffmpeg, ffprobe)
 # plus the RNNoise model used for Mode 1's conditional local denoise.
 # The bin/ directory is gitignored, so this script is what populates it
@@ -27,9 +27,9 @@ $RnnoiseUrl = 'https://raw.githubusercontent.com/GregorR/rnnoise-models/master/s
 $RnnoiseSha256 = '70BB6685EB0C2A1D18E2918DCA3FBFBD39317010B1802EB1B6EA73A92F3FDEC0'
 
 Write-Host ''
-Write-Host '════════════════════════════════════════'
-Write-Host '  AudioPro · fetching Windows binaries'
-Write-Host '════════════════════════════════════════'
+Write-Host '========================================'
+Write-Host '  AudioPro - fetching Windows binaries'
+Write-Host '========================================'
 Write-Host ''
 Write-Host "Target: $Bin"
 
@@ -45,14 +45,14 @@ $Zip       = Join-Path $Tmp 'ffmpeg.zip'
 $Extracted = Join-Path $Tmp 'extracted'
 
 try {
-  Write-Host '→ Downloading ffmpeg/ffprobe…'
+  Write-Host '-> Downloading ffmpeg/ffprobe...'
   # UseBasicParsing avoids dependence on Internet Explorer's COM engine
   # (which is no longer present on Windows 11 + Server 2025).
   $ProgressPreference = 'SilentlyContinue'
   Invoke-WebRequest -Uri $FfmpegUrl -OutFile $Zip -UseBasicParsing
   $ProgressPreference = 'Continue'
 
-  Write-Host '→ Extracting…'
+  Write-Host '-> Extracting...'
   Expand-Archive -Path $Zip -DestinationPath $Extracted -Force
 
   # The ZIP contains a single top-level folder; locate ffmpeg.exe and
@@ -67,17 +67,17 @@ try {
   Copy-Item -Path $ffmpegExe.FullName  -Destination (Join-Path $Bin 'ffmpeg.exe')  -Force
   Copy-Item -Path $ffprobeExe.FullName -Destination (Join-Path $Bin 'ffprobe.exe') -Force
 
-  Write-Host '→ Downloading RNNoise model…'
+  Write-Host '-> Downloading RNNoise model...'
   $RnnoiseFile = Join-Path $Tmp 'rnnoise-model.rnnn'
   Invoke-WebRequest -Uri $RnnoiseUrl -OutFile $RnnoiseFile -UseBasicParsing
   $ActualSha256 = (Get-FileHash -Path $RnnoiseFile -Algorithm SHA256).Hash
   if ($ActualSha256 -ne $RnnoiseSha256) {
-    throw "RNNoise model SHA256 mismatch (expected $RnnoiseSha256, got $ActualSha256) — refusing to install a possibly tampered file."
+    throw "RNNoise model SHA256 mismatch (expected $RnnoiseSha256, got $ActualSha256) - refusing to install a possibly tampered file."
   }
   Copy-Item -Path $RnnoiseFile -Destination (Join-Path $Bin 'rnnoise-model.rnnn') -Force
 
   Write-Host ''
-  Write-Host '✓ Done. Staged binaries:'
+  Write-Host 'Done. Staged binaries:'
   Get-Item -Path (Join-Path $Bin 'ffmpeg.exe'), (Join-Path $Bin 'ffprobe.exe'), (Join-Path $Bin 'rnnoise-model.rnnn') |
     Format-Table Name, @{Name='Size (MB)'; Expression={[math]::Round($_.Length/1MB,1)}}, LastWriteTime
 }

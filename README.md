@@ -5,7 +5,7 @@ recording, or the raw recording **plus** its Adobe Podcast Enhance Speech
 counterpart, and get course-ready output with consistent loudness and a
 polished, full-bodied voice.
 
-Current version: **v0.3.4** (macOS arm64 · Windows x64).
+Current version: **v0.4.0** (macOS arm64 · Windows x64).
 
 ## Purpose
 
@@ -129,6 +129,27 @@ target, or "raise only" as a conservative legacy mode.
   switching sources hot-swaps the audio element in place, preserving
   playback position so you can A/B the exact same passage.
 
+## Updating the app
+
+The version pill in the titlebar (⟳ v0.4.0) is the updater — same pattern as
+[HyperPremiere](https://github.com/DanielGutierrezB/HyperPremiere)'s ⟳ button:
+the app itself checks the GitHub repo's `package.json` on `main` at launch
+and every 30 minutes. When a newer version exists the pill highlights and
+shows `v0.4.0 → v0.5.0`; clicking it downloads the branch zip from GitHub,
+replaces the app files in place (`src/updater.js`), and relaunches. With
+nothing new, a click just re-checks and reloads the window.
+
+- **Packaged install (DMG / installer)** — downloads
+  `codeload.github.com/<repo>/zip/refs/heads/main`, stages `main.js`,
+  `preload.js`, `src/`, `renderer/` and `package.json`, backs up the live
+  install, and writes over `Resources/app` (asar is disabled so the app runs
+  from plain files). `node_modules` and the bundled ffmpeg binaries are
+  never touched, so an update that changes dependencies or binaries still
+  needs a fresh DMG.
+- **Dev checkout (has `.git`)** — `git fetch` + compare; applying runs
+  `git reset --hard origin/main`, and refuses to run at all if the checkout
+  is on any branch other than `main` (so it can't wipe feature-branch work).
+
 ## QC tools
 
 - **Spectrogram viewer** — right-click any queued file → **View
@@ -243,10 +264,11 @@ src/
   logger.js                   Structured logging (copyable from the app)
   spectrogram.js              showspectrumpic PNG render for the QC spectrogram modal
   qc-report.js                Markdown QC report builder for the batch export button
+  updater.js                  Self-update from GitHub (git reset in dev, zip-in-place when packaged)
 test/
   fixtures.js                 Synthetic WAV generator (ffmpeg lavfi) for the corpus below
   *.test.js                   node:test suite — metrics, pairing, fusion, presets, pipeline,
-                               ffmpeg-run, spectrogram, qc-report
+                               ffmpeg-run, spectrogram, qc-report, updater
 scripts/
   fetch-bin.sh                Downloads macOS arm64 ffmpeg/ffprobe/RNNoise model (SHA256-pinned)
   fetch-bin.ps1                Downloads Windows x64 ffmpeg/ffprobe/RNNoise model
@@ -268,3 +290,9 @@ bin/                          (gitignored) populated by the fetch scripts
 - Mode 2 relies on running `adobe-podcast-batch` separately and dropping its
   output folder; there is no embedded Adobe login/upload yet (`docs/PLAN.md`
   §3.1 Nivel 2 / Fase 10).
+- The in-app updater reads the repo anonymously (raw `package.json` + branch
+  zip, no token). **While this repository is private, packaged installs
+  can't check for updates** — the pill reports "No se pudo consultar GitHub
+  (HTTP 404 — ¿es privado?)" and nothing breaks, but self-update only works
+  once the repo is public (like HyperPremiere) or the updater grows token
+  support. Dev checkouts are unaffected (git uses your credentials).

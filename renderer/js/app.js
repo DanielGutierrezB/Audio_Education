@@ -686,6 +686,55 @@ const progressEta      = document.getElementById('progress-eta');
 let processing = false;
 let unsubPipeline = null;
 
+// ── Embedded Adobe Enhance stage (runs before the mastering queue) ──
+const enhanceBanner     = document.getElementById('enhance-banner');
+const enhanceBannerText = document.getElementById('enhance-banner-text');
+let enhanceTotal = 0;
+let enhanceDone = 0;
+let enhanceLimitTimer = null;
+
+// Maps the engine's state contract (shared verbatim with
+// adobe-podcast-batch — Spanish values) to this UI's labels.
+const ENHANCE_STATE_LABELS = {
+  'subiendo': 'Uploading to Adobe',
+  'procesando': 'Processing on Adobe',
+  'descargando': 'Downloading clean voice',
+  'listo': 'Done',
+  'error': 'Error',
+  'esperando': 'Waiting for Adobe credits',
+  'en cola': 'Queued',
+  'en espera': 'Queued',
+};
+
+function setEnhanceProgress(filename, stateLabel, pct) {
+  const overall = enhanceTotal ? Math.round((enhanceDone / enhanceTotal) * 100) : 0;
+  progressFill.style.width = `${overall}%`;
+  progressPercent.textContent = `${overall}%`;
+  progressStep.textContent = `Adobe Enhance \u00b7 ${stateLabel}${pct ? ` ${pct}%` : ''}`;
+  if (filename) progressFilename.textContent = filename;
+  progressEta.textContent = `${enhanceDone}/${enhanceTotal} enhanced`;
+}
+
+function showEnhanceLimit(seconds) {
+  let remain = seconds;
+  const tick = () => {
+    if (remain <= 0) { hideEnhanceLimit(); return; }
+    const m = Math.floor(remain / 60), s = remain % 60;
+    enhanceBannerText.textContent = `Out of Adobe credits \u2014 resuming in ${m}:${String(s).padStart(2, '0')}\u2026`;
+    remain--;
+  };
+  enhanceBanner.hidden = false;
+  clearInterval(enhanceLimitTimer);
+  tick();
+  enhanceLimitTimer = setInterval(tick, 1000);
+}
+
+function hideEnhanceLimit() {
+  clearInterval(enhanceLimitTimer);
+  enhanceLimitTimer = null;
+  enhanceBanner.hidden = true;
+}
+
 function setProgress(pct, step, stepIndex, stepTotal, filename, eta) {
   progressFill.style.width = `${pct}%`;
   progressPercent.textContent = `${pct}%`;
@@ -747,6 +796,7 @@ function finishProcessing() {
   btnAddFiles.disabled = false;
 
   progressSection.hidden = true;
+  hideEnhanceLimit();
   renderQueue();
 }
 
@@ -754,6 +804,49 @@ function handlePipelineEvent(event) {
   const filename = event.file ? event.file.split('/').pop() : '';
 
   switch (event.type) {
+    case 'enhance:start':
+      enhanceTotal = event.total;
+      enhanceDone = 0;
+      setEnhanceProgress(null, 'Starting\u2026');
+      break;
+
+    case 'enhance:status': {
+      patchFileStatus(event.file, 'processing');
+      const f = findQueuedFile(event.file);
+      if (f) f.status = 'processing';
+      setEnhanceProgress(filename, ENHANCE_STATE_LABELS[event.state] ?? event.state, event.pct);
+      break;
+    }
+
+    case 'enhance:done': {
+      enhanceDone++;
+      if (event.ok && event.enhancedPath) {
+        const f = findQueuedFile(event.file);
+        if (f) f.pairPath = event.enhancedPath;
+        // Refresh the badge: the file now has a pair and will fuse as Mode 2.
+        patchFileMode(event.file, undefined, findQueuedFile);
+      }
+      setEnhanceProgress(filename, event.ok ? 'Done' : 'Error');
+      break;
+    }
+
+    case 'enhance:limit':
+      showEnhanceLimit(event.seconds);
+      break;
+
+    case 'enhance:limit-clear':
+      hideEnhanceLimit();
+      break;
+
+    case 'enhance:auth-expired':
+      enhanceBanner.hidden = false;
+      enhanceBannerText.textContent = 'Adobe session expired \u2014 reconnect from Settings and run again.';
+      break;
+
+    case 'enhance:batch-done':
+      hideEnhanceLimit();
+      break;
+
     case 'file:start':
       patchFileStatus(event.file, 'processing');
       for (const [, group] of queue) {
@@ -830,6 +923,13 @@ const setFusionCrossover     = document.getElementById('set-fusion-crossover');
 const fusionCrossoverValue   = document.getElementById('fusion-crossover-value');
 const setFusionOriginal      = document.getElementById('set-fusion-original');
 const fusionOriginalValue    = document.getElementById('fusion-original-value');
+const setEnhanceEnabled  = document.getElementById('set-enhance-enabled');
+const setEnhanceMix      = document.getElementById('set-enhance-mix');
+const enhanceMixValue    = document.getElementById('enhance-mix-value');
+const adobeDot           = document.getElementById('adobe-dot');
+const adobeConnText      = document.getElementById('adobe-conn-text');
+const btnAdobeConnect    = document.getElementById('btn-adobe-connect');
+const btnAdobeDisconnect = document.getElementById('btn-adobe-disconnect');
 
 btnSettings.addEventListener('click', () => {
   const open = !settingsPanel.hidden;
@@ -859,6 +959,9 @@ function applySettingsUI(p) {
   fusionCrossoverValue.textContent = `${setFusionCrossover.value} Hz`;
   setFusionOriginal.value = p.fusionOriginalPct ?? 20;
   fusionOriginalValue.textContent = `${setFusionOriginal.value}%`;
+  setEnhanceEnabled.checked = p.enhanceEnabled === true;
+  setEnhanceMix.value = p.enhanceMixPct ?? 100;
+  enhanceMixValue.textContent = `${setEnhanceMix.value}%`;
 }
 
 function savePref(key, value) {
@@ -899,6 +1002,38 @@ setFusionOriginal.addEventListener('input', () => {
   fusionOriginalValue.textContent = `${v}%`;
   savePref('fusionOriginalPct', v);
 });
+setEnhanceEnabled.addEventListener('change', () => savePref('enhanceEnabled', setEnhanceEnabled.checked));
+setEnhanceMix.addEventListener('input', () => {
+  const v = parseInt(setEnhanceMix.value);
+  enhanceMixValue.textContent = `${v}%`;
+  savePref('enhanceMixPct', v);
+});
+
+// ── Adobe connection (embedded Enhance) ──
+function refreshAdobeConn(status) {
+  const connected = status?.connected === true;
+  adobeDot.classList.toggle('on', connected);
+  adobeConnText.textContent = connected ? (status.email || 'Connected') : 'Not connected';
+  btnAdobeConnect.textContent = connected ? 'Reconnect' : 'Connect';
+  btnAdobeDisconnect.hidden = !connected;
+}
+
+if (window.api?.adobe) {
+  window.api.adobe.status().then(refreshAdobeConn).catch(() => {});
+  window.api.adobe.onConn(refreshAdobeConn);
+  btnAdobeConnect.addEventListener('click', async () => {
+    btnAdobeConnect.disabled = true;
+    btnAdobeConnect.textContent = 'Opening\u2026';
+    try {
+      refreshAdobeConn(await window.api.adobe.connect());
+    } finally {
+      btnAdobeConnect.disabled = false;
+    }
+  });
+  btnAdobeDisconnect.addEventListener('click', async () => {
+    refreshAdobeConn(await window.api.adobe.disconnect());
+  });
+}
 
 // ── Event listeners — toolbar / empty state ──
 btnAddFolders.addEventListener('click', addFoldersViaDialog);

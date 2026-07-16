@@ -13,7 +13,13 @@ const fusion = require('./src/fusion');
 const spectrogram = require('./src/spectrogram');
 const qcReport = require('./src/qc-report');
 const updater = require('./src/updater');
+const adobeAuth = require('./src/adobe-auth');
+const enhanceBatch = require('./src/enhance/batch');
 const { DELIVERY_PRESETS, DEFAULT_PRESET } = require('./src/presets');
+
+// Adobe processes ~5 tracks per account concurrently — same ceiling the
+// standalone `adobe-podcast-batch` uses.
+const ENHANCE_CONCURRENCY = 5;
 
 const VALID_STORE_KEYS = new Set([
   'hpfFrequency', 'deEsserEnabled',
@@ -30,6 +36,8 @@ const VALID_STORE_KEYS = new Set([
   'denoiseMode', 'compressionMode', 'bodyPct', 'airExtraEnabled', 'trimSilence', 'normalizeMode',
   // Mode 2 fusion — original + Adobe Podcast Enhance 100% (docs/PLAN.md §2.4).
   'fusionEnabled', 'fusionMode', 'fusionCrossoverHz', 'fusionOriginalPct',
+  // Embedded Adobe Enhance (docs/PLAN.md §3.1 Nivel 2 / Fase 10).
+  'enhanceEnabled', 'enhanceMixPct',
 ]);
 
 const ENUM_VALUES = {
@@ -43,6 +51,7 @@ const RANGE_VALUES = {
   bodyPct:           [0, 100],
   fusionCrossoverHz: [80, 500],
   fusionOriginalPct: [0, 40],
+  enhanceMixPct:     [0, 100],
 };
 
 const store = new Store({
@@ -66,6 +75,8 @@ const store = new Store({
     fusionMode: 'bands',
     fusionCrossoverHz: 200,
     fusionOriginalPct: 20,
+    enhanceEnabled: false,
+    enhanceMixPct: 100,
   },
 });
 
@@ -95,6 +106,18 @@ app.whenReady().then(() => {
   logger.push('bin', `ffmpeg: ${binPaths.ffmpeg()}`);
   logger.push('bin', `ffprobe: ${binPaths.ffprobe()}`);
   createWindow();
+  // Restore the Adobe session (embedded Enhance). Only attempt the
+  // silent refresh when a token was ever stored — never open the hidden
+  // podcast.adobe.com window for users who don't use the feature.
+  if (adobeAuth.loadStoredToken()) {
+    adobeAuth.silentReauth().then(tok => {
+      if (!tok) return;
+      logger.push('enhance', `Adobe session restored: ${adobeAuth.tokenEmail()}`);
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send('adobe:conn', { connected: true, email: adobeAuth.tokenEmail() });
+      }
+    });
+  }
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -128,10 +151,10 @@ ipcMain.handle('store:set', (_, key, value) => {
   if (typeof key !== 'string' || !VALID_STORE_KEYS.has(key)) return;
   const BOOL_KEYS = new Set([
     'deEsserEnabled', 'showNotifications', 'manualEqApply',
-    'airExtraEnabled', 'trimSilence', 'fusionEnabled',
+    'airExtraEnabled', 'trimSilence', 'fusionEnabled', 'enhanceEnabled',
   ]);
   const STRING_KEYS = new Set(['outputFormat', 'manualEqChain', 'customOutputDir']);
-  const INT_KEYS = new Set(['hpfFrequency', 'sampleRate', 'bodyPct', 'fusionCrossoverHz', 'fusionOriginalPct']);
+  const INT_KEYS = new Set(['hpfFrequency', 'sampleRate', 'bodyPct', 'fusionCrossoverHz', 'fusionOriginalPct', 'enhanceMixPct']);
   if (BOOL_KEYS.has(key) && typeof value !== 'boolean') return;
   if (STRING_KEYS.has(key) && typeof value !== 'string') return;
   if (INT_KEYS.has(key) && (typeof value !== 'number' || !Number.isFinite(value))) return;
@@ -226,9 +249,87 @@ ipcMain.handle('folders:scan', (_, folderPath) => {
   }
 });
 
+// ── Adobe session (embedded Enhance — docs/PLAN.md §3.1 Nivel 2) ──
+
+ipcMain.handle('adobe:status', () => ({
+  connected: !!adobeAuth.getToken(),
+  email: adobeAuth.tokenEmail(),
+}));
+
+ipcMain.handle('adobe:connect', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const tok = await adobeAuth.connectInteractive(win);
+  if (tok) logger.push('enhance', `Adobe connected: ${adobeAuth.tokenEmail()}`);
+  return { connected: !!tok, email: adobeAuth.tokenEmail() };
+});
+
+ipcMain.handle('adobe:disconnect', () => {
+  adobeAuth.clearToken();
+  logger.push('enhance', 'Adobe session cleared');
+  return { connected: false, email: null };
+});
+
 // ── Pipeline ──
 
 let pipelineState = null;
+
+// Stage 0 of the batch when "Enhance with Adobe" is on: uploads every
+// file that arrived WITHOUT an Enhanced/ pair to Adobe Podcast, saves
+// the 100% clean voice to Enhanced/<stem>.wav (plus the optional local
+// dry/wet mix in Enhanced/Mix <pct>/) and attaches it as the file's
+// pairPath so the regular Mode 2 fusion + mastering chain takes over.
+// Files that already had a pair (or a leftover Enhanced/ file on disk)
+// skip the upload — no Adobe credits are spent twice.
+async function runEnhanceStage(files, emit) {
+  const targets = files.filter(f => !f.pairPath);
+  if (!targets.length) return files;
+
+  if (!adobeAuth.getToken()) {
+    throw new Error('"Enhance with Adobe" is on but there is no Adobe session — connect from Settings, or turn the toggle off.');
+  }
+
+  const mixPct = store.get('enhanceMixPct');
+  emit('enhance:start', { total: targets.length, mixPct });
+  logger.push('enhance', `Embedded enhance: ${targets.length} file(s) → Adobe Podcast`, `mix ${mixPct}%`);
+
+  const results = await enhanceBatch.runEnhanceBatch(
+    { files: targets.map(f => f.path), mixPct, concurrency: ENHANCE_CONCURRENCY },
+    {
+      send: (type, data) => {
+        emit(type, data);
+        if (type === 'enhance:done') {
+          logger.push('enhance', `${data.ok ? '✓' : '✗'} ${path.basename(data.file)}${data.reused ? ' (reused existing Enhanced/)' : ''}`, data.error ?? data.enhancedPath);
+        }
+        if (type === 'enhance:limit') logger.push('enhance', `Adobe credits exhausted — waiting ${data.seconds}s`);
+      },
+      getToken: () => adobeAuth.getToken(),
+      reauth: async () => {
+        const tok = await adobeAuth.silentReauth();
+        if (tok) {
+          for (const win of BrowserWindow.getAllWindows()) {
+            win.webContents.send('adobe:conn', { connected: true, email: adobeAuth.tokenEmail() });
+          }
+        }
+        return tok;
+      },
+      isCanceled: () => pipelineState?.cancelled ?? false,
+      ffmpeg: binPaths.ffmpeg(),
+    }
+  );
+
+  const failed = new Set();
+  for (const f of targets) {
+    const res = results.get(f.path);
+    if (res?.ok && res.enhancedPath) {
+      f.pairPath = res.enhancedPath;
+    } else if (!(pipelineState?.cancelled)) {
+      failed.add(f.path);
+      emit('file:error', { file: f.path, error: `Adobe Enhance failed: ${res?.error ?? 'unknown'}` });
+    }
+  }
+  emit('enhance:batch-done', { total: targets.length, failed: failed.size });
+  return files.filter(f => !failed.has(f.path));
+}
 
 ipcMain.handle('pipeline:start', (event, files) => {
   if (pipelineState?.running) return { error: 'Already processing' };
@@ -294,12 +395,25 @@ ipcMain.handle('pipeline:start', (event, files) => {
     if (type === 'batch:done') logger.push('pipeline', `Batch complete: ${data.done}/${data.total} files`);
   };
 
-  pipeline.processQueue(files, {
-    emit,
-    isCancelled: () => pipelineState?.cancelled ?? false,
-    setCurrent: proc => { if (pipelineState) pipelineState.currentProc = proc; },
-    settings,
-  }).catch(err => {
+  const enhanceEnabled = store.get('enhanceEnabled') === true;
+
+  (async () => {
+    const queueFiles = enhanceEnabled ? await runEnhanceStage(files, emit) : files;
+    if (pipelineState?.cancelled) {
+      emit('batch:done', { total: files.length, done: 0 });
+      return;
+    }
+    if (!queueFiles.length) {
+      emit('batch:done', { total: files.length, done: 0 });
+      return;
+    }
+    await pipeline.processQueue(queueFiles, {
+      emit,
+      isCancelled: () => pipelineState?.cancelled ?? false,
+      setCurrent: proc => { if (pipelineState) pipelineState.currentProc = proc; },
+      settings,
+    });
+  })().catch(err => {
     logger.push('pipeline', `Batch error: ${err.message}`);
     emit('error', { error: err.message });
   }).finally(() => {

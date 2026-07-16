@@ -179,9 +179,42 @@
             </div>
 
             <div class="settings-category">
+              <div class="settings-cat-title">Adobe Enhance</div>
+              <div class="settings-row settings-row-note">
+                <span class="settings-note">Embedded Enhance Speech &mdash; <strong>Process All</strong> uploads unpaired files to Adobe Podcast first, saves the clean voice to <code>Enhanced/</code> next to each original, then fuses and masters. Originals are never modified. Files that already have an <code>Enhanced/</code> pair skip the upload (no credits spent twice).</span>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="set-enhance-enabled"
+                  title="When on, Process All runs unpaired files through Adobe Podcast Enhance Speech automatically (5 in parallel, waits out credit limits) before fusing and mastering. Requires connecting your Adobe account below.">
+                  Enhance with Adobe
+                </label>
+                <label class="toggle">
+                  <input type="checkbox" id="set-enhance-enabled">
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
+              <div class="settings-row">
+                <span class="settings-label" title="Optional extra deliverable: a plain dry/wet mix of N% clean voice + (100−N)% original, saved to Enhanced/Mix N/. At 100% no extra file is written — the pure clean voice in Enhanced/ already is the 100% mix. Fusion always works from the pure signals, never from this mix.">Clean voice mix</span>
+                <div class="range-row">
+                  <input type="range" id="set-enhance-mix" min="0" max="100" step="5" value="100" aria-label="Clean voice mix percentage">
+                  <span class="range-value" id="enhance-mix-value">100%</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <span class="settings-label" title="Adobe account used for the embedded Enhance. The session token is stored encrypted on this machine.">Account</span>
+                <div class="adobe-conn">
+                  <span class="conn-dot" id="adobe-dot"></span>
+                  <span class="conn-text" id="adobe-conn-text">Not connected</span>
+                  <button class="btn btn-secondary btn-sm" id="btn-adobe-connect" title="Open the Adobe login window — sign in once and the session persists">Connect</button>
+                  <button class="btn btn-secondary btn-sm" id="btn-adobe-disconnect" hidden title="Forget the stored Adobe session token">Sign out</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-category">
               <div class="settings-cat-title">Fusion &middot; Mode 2</div>
               <div class="settings-row settings-row-note">
-                <span class="settings-note">Applies only to files auto-paired with an <code>Enhanced/</code> counterpart (drop the <code>adobe-podcast-batch</code> output folder).</span>
+                <span class="settings-note">Applies only to files auto-paired with an <code>Enhanced/</code> counterpart &mdash; from the embedded Enhance above, or from dropping an <code>adobe-podcast-batch</code> output folder.</span>
               </div>
               <div class="settings-row">
                 <label class="settings-label" for="set-fusion-enabled"
@@ -220,6 +253,11 @@
           </div>
         </div>
 
+        <!-- Adobe credits limit banner (embedded Enhance) -->
+        <div class="enhance-banner" id="enhance-banner" hidden>
+          <span id="enhance-banner-text">Out of Adobe credits &mdash; waiting&hellip;</span>
+        </div>
+
         <div class="queue-container" id="queue-container">
           <!-- Empty state -->
           <div class="queue-empty" id="queue-empty">
@@ -230,7 +268,7 @@
               <button class="btn btn-accent" id="btn-empty-folders">+ Add Folders</button>
               <button class="btn btn-secondary" id="btn-empty-files">+ Add Files</button>
             </div>
-            <p class="queue-empty-hint">Audio files &rarr; mastered 24-bit output in <code>Audio_Pro/</code> &middot; drop a folder with an <code>Enhanced/</code> subfolder to auto-detect Mode 2 pairs</p>
+            <p class="queue-empty-hint">Audio files &rarr; mastered 24-bit output in <code>Audio_Pro/</code> &middot; drop a folder with an <code>Enhanced/</code> subfolder to auto-detect Mode 2 pairs &middot; or turn on <strong>Enhance with Adobe</strong> in Settings and drop just the raw takes</p>
           </div>
 
           <!-- File list -->

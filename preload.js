@@ -36,6 +36,16 @@ contextBridge.exposeInMainWorld('api', {
   qc: {
     saveReport: (fileSummaries) => ipcRenderer.invoke('qc:saveReport', fileSummaries),
   },
+  adobe: {
+    status: () => ipcRenderer.invoke('adobe:status'),
+    connect: () => ipcRenderer.invoke('adobe:connect'),
+    disconnect: () => ipcRenderer.invoke('adobe:disconnect'),
+    onConn: (cb) => {
+      const handler = (_, data) => cb(data);
+      ipcRenderer.on('adobe:conn', handler);
+      return () => ipcRenderer.removeListener('adobe:conn', handler);
+    },
+  },
   pipeline: {
     start: (files) => ipcRenderer.invoke('pipeline:start', files),
     cancel: () => ipcRenderer.invoke('pipeline:cancel'),

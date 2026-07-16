@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# Fetches the arm64-native binaries that AudioPro bundles (ffmpeg, ffprobe,
-# deep-filter). The bin/ directory is gitignored, so this script is what
+# Fetches the arm64-native binaries that AudioPro bundles (ffmpeg,
+# ffprobe) plus the RNNoise model used for Mode 1's conditional local
+# denoise. The bin/ directory is gitignored, so this script is what
 # populates it after a fresh clone, before `npm run build`.
 #
-# Sources:
+# Source:
 #   - ffmpeg / ffprobe 8.1 arm64 (static, only system frameworks):
 #       https://www.osxexperts.net/
-#   - deep-filter 0.5.6 arm64 (DeepFilterNet CLI):
-#       https://github.com/Rikorose/DeepFilterNet/releases
+#   - RNNoise model "somnolent-hogwash" (public domain, ~290 KB):
+#       https://github.com/GregorR/rnnoise-models
 #
 # Usage: bash scripts/fetch-bin.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/bin"
-DF_VERSION="0.5.6"
 
-# Pinned SHA256 hashes for the artefacts we trust. If osxexperts.net or the
-# DeepFilterNet release ever serve different bytes, we abort instead of
-# silently shipping a different binary inside the .app/.dmg.
+# Pinned SHA256 hashes for the artefacts we trust. If osxexperts.net ever
+# serves different bytes, we abort instead of silently shipping a different
+# binary inside the .app/.dmg.
 FFMPEG_ZIP_SHA256="ebb82529562b71170807bbc6b0e7eb4f0b13af8cbb0e085bb9e8f6fe709598ad"
 FFPROBE_ZIP_SHA256="a6640a77d38a6f0527c5b597e599cb36a3427a6931444ed80bc62542421950a1"
-DEEP_FILTER_SHA256="4601e7f4e4c03e59a4c5b5000216ef3add3e808799cfccd95e14e83ea4611081"
+RNNOISE_MODEL_SHA256="70bb6685eb0c2a1d18e2918dca3fbfbd39317010b1802eb1b6ea73a92f3fdec0"
 
 echo "▶ Populating $BIN with arm64 binaries"
 mkdir -p "$BIN"
@@ -60,15 +60,18 @@ fetch_osxexperts() {
 fetch_osxexperts ffmpeg "$FFMPEG_ZIP_SHA256"
 fetch_osxexperts ffprobe "$FFPROBE_ZIP_SHA256"
 
-# ── deep-filter (DeepFilterNet CLI, GitHub releases) ──────────────────────
-DF_URL="https://github.com/Rikorose/DeepFilterNet/releases/download/v${DF_VERSION}/deep-filter-${DF_VERSION}-aarch64-apple-darwin"
-echo "▶ Downloading deep-filter ${DF_VERSION} ($DF_URL)"
-curl -fsSL "$DF_URL" -o "$TMP/deep-filter"
-verify_sha256 "$TMP/deep-filter" "$DEEP_FILTER_SHA256"
-install -m 0755 "$TMP/deep-filter" "$BIN/deep-filter"
-xattr -d com.apple.quarantine "$BIN/deep-filter" 2>/dev/null || true
-DF_ARCH="$(file "$BIN/deep-filter" | grep -oE 'arm64|x86_64' || echo unknown)"
-echo "  ✓ deep-filter → $BIN/deep-filter ($DF_ARCH, sha256 verified)"
+# ── RNNoise model (GregorR/rnnoise-models, public domain) ─────────────────
+fetch_rnnoise_model() {
+  local dest="$BIN/rnnoise-model.rnnn"
+  local url="https://raw.githubusercontent.com/GregorR/rnnoise-models/master/somnolent-hogwash-2018-09-01/sh.rnnn"
+  echo "▶ Downloading RNNoise model ($url)"
+  curl -fsSL "$url" -o "$TMP/rnnoise-model.rnnn"
+  verify_sha256 "$TMP/rnnoise-model.rnnn" "$RNNOISE_MODEL_SHA256"
+  install -m 0644 "$TMP/rnnoise-model.rnnn" "$dest"
+  echo "  ✓ rnnoise-model.rnnn → $dest (sha256 verified)"
+}
+
+fetch_rnnoise_model
 
 echo
 echo "✓ All bundled binaries ready:"

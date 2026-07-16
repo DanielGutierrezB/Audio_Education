@@ -1,205 +1,83 @@
-# AudioPro v2 — Design Specification
+# AudioPro — Design
+
+> **Superseded by `docs/PLAN.md`.** This document describes the original
+> v0.2.0 design (fixed EQ + loudnorm only, Adobe Podcast as the only clean
+> source, no per-file adaptation). As of v0.3.0 the pipeline adds QC-driven
+> conditional processing, two entry modes, and Mode 2 fusion — see
+> `docs/PLAN.md` for the current design and implementation status. Kept here
+> for historical context on the EQ curve rationale and the ML-denoise
+> non-goal (still true for *unconditional* denoise; Mode 1 now runs RNNoise,
+> but only when a measured noise floor calls for it — see `docs/PLAN.md` §2.5).
 
 ## Vision
 
-Professional voice processing app for educational content. Takes any professor voice recording and delivers podcast-quality output — clean, equalized, leveled, no noise, no peaks, ready for any device.
+Finishing tool for course voice recordings. The voice is cleaned upstream by
+**Adobe Podcast**; AudioPro takes that clean WAV and delivers the final,
+consistent master for courses: fixed voice EQ with good presence + loudness
+normalization to −16 LUFS. Zero configuration required, advanced EQ control
+available when needed.
 
-**Principle:** "Drop files, get podcast quality." Excellent results with zero configuration. Advanced controls available when needed.
+**Principle:** "Drop files, get course-ready audio." The app must never make
+clean source material worse — which is why there is no ML denoise/enhancement
+stage (DeepFilterNet and Resemble Enhance were evaluated and removed: they
+degraded already-clean Adobe Podcast material).
 
-## Technical Stack
+## Technical stack
 
-- **UI:** Electron (HTML/CSS/JS) — 16:10 window, responsive, minimalista
-- **Backend:** Node.js main process
-- **ML Processing:** Python sidecar (bundled with PyInstaller)
-- **Audio Processing:** FFmpeg (bundled binary)
-- **Distribution:** Self-contained .dmg — zero external dependencies
+- **UI:** Electron (vanilla HTML/CSS/JS) — dark theme, Processing / EQ / About tabs
+- **Backend:** Node.js main process, IPC via contextBridge
+- **Audio processing:** bundled static FFmpeg / FFprobe (no other runtime deps)
+- **Distribution:** unsigned DMG (macOS arm64) and NSIS installer (Windows x64)
 
-## User Flow
+## User flow
 
-1. User opens app
-2. Selects one or more folders containing WAV files
-3. Clicks "Process" 
-4. App processes all files through the pipeline automatically
-5. Output appears in `Audio_Pro/` folder next to each input folder
-6. User can preview A/B (original vs processed) before/after
+1. Export clean voice WAVs from Adobe Podcast.
+2. Drop folders or files into AudioPro (or pick via dialog).
+3. Optionally open the EQ tab: the three cut bands auto-fit to the file's
+   spectrum; drag bands with real-time preview if the voice needs tweaks.
+4. Click **Process All**.
+5. Output appears in `Audio_Pro/` next to each source folder (or a custom dir).
 
-## Input/Output Specification
+## Processing pipeline (per file)
 
-- **Input:** WAV files (any quality, any sample rate)
-- **Output:** WAV 24-bit 48kHz, always
-- **Output location:** `Audio_Pro/` folder created as sibling of input folder
-- **Naming:** Same filename as input, no suffix
-- **Multiple queues:** Support adding multiple folders to process queue
+1. **Probe** — FFprobe metadata: duration, sample rate, channels.
+2. **Measure** — mono mixdown + EQ + `loudnorm` in measurement mode; parses
+   integrated LUFS, true peak, LRA, threshold from the JSON summary.
+3. **Render** — mono mixdown → resample to target rate if needed → EQ chain →
+   `loudnorm` linear mode with measured stats, targeting **−16 LUFS,
+   TP ≤ −2 dBTP**. Files already at/above −16 LUFS render with EQ only
+   ("only raise, never attenuate").
 
-## Processing Pipeline
+### Base EQ (Waves F6 voice reference)
 
-### Step 1: Analysis (~2 seconds)
-- FFprobe: detect format, sample rate, bit depth, channels, duration
-- Pitch tracking: detect voice fundamental frequency range → auto-select EQ curve
-- LUFS measurement: measure current loudness level
-- Output: metadata object passed to subsequent steps
+| Band | Freq | Q | Gain |
+|------|------|---|------|
+| HPF | 80 Hz | — | 12 dB/oct |
+| Mud cut | 150 Hz | 2.0 | −3 dB |
+| Box cut | 280 Hz | 2.5 | −3 dB |
+| Honk cut | 500 Hz | 2.0 | −4 dB |
+| Presence | 3.6 kHz | 1.0 | +1 dB |
+| Air shelf | 10 kHz | shelf | +1.5 dB |
+| De-esser (opt-in) | 6.5 kHz | 3.25 | −2 dB |
 
-### Step 2: Denoising — DeepFilterNet v3 (~30-60s per 20min)
-- Full-band noise suppression at 48kHz
-- Removes: background noise, fans, AC, street noise, hum
-- Rust native binary, ARM64 optimized — runs on CPU, very fast
-- Preserves voice character while removing noise floor
+The EQ editor auto-fits the three cut bands to the local spectral peak of the
+selected file (16384-point Hann FFT, ±1/3 octave search) so cuts land on each
+voice's actual resonances. Manual edits auto-save and override the base curve
+wholesale.
 
-### Step 3: Speech Enhancement — Resemble Enhance (~3-5min per 20min)  
-- AI-powered speech quality restoration
-- Denoiser module: catches remaining noise DeepFilterNet missed
-- Enhancer module: restores audio quality, extends bandwidth, improves clarity
-- Removes: residual reverb, mic distortion, compression artifacts
-- Runs on GPU via PyTorch MPS (Apple Silicon)
-- This is the "Adobe Podcast-like" step — the magic
+## Settings (electron-store)
 
-### Step 4: EQ + Filters — FFmpeg (~5 seconds)
-- **High Pass Filter:** 80Hz, 12dB/oct (remove rumble)
-- **Adaptive EQ:** Based on detected pitch range
-  - Auto-selects optimal curve for the voice type
-  - No manual "male/female" selection needed
-  - Override available: manual 8-band parametric EQ
-- **De-esser:** Dynamic attenuation of sibilants (4-8kHz range)
-- **De-plosive:** Attenuate plosive transients (< 120Hz)
+- `hpfFrequency` (default 80)
+- `deEsserEnabled` (default false)
+- `outputFormat`: wav24 (default) | wav16 | flac
+- `sampleRate`: 48000 (default) | 44100
+- `manualEqChain` / `manualEqApply` (managed by the EQ editor)
+- `customOutputDir` ('' = sibling `Audio_Pro/`)
+- `showNotifications` (default true)
 
-### Step 5: Dynamics — FFmpeg (~5 seconds)
-- **Compressor:** Control dynamic range (ratio ~3:1, threshold ~-20dB)
-- **Limiter:** Ceiling at -1dB (prevent clipping)
-- **Loudness normalization:** Target -16 LUFS (podcast/streaming standard)
-- Result: consistent volume, no peaks, comfortable listening on any device
+## Non-goals
 
-### Step 6: Output
-- Convert to WAV 24-bit 48kHz
-- Save to `Audio_Pro/` with same filename
-- Log processing report (optional)
-
-## Architecture
-
-```
-┌─────────────────────────────────────┐
-│         Electron App (UI)           │
-│  HTML/CSS/JS                        │
-│  - Folder selector / file queue     │
-│  - Processing progress per file     │
-│  - A/B Preview player               │
-│  - EQ override (8-band parametric)  │
-│  - Settings & presets               │
-│  - "About" tab with pipeline info   │
-│  - Tooltips/hovers on everything    │
-└──────────────┬──────────────────────┘
-               │ IPC (contextBridge)
-┌──────────────▼──────────────────────┐
-│       Node.js Main Process          │
-│  - Pipeline orchestration           │
-│  - FFmpeg/FFprobe subprocess calls  │
-│  - Python sidecar management        │
-│  - File I/O & queue management      │
-│  - electron-store (preferences)     │
-└──────────┬────────┬─────────────────┘
-           │        │
-    FFmpeg  │        │  HTTP localhost
-   (binary) │        │
-           │  ┌─────▼─────────────────┐
-           │  │  Python Sidecar       │
-           │  │  (FastAPI, bundled)    │
-           │  │  - DeepFilterNet      │
-           │  │  - Resemble Enhance   │
-           │  │  - Pitch detection    │
-           │  │  - GPU accel (MPS)    │
-           │  └───────────────────────┘
-           │
-    ┌──────▼──────┐
-    │   FFmpeg    │
-    │  (bundled)  │
-    │  EQ/Dyn/Out │
-    └─────────────┘
-```
-
-## Bundled Dependencies (all inside .app)
-
-| Component | Size | Purpose |
-|-----------|------|---------|
-| Electron | ~150MB | App shell |
-| FFmpeg binary (arm64) | ~80MB | Audio processing |
-| Python runtime (3.9) | ~30MB | ML inference |
-| DeepFilterNet model | ~5MB | Denoising |
-| Resemble Enhance models | ~500MB | Speech enhancement |
-| PyTorch (MPS) | ~200MB | ML framework |
-| **Total estimated** | **~1GB** | |
-
-## UI Design
-
-### Window
-- 16:10 aspect ratio, default ~960×600
-- Responsive: min 720×450, resizable
-- macOS: vibrancy, hiddenInset titlebar
-- Dark theme, clean typography
-
-### Layout (two main views)
-
-**View 1: Processing (default)**
-```
-┌──────────────────────────────────────────┐
-│  [📁 Add Folders]  [▶ Process All]       │
-│──────────────────────────────────────────│
-│  Queue:                                   │
-│  ┌──────────────────────────────────┐    │
-│  │ 📂 /path/to/Curso_React/         │    │
-│  │    clase_01.wav  ✅ Done (4:32)   │    │
-│  │    clase_02.wav  🔄 Processing... │    │
-│  │    clase_03.wav  ⏳ Queued        │    │
-│  │                                    │    │
-│  │ 📂 /path/to/Curso_Python/         │    │
-│  │    intro.wav     ⏳ Queued        │    │
-│  └──────────────────────────────────┘    │
-│──────────────────────────────────────────│
-│  Current: clase_02.wav                    │
-│  [████████░░░░░░░░] 52% — Enhancement    │
-│  Step 3/5 · ETA: 2:15                    │
-└──────────────────────────────────────────┘
-```
-
-**View 2: Preview & EQ (per-file, optional)**
-```
-┌──────────────────────────────────────────┐
-│  clase_01.wav                             │
-│  ┌─────────────┐  ┌─────────────┐       │
-│  │ ▶ Original  │  │ ▶ Processed │       │
-│  │  [waveform]  │  │  [waveform]  │       │
-│  └─────────────┘  └─────────────┘       │
-│──────────────────────────────────────────│
-│  EQ Override (optional):                  │
-│  [curve visualization]                    │
-│  60Hz  150  400  1k  2.5k  6k  12k  16k │
-│  Presets: [Auto] [Save Custom]           │
-└──────────────────────────────────────────┘
-```
-
-**View 3: About / Pipeline Info**
-- Explains what each step does
-- Shows which models are being used
-- Version info
-
-### Interactions
-- Tooltips on every control explaining what it does
-- Drag & drop folders onto the app
-- Progress shows current step name + ETA
-- Notification when batch completes
-
-## Settings (persisted via electron-store)
-
-- `processingMode`: "quality" (default) | "fast" (skip Resemble Enhance)
-- `lufsTarget`: -16 (default)
-- `hpfFrequency`: 80 (default)
-- `deEsserEnabled`: true (default)
-- `parallelFiles`: 1 (default, adjustable based on hardware)
-- `customEqPresets`: [] (user-saved presets)
-- `showNotifications`: true
-
-## Future Considerations (not in v1)
-
-- Custom fine-tuned model trained on Platzi data
-- Auphonic API integration as "cloud enhanced" option
-- Batch scheduling / watch folders
-- Export to MP3/AAC
-- Per-professor EQ profiles
+- ML denoise / speech regeneration — handled upstream by Adobe Podcast.
+- Python runtime — removed with the ML stages; FFmpeg covers everything.
+- Per-file "smart" auto-adaptation beyond the EQ spectrum auto-fit — a fixed,
+  predictable chain is preferred so all classes in a course sound identical.

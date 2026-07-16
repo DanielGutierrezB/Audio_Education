@@ -27,8 +27,14 @@ contextBridge.exposeInMainWorld('api', {
   ffprobe: {
     getMetadata: (filePath) => ipcRenderer.invoke('ffprobe:metadata', filePath),
   },
-  audio: {
-    peaks: (filePath, numPeaks) => ipcRenderer.invoke('audio:peaks', filePath, numPeaks),
+  spectrogram: {
+    generate: (filePath) => ipcRenderer.invoke('spectrogram:generate', filePath),
+  },
+  fusion: {
+    preview: (originalPath, pairPath) => ipcRenderer.invoke('fusion:preview', originalPath, pairPath),
+  },
+  qc: {
+    saveReport: (fileSummaries) => ipcRenderer.invoke('qc:saveReport', fileSummaries),
   },
   pipeline: {
     start: (files) => ipcRenderer.invoke('pipeline:start', files),
@@ -38,5 +44,11 @@ contextBridge.exposeInMainWorld('api', {
       ipcRenderer.on('pipeline:event', handler);
       return () => ipcRenderer.removeListener('pipeline:event', handler);
     },
+  },
+  update: {
+    getVersion: () => ipcRenderer.invoke('app:getVersion'),
+    check: () => ipcRenderer.invoke('update:check'),
+    apply: () => ipcRenderer.invoke('update:apply'),
+    relaunch: () => ipcRenderer.invoke('update:relaunch'),
   },
 });

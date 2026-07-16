@@ -1,0 +1,79 @@
+name: Build Windows Installer
+
+# Tag pushes (v0.3.0, v0.3.1, ...) build the NSIS x64 installer and attach
+# it to the same GitHub Release as the macOS DMG (build-macos-dmg.yml runs
+# in parallel on the same tag — see the release step below for how the two
+# avoid clobbering each other). Manual runs (workflow_dispatch) build and
+# upload the installer as a workflow artifact only, for testing the
+# packaging step without cutting a release.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fetch bundled ffmpeg/ffprobe/RNNoise model (x64, SHA256-verified)
+        run: npm run setup:bin:win
+
+      - name: Build Windows x64 installer
+        run: npm run build:win
+
+      - name: Locate installer
+        id: installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe_path="$(find dist -maxdepth 1 -name '*.exe' -print -quit)"
+          if [ -z "$exe_path" ]; then
+            echo "No installer found under dist/" >&2
+            exit 1
+          fi
+          echo "path=$exe_path" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$exe_path")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload installer as workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.installer.outputs.name }}
+          path: ${{ steps.installer.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release with the installer attached
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          notes="Unsigned Windows build (x64) — SmartScreen will warn on first run (see README § Known limitations)."
+          # build-macos-dmg.yml publishes the same release from a parallel
+          # job on this tag; whichever of the two runs `release create`
+          # first wins, the other falls back to `release upload` against
+          # the now-existing release instead of racing a duplicate create.
+          if ! gh release create "$tag" "${{ steps.installer.outputs.path }}" \
+              --title "AudioPro $tag" \
+              --notes "$notes" \
+              --repo "${{ github.repository }}"; then
+            echo "release create failed (likely already exists) — uploading asset instead"
+            gh release upload "$tag" "${{ steps.installer.outputs.path }}" --clobber --repo "${{ github.repository }}"
+          fi

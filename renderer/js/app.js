@@ -1,5 +1,15 @@
 'use strict';
 
+// Mirrors AUDIO_EXTS in src/pairing.js — kept in sync manually since the
+// renderer has no direct access to Node modules across the context
+// bridge. Used only to accept/reject dropped files client-side; the main
+// process re-validates everything server-side regardless.
+const AUDIO_EXTS = ['.wav', '.mp3', '.m4a', '.aac', '.flac', '.ogg', '.aiff', '.aif'];
+function isAudioFileName(name) {
+  const lower = name.toLowerCase();
+  return AUDIO_EXTS.some(ext => lower.endsWith(ext));
+}
+
 // ── DOM refs ──
 const tabs           = document.querySelectorAll('.tab');
 const views          = document.querySelectorAll('.view');
@@ -35,7 +45,6 @@ tabs.forEach(tab => {
       v.classList.toggle('active', isTarget);
       v.hidden = !isTarget;
     });
-    if (target === 'preview') sizePreviewCanvas();
   });
 });
 
@@ -43,7 +52,6 @@ tabs.forEach(tab => {
 let prefs = {};
 async function loadPrefs() {
   if (window.api) prefs = await window.api.store.getAll();
-  applyMode(prefs.processingMode ?? 'quality');
   applySettingsUI(prefs);
 }
 
@@ -69,6 +77,15 @@ function formatAudioTime(sec) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+// Mirrors fileUrlFor in eq-editor.js — kept in sync manually since these
+// are separate plain <script> files with no shared module system. Used
+// here only for the spectrogram <img> preview.
+function fileUrlFor(p) {
+  const fwd = p.replace(/\\/g, '/');
+  const prefix = fwd.startsWith('/') ? 'file://' : 'file:///';
+  return prefix + encodeURI(fwd);
+}
+
 function formatEta(seconds) {
   if (seconds == null || isNaN(seconds) || seconds < 0) return '—';
   const m = Math.floor(seconds / 60);
@@ -80,33 +97,6 @@ function statusIcon(status) {
   const map = { queued: '⏳', processing: '🔄', done: '✅', error: '❌' };
   return map[status] ?? '⏳';
 }
-
-// ── Mode toggle ──
-const modeQuality = document.getElementById('mode-quality');
-const modeFast    = document.getElementById('mode-fast');
-const modeAuto    = document.getElementById('mode-auto');
-
-function applyMode(mode) {
-  modeQuality.classList.toggle('active', mode === 'quality');
-  modeFast.classList.toggle('active', mode === 'fast');
-  modeAuto.classList.toggle('active', mode === 'auto');
-}
-
-modeQuality.addEventListener('click', () => {
-  applyMode('quality');
-  if (window.api) window.api.store.set('processingMode', 'quality');
-  updateQueueSummary();
-});
-modeFast.addEventListener('click', () => {
-  applyMode('fast');
-  if (window.api) window.api.store.set('processingMode', 'fast');
-  updateQueueSummary();
-});
-modeAuto.addEventListener('click', () => {
-  applyMode('auto');
-  if (window.api) window.api.store.set('processingMode', 'auto');
-  updateQueueSummary();
-});
 
 // ── Queue management ──
 async function addFoldersViaDialog() {
@@ -237,6 +227,9 @@ function removeCompleted() {
 
 // ── Render queue ──
 function renderQueue() {
+  // Single source of truth for the EQ editor's file dropdown: every time
+  // the queue is rendered (add/remove/reset), notify the editor.
+  notifyQueueChanged();
   const hasFiles = queue.size > 0;
   queueEmpty.hidden = hasFiles;
   queueList.hidden = !hasFiles;
@@ -283,10 +276,9 @@ function updateQueueSummary() {
     ? `${(totalBytes / (1024 * 1024)).toFixed(1)} MB`
     : `${Math.round(totalBytes / 1024)} KB`;
 
-  // Rough estimate: quality ≈ 0.75× realtime, fast ≈ 0.12× realtime
-  const mode = modeQuality.classList.contains('active') ? 'quality' : 'fast';
-  const mul = mode === 'quality' ? 0.75 : 0.12;
-  const estSec = totalDuration > 0 ? Math.round(totalDuration * mul) : null;
+  // Rough estimate: analyze + measure + render (+ fusion for Mode 2 pairs)
+  // ≈ 0.18× realtime across 3-5 FFmpeg passes per file.
+  const estSec = totalDuration > 0 ? Math.round(totalDuration * 0.18) : null;
   const estStr = estSec != null ? ` · ~${formatEta(estSec)} est.` : '';
 
   const selStr = selCount > 0 ? `${selCount} of ${totalFiles} selected · ` : `${totalFiles} file${totalFiles !== 1 ? 's' : ''} · `;
@@ -346,10 +338,36 @@ function buildFolderGroup(folderPath, group) {
   return wrap;
 }
 
+// Mode badge reflects `file.resolvedMode` once known (set from the 'qc'
+// or 'file:done' pipeline events) and falls back to "pending pair"
+// styling when a `pairPath` was auto-detected but processing hasn't
+// started yet — see docs/PLAN.md §2.1 for the detection rules.
+function buildModeBadge(file) {
+  if (!file.pairPath && file.resolvedMode !== 2) return null;
+  const badge = document.createElement('span');
+  if (file.resolvedMode === 2) {
+    badge.className = 'file-mode-badge mode-2';
+    badge.textContent = 'Mode 2 · fused';
+    badge.title = `Fused with ${file.pairPath ? file.pairPath.split('/').pop() : 'Adobe Enhance'}`;
+  } else if (file.resolvedMode === 1 && file.pairPath) {
+    badge.className = 'file-mode-badge mode-fallback';
+    badge.textContent = 'Mode 1 · pair mismatch';
+    badge.title = 'Original and Enhanced/ duration mismatch — processed as Mode 1 on the original';
+  } else {
+    badge.className = 'file-mode-badge mode-pending';
+    badge.textContent = 'Pair detected';
+    badge.title = `Will fuse with ${file.pairPath.split('/').pop()} on Process All`;
+  }
+  return badge;
+}
+
 function buildFileItem(file) {
   const item = document.createElement('div');
   item.className = 'file-item' + (selectedFiles.has(file.path) ? ' selected' : '');
   item.dataset.filePath = file.path;
+
+  const main = document.createElement('div');
+  main.className = 'file-item-main';
 
   const cb = document.createElement('input');
   cb.type = 'checkbox';
@@ -387,18 +405,15 @@ function buildFileItem(file) {
   removeBtn.textContent = '✕';
   removeBtn.addEventListener('click', (e) => { e.stopPropagation(); removeFile(file.path); });
 
-  item.append(cb, statusEl, name, dur, size, removeBtn);
+  const badge = buildModeBadge(file);
+  main.append(cb, statusEl, name, ...(badge ? [badge] : []), dur, size, removeBtn);
+  item.appendChild(main);
 
-  // Click to select for preview (if done)
-  item.addEventListener('click', () => {
-    if (file.status === 'done' && completedFiles.has(file.path)) {
-      const outputPath = completedFiles.get(file.path);
-      // Switch to preview tab and load file
-      const previewTab = document.querySelector('[data-tab="preview"]');
-      if (previewTab) previewTab.click();
-      selectPreviewFile(file.path);
-    }
-  });
+  const flags = document.createElement('div');
+  flags.className = 'file-flags';
+  flags.hidden = true;
+  if (file.qcFlags?.length) renderFlagChips(flags, file.qcFlags);
+  item.appendChild(flags);
 
   // Right-click context menu
   item.addEventListener('contextmenu', (e) => {
@@ -407,6 +422,31 @@ function buildFileItem(file) {
   });
 
   return item;
+}
+
+// QC flag codes worth calling out with a "needs attention" color; the
+// rest render as neutral info chips. Mirrors the artefact catalogue in
+// docs/PLAN.md §1.4.
+const FLAG_SEVERITY = {
+  CLIP: 'warn', HUM: 'warn', SIBILANT: 'warn', NOISY: 'warn', DC_OFFSET: 'warn',
+};
+
+function renderFlagChips(container, flags) {
+  container.innerHTML = '';
+  if (!flags.length) {
+    const ok = document.createElement('span');
+    ok.className = 'flag-chip flag-ok';
+    ok.textContent = 'clean — no flags';
+    container.appendChild(ok);
+    return;
+  }
+  for (const f of flags) {
+    const chip = document.createElement('span');
+    chip.className = `flag-chip flag-${FLAG_SEVERITY[f.code] ?? 'info'}`;
+    chip.textContent = f.code;
+    if (f.detail) chip.title = f.detail;
+    container.appendChild(chip);
+  }
 }
 
 function patchFileDuration(file) {
@@ -422,6 +462,63 @@ function patchFileStatus(filePath, status) {
     icon.textContent = statusIcon(status);
     icon.title = status;
   }
+}
+
+// Re-renders a single file-item's mode badge in place once the pipeline
+// resolves whether a detected pair actually fused (or fell back to
+// Mode 1 on a duration mismatch — see pipeline.js's pairing check).
+function patchFileMode(filePath, mode, findFile) {
+  const file = findFile(filePath);
+  if (file) file.resolvedMode = mode;
+  const el = queueList.querySelector(`.file-item[data-file-path="${CSS.escape(filePath)}"]`);
+  if (!el || !file) return;
+  const main = el.querySelector('.file-item-main');
+  const existing = main.querySelector('.file-mode-badge');
+  const badge = buildModeBadge(file);
+  if (existing) existing.replaceWith(...(badge ? [badge] : []));
+  else if (badge) main.insertBefore(badge, main.querySelector('.file-duration'));
+}
+
+function patchFileFlags(filePath, flags, findFile) {
+  const file = findFile(filePath);
+  if (file) file.qcFlags = flags;
+  const el = queueList.querySelector(`.file-item[data-file-path="${CSS.escape(filePath)}"]`);
+  if (!el) return;
+  const container = el.querySelector('.file-flags');
+  renderFlagChips(container, flags);
+  container.hidden = false;
+}
+
+// Appends (rather than replaces) the post-render loudness check emitted
+// with 'file:done' — arrives after the QC flag chips from the earlier
+// 'qc' event, so it always renders as a trailing chip. See docs/PLAN.md
+// §4 Fase 2 acceptance: "el informe QC de salida aparece en la UI".
+function patchFileVerify(filePath, verify, findFile) {
+  if (!verify) return;
+  const file = findFile(filePath);
+  if (file) file.verify = verify;
+  const el = queueList.querySelector(`.file-item[data-file-path="${CSS.escape(filePath)}"]`);
+  if (!el) return;
+  const container = el.querySelector('.file-flags');
+  container.hidden = false;
+  let chip = container.querySelector('.flag-chip-verify');
+  if (!chip) {
+    chip = document.createElement('span');
+    chip.className = 'flag-chip-verify';
+    container.appendChild(chip);
+  }
+  const ok = verify.badge === 'ok';
+  chip.className = `flag-chip flag-chip-verify flag-${ok ? 'ok' : 'warn'}`;
+  chip.textContent = verify.i != null ? `${ok ? '✓' : '⚠'} out ${verify.i.toFixed(1)} LUFS` : 'verify: n/a';
+  chip.title = verify.tp != null ? `True peak: ${verify.tp.toFixed(1)} dBFS` : 'Loudness re-measure unavailable';
+}
+
+function findQueuedFile(filePath) {
+  for (const [, group] of queue) {
+    const f = group.files.find(f => f.path === filePath);
+    if (f) return f;
+  }
+  return null;
 }
 
 // ── Context menu ──
@@ -459,6 +556,83 @@ ctxMenu.addEventListener('click', async (e) => {
   else if (action === 'move-down') moveFile(fp, 1);
   else if (action === 'open-finder') {
     if (window.api) window.api.shell.openPath(fp);
+  } else if (action === 'spectrogram') {
+    showSpectrogram(fp);
+  }
+});
+
+// ── Spectrogram viewer (Fase 8c) ──
+const spectrogramModal   = document.getElementById('spectrogram-modal');
+const spectrogramTitle   = document.getElementById('spectrogram-title');
+const spectrogramLoading = document.getElementById('spectrogram-loading');
+const spectrogramImage   = document.getElementById('spectrogram-image');
+const spectrogramClose   = document.getElementById('spectrogram-close');
+
+async function showSpectrogram(filePath) {
+  if (!window.api?.spectrogram) return;
+  const name = filePath.split('/').pop();
+  spectrogramTitle.textContent = `Spectrogram \u2014 ${name}`;
+  spectrogramImage.hidden = true;
+  spectrogramImage.src = '';
+  spectrogramLoading.hidden = false;
+  spectrogramLoading.textContent = 'Rendering spectrogram\u2026';
+  spectrogramModal.hidden = false;
+
+  const res = await window.api.spectrogram.generate(filePath);
+  // The modal may have been closed (or re-opened for a different file)
+  // while the render was in flight — don't clobber whatever's showing now.
+  if (spectrogramModal.hidden || spectrogramTitle.textContent !== `Spectrogram \u2014 ${name}`) return;
+  if (res?.path) {
+    spectrogramImage.src = fileUrlFor(res.path);
+    spectrogramImage.hidden = false;
+    spectrogramLoading.hidden = true;
+  } else {
+    spectrogramLoading.textContent = `Failed to render spectrogram: ${res?.error ?? 'unknown error'}`;
+  }
+}
+
+function hideSpectrogram() {
+  spectrogramModal.hidden = true;
+  spectrogramImage.src = '';
+}
+
+spectrogramClose.addEventListener('click', hideSpectrogram);
+spectrogramModal.addEventListener('click', (e) => { if (e.target === spectrogramModal) hideSpectrogram(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !spectrogramModal.hidden) hideSpectrogram(); });
+
+// ── QC report export (Fase 8d) ──
+const btnQcReport = document.getElementById('btn-qc-report');
+
+function collectFileSummaries() {
+  const out = [];
+  for (const group of queue.values()) {
+    for (const f of group.files) {
+      out.push({
+        name: f.name,
+        status: f.status,
+        duration: f.duration ?? null,
+        resolvedMode: f.resolvedMode ?? null,
+        pairPath: f.pairPath ?? null,
+        qcFlags: f.qcFlags ?? [],
+        verify: f.verify ?? null,
+        outputPath: completedFiles.get(f.path) ?? null,
+        errorMsg: f.errorMsg ?? null,
+      });
+    }
+  }
+  return out;
+}
+
+btnQcReport.addEventListener('click', async () => {
+  if (!window.api?.qc) return;
+  const summaries = collectFileSummaries();
+  if (!summaries.length) return;
+  const res = await window.api.qc.saveReport(summaries);
+  if (res?.path) {
+    btnQcReport.textContent = '\u2713';
+    setTimeout(() => { btnQcReport.textContent = '\uD83D\uDCC4'; }, 1500);
+  } else if (res?.error) {
+    console.error('Failed to save QC report:', res.error);
   }
 });
 
@@ -482,7 +656,7 @@ queueContainer.addEventListener('drop', async e => {
   if (!window.api) return;
 
   const folderPaths = [];
-  const wavFileInfos = [];
+  const audioFileInfos = [];
 
   for (const item of e.dataTransfer.items) {
     if (item.kind !== 'file') continue;
@@ -491,13 +665,13 @@ queueContainer.addEventListener('drop', async e => {
     const entry = item.webkitGetAsEntry();
     if (entry?.isDirectory) {
       folderPaths.push(file.path);
-    } else if (file.name.toLowerCase().endsWith('.wav')) {
-      wavFileInfos.push({ path: file.path, name: file.name, size: file.size });
+    } else if (isAudioFileName(file.name)) {
+      audioFileInfos.push({ path: file.path, name: file.name, size: file.size });
     }
   }
 
   if (folderPaths.length) await processFolderPaths(folderPaths);
-  if (wavFileInfos.length) addIndividualFiles(wavFileInfos);
+  if (audioFileInfos.length) addIndividualFiles(audioFileInfos);
 });
 
 // ── Progress bar ──
@@ -533,7 +707,9 @@ function startProcessing() {
   const files = [];
   for (const [, group] of queue) {
     for (const file of group.files) {
-      if (file.status !== 'done') files.push({ path: file.path, duration: file.duration });
+      if (file.status !== 'done') {
+        files.push({ path: file.path, duration: file.duration, ...(file.pairPath ? { pairPath: file.pairPath } : {}) });
+      }
     }
   }
   if (!files.length) { processing = false; return; }
@@ -543,8 +719,9 @@ function startProcessing() {
   btnAddFolders.disabled = true;
   btnAddFiles.disabled = true;
 
+  const firstStepTotal = (files[0].pairPath && prefs.fusionEnabled !== false) ? 5 : 4;
   progressSection.hidden = false;
-  setProgress(0, 'Starting…', 1, 6, files[0].path.split('/').pop(), null);
+  setProgress(0, 'Starting…', 1, firstStepTotal, files[0].path.split('/').pop(), null);
 
   unsubPipeline = window.api.pipeline.onEvent(handlePipelineEvent);
 
@@ -589,15 +766,22 @@ function handlePipelineEvent(event) {
       setProgress(event.pct, event.step, event.stepIndex, event.stepTotal, filename, event.eta);
       break;
 
+    case 'qc':
+      patchFileMode(event.file, event.mode, findQueuedFile);
+      patchFileFlags(event.file, event.flags, findQueuedFile);
+      break;
+
     case 'file:done':
       patchFileStatus(event.file, 'done');
+      patchFileMode(event.file, event.mode, findQueuedFile);
+      patchFileVerify(event.file, event.verify, findQueuedFile);
       for (const [, group] of queue) {
         const f = group.files.find(f => f.path === event.file);
         if (f) f.status = 'done';
       }
       completedFiles.set(event.file, event.outputPath);
       updateDoneBadge();
-      addToPreviewSelector(event.file, event.outputPath);
+      notifyQueueChanged();
       btnRemoveDone.hidden = false;
       break;
 
@@ -608,10 +792,6 @@ function handlePipelineEvent(event) {
         if (f) { f.status = 'error'; f.errorMsg = event.error; }
       }
       window.api?.log.push('renderer', `File error displayed: ${filename}`, event.error);
-      break;
-
-    case 'analysis':
-      // Analysis complete — pipeline step text already reflects individual status updates
       break;
 
     case 'batch:done':
@@ -630,19 +810,26 @@ function handlePipelineEvent(event) {
 const btnSettings   = document.getElementById('btn-settings');
 const settingsPanel = document.getElementById('settings-panel');
 
-const setLufs          = document.getElementById('set-lufs');
 const setHpf           = document.getElementById('set-hpf');
 const setDeEsser       = document.getElementById('set-deesser');
-const setNoiseGate     = document.getElementById('set-noisegate');
-const setSilenceTrim   = document.getElementById('set-silencetrim');
-const setBreathRed     = document.getElementById('set-breathreduction');
-const setStereoMono    = document.getElementById('set-stereomono');
-const setMBC           = document.getElementById('set-mbc');
-const setAdaptiveEq    = document.getElementById('set-adaptive-eq');
 const setFormat        = document.getElementById('set-format');
 const setSampleRate    = document.getElementById('set-samplerate');
-const lufsValue        = document.getElementById('lufs-value');
 const hpfValue         = document.getElementById('hpf-value');
+
+const toolbarPreset    = document.getElementById('toolbar-preset');
+const setCompression   = document.getElementById('set-compression');
+const setDenoise       = document.getElementById('set-denoise');
+const setBody          = document.getElementById('set-body');
+const bodyValue        = document.getElementById('body-value');
+const setAirExtra      = document.getElementById('set-air-extra');
+const setTrimSilence   = document.getElementById('set-trim-silence');
+const setNormalize     = document.getElementById('set-normalize');
+const setFusionEnabled = document.getElementById('set-fusion-enabled');
+const setFusionMode    = document.getElementById('set-fusion-mode');
+const setFusionCrossover     = document.getElementById('set-fusion-crossover');
+const fusionCrossoverValue   = document.getElementById('fusion-crossover-value');
+const setFusionOriginal      = document.getElementById('set-fusion-original');
+const fusionOriginalValue    = document.getElementById('fusion-original-value');
 
 btnSettings.addEventListener('click', () => {
   const open = !settingsPanel.hidden;
@@ -651,31 +838,33 @@ btnSettings.addEventListener('click', () => {
 });
 
 function applySettingsUI(p) {
-  setLufs.value = p.lufsTarget ?? -16;
-  lufsValue.textContent = `${setLufs.value} LUFS`;
   setHpf.value = p.hpfFrequency ?? 80;
   hpfValue.textContent = `${setHpf.value} Hz`;
-  setDeEsser.checked = p.deEsserEnabled !== false;
-  setNoiseGate.checked = p.noiseGateEnabled !== false;
-  setSilenceTrim.checked = p.silenceTrimEnabled !== false;
-  setBreathRed.checked = p.breathReductionEnabled === true;
-  setStereoMono.checked = p.stereoToMonoEnabled !== false;
-  setMBC.checked = p.multiBandCompEnabled !== false;
-  setAdaptiveEq.checked = p.adaptiveEqEnabled === true;
+  setDeEsser.checked = p.deEsserEnabled === true;
   setFormat.value = p.outputFormat ?? 'wav24';
   setSampleRate.value = String(p.sampleRate ?? 48000);
   applyOutputDirUI(p.customOutputDir || '');
+
+  toolbarPreset.value = p.platformPreset ?? 'platzi';
+  setCompression.value = p.compressionMode ?? 'auto';
+  setDenoise.value = p.denoiseMode ?? 'auto';
+  setBody.value = p.bodyPct ?? 0;
+  bodyValue.textContent = `${setBody.value}%`;
+  setAirExtra.checked = p.airExtraEnabled === true;
+  setTrimSilence.checked = p.trimSilence !== false;
+  setNormalize.value = p.normalizeMode ?? 'both';
+  setFusionEnabled.checked = p.fusionEnabled !== false;
+  setFusionMode.value = p.fusionMode ?? 'bands';
+  setFusionCrossover.value = p.fusionCrossoverHz ?? 200;
+  fusionCrossoverValue.textContent = `${setFusionCrossover.value} Hz`;
+  setFusionOriginal.value = p.fusionOriginalPct ?? 20;
+  fusionOriginalValue.textContent = `${setFusionOriginal.value}%`;
 }
 
 function savePref(key, value) {
+  prefs[key] = value;
   if (window.api) window.api.store.set(key, value);
 }
-
-setLufs.addEventListener('input', () => {
-  const v = parseInt(setLufs.value);
-  lufsValue.textContent = `${v} LUFS`;
-  savePref('lufsTarget', v);
-});
 
 setHpf.addEventListener('input', () => {
   const v = parseInt(setHpf.value);
@@ -684,14 +873,32 @@ setHpf.addEventListener('input', () => {
 });
 
 setDeEsser.addEventListener('change', () => savePref('deEsserEnabled', setDeEsser.checked));
-setNoiseGate.addEventListener('change', () => savePref('noiseGateEnabled', setNoiseGate.checked));
-setSilenceTrim.addEventListener('change', () => savePref('silenceTrimEnabled', setSilenceTrim.checked));
-setBreathRed.addEventListener('change', () => savePref('breathReductionEnabled', setBreathRed.checked));
-setStereoMono.addEventListener('change', () => savePref('stereoToMonoEnabled', setStereoMono.checked));
-setMBC.addEventListener('change', () => savePref('multiBandCompEnabled', setMBC.checked));
-setAdaptiveEq.addEventListener('change', () => savePref('adaptiveEqEnabled', setAdaptiveEq.checked));
 setFormat.addEventListener('change', () => savePref('outputFormat', setFormat.value));
 setSampleRate.addEventListener('change', () => savePref('sampleRate', parseInt(setSampleRate.value)));
+
+toolbarPreset.addEventListener('change', () => savePref('platformPreset', toolbarPreset.value));
+setCompression.addEventListener('change', () => savePref('compressionMode', setCompression.value));
+setDenoise.addEventListener('change', () => savePref('denoiseMode', setDenoise.value));
+setBody.addEventListener('input', () => {
+  const v = parseInt(setBody.value);
+  bodyValue.textContent = `${v}%`;
+  savePref('bodyPct', v);
+});
+setAirExtra.addEventListener('change', () => savePref('airExtraEnabled', setAirExtra.checked));
+setTrimSilence.addEventListener('change', () => savePref('trimSilence', setTrimSilence.checked));
+setNormalize.addEventListener('change', () => savePref('normalizeMode', setNormalize.value));
+setFusionEnabled.addEventListener('change', () => savePref('fusionEnabled', setFusionEnabled.checked));
+setFusionMode.addEventListener('change', () => savePref('fusionMode', setFusionMode.value));
+setFusionCrossover.addEventListener('input', () => {
+  const v = parseInt(setFusionCrossover.value);
+  fusionCrossoverValue.textContent = `${v} Hz`;
+  savePref('fusionCrossoverHz', v);
+});
+setFusionOriginal.addEventListener('input', () => {
+  const v = parseInt(setFusionOriginal.value);
+  fusionOriginalValue.textContent = `${v}%`;
+  savePref('fusionOriginalPct', v);
+});
 
 // ── Event listeners — toolbar / empty state ──
 btnAddFolders.addEventListener('click', addFoldersViaDialog);
@@ -760,412 +967,111 @@ btnProcessAll.addEventListener('click', () => {
   else startProcessing();
 });
 
-// ── Preview ──
-const previewFileList = document.getElementById('preview-file-list');
-const previewListEmpty = document.getElementById('preview-list-empty');
-const previewTopbar   = document.getElementById('preview-topbar');
-const audioPlayer    = document.getElementById('audio-player');
-const abOriginal     = document.getElementById('ab-original');
-const abProcessed    = document.getElementById('ab-processed');
-const btnPlayMain    = document.getElementById('btn-play-main');
-const btnStopMain    = document.getElementById('btn-stop-main');
-const btnSkipBack    = document.getElementById('btn-skip-back');
-const btnSkipFwd     = document.getElementById('btn-skip-fwd');
-const currentTimeEl  = document.getElementById('preview-current-time');
-const totalTimeEl    = document.getElementById('preview-total-time');
-const previewCanvas  = document.getElementById('preview-waveform');
-const previewLoading = document.getElementById('preview-loading');
-const volumeSlider   = document.getElementById('preview-volume');
-
-let previewMode = 'original'; // 'original' | 'processed'
-// LRU-bounded waveform cache — avoids unbounded memory growth when processing many files
-const WAVEFORM_CACHE_MAX = 50;
-const waveformCache = new Map();
-function waveformCacheSet(key, peaks) {
-  if (waveformCache.size >= WAVEFORM_CACHE_MAX) {
-    waveformCache.delete(waveformCache.keys().next().value);
-  }
-  waveformCache.set(key, peaks);
-}
-// Stored waveform image (without playhead) for repaint
-let waveformImageData = null;
-// RAF handle
-let rafId = null;
-
-// Preview file entries: [{ filePath, outputPath, name, folder }]
-const previewFiles = [];
-
-// Expose to other renderer modules (e.g. EQ editor) so they can list
-// processed outputs alongside sources.
+// ── Queue exposed to the EQ editor ──
+// Derives from the live `queue` Map so the EQ preview can play any
+// queued source file — not only after processing finishes. The optional
+// `output` field tells the editor a processed version also exists.
 window.audioProQueue = {
   listFiles() {
-    return previewFiles.map(f => ({
-      name: f.name,
-      path: f.filePath,
-      output: f.outputPath,
-    }));
+    const out = [];
+    for (const group of queue.values()) {
+      for (const f of group.files) {
+        out.push({
+          name: f.name,
+          path: f.path,
+          pairPath: f.pairPath ?? null,
+          output: completedFiles.get(f.path),
+        });
+      }
+    }
+    return out;
   },
 };
 
-function addToPreviewSelector(filePath, outputPath) {
-  previewTopbar.hidden = false;
-  if (previewListEmpty) previewListEmpty.hidden = true;
-
-  // Check if already added
-  const existing = previewFiles.find(f => f.filePath === filePath);
-  if (existing) {
-    existing.outputPath = outputPath;
-    window.dispatchEvent(new CustomEvent('audiopro:queue-changed'));
-    return;
-  }
-
-  const name = filePath.split('/').pop();
-  const parts = filePath.split('/');
-  const folder = parts.length >= 2 ? parts[parts.length - 2] : '';
-  previewFiles.push({ filePath, outputPath, name, folder });
-
-  const item = document.createElement('div');
-  item.className = 'preview-file-item';
-  item.dataset.filePath = filePath;
-  item.dataset.outputPath = outputPath;
-  // Build DOM safely — no innerHTML with user data
-  const iconSpan = document.createElement('span');
-  iconSpan.className = 'preview-file-icon';
-  iconSpan.textContent = '✓';
-  const nameSpan = document.createElement('span');
-  nameSpan.className = 'preview-file-name';
-  nameSpan.textContent = name;
-  item.append(iconSpan, nameSpan);
-  if (folder) {
-    const folderSpan = document.createElement('span');
-    folderSpan.className = 'preview-file-folder';
-    folderSpan.textContent = folder;
-    item.appendChild(folderSpan);
-  }
-  item.addEventListener('click', () => selectPreviewItem(item));
-  previewFileList.appendChild(item);
-
-  if (previewFiles.length === 1) selectPreviewItem(item);
-
+function notifyQueueChanged() {
   window.dispatchEvent(new CustomEvent('audiopro:queue-changed'));
 }
 
-function selectPreviewItem(item) {
-  // Deselect all
-  previewFileList.querySelectorAll('.preview-file-item').forEach(el => el.classList.remove('active'));
-  item.classList.add('active');
-  loadPreviewFile(item.dataset.filePath, item.dataset.outputPath);
-}
+// ── Self-update (⟳ pill in the titlebar) ──
+// Mirrors HyperPremiere's ⟳: shows the current version, checks GitHub on
+// launch and every 30 minutes, and highlights when a newer version is on
+// the repo. Click = update + relaunch when one is available, otherwise
+// re-check + reload the window.
+const btnUpdate = document.getElementById('btn-update');
+const updateIcon = document.getElementById('update-icon');
+const versionLabel = document.getElementById('version-label');
+let updateAvailable = false;
 
-function selectPreviewFile(filePath) {
-  const item = previewFileList.querySelector(`.preview-file-item[data-file-path="${CSS.escape(filePath)}"]`);
-  if (item) selectPreviewItem(item);
-}
+const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 
-let currentPreviewOriginal = null;
-let currentPreviewOutput = null;
-let waveformLoadId = 0; // Monotonic counter to cancel stale waveform loads
+if (window.api?.update) {
+  window.api.update.getVersion().then(v => {
+    if (!v) return;
+    if (versionLabel) versionLabel.textContent = 'v' + v;
+    const aboutVersion = document.getElementById('about-version');
+    if (aboutVersion) aboutVersion.textContent = 'v' + v;
+  }).catch(() => {});
 
-async function loadPreviewFile(filePath, outputPath) {
-  cancelAnimationFrame(rafId);
-  audioPlayer.pause();
-  audioPlayer.src = '';
+  const checkForUpdate = async () => {
+    try {
+      const res = await window.api.update.check();
+      if (!res) return;
+      if (res.ok && res.changed) {
+        updateAvailable = true;
+        btnUpdate.classList.add('has-update');
+        versionLabel.textContent = `v${res.current} \u2192 v${res.remote}`;
+        btnUpdate.title = `New version v${res.remote} available on GitHub \u2014 click to update and relaunch.`;
+      } else {
+        updateAvailable = false;
+        btnUpdate.classList.remove('has-update');
+        if (res.ok && res.current) versionLabel.textContent = 'v' + res.current;
+        btnUpdate.title = res.ok
+          ? 'Up to date \u2014 click to re-check GitHub and reload'
+          : `Update check failed: ${res.error ?? 'unknown'} \u2014 click to retry`;
+      }
+    } catch { /* offline or IPC unavailable — keep the pill quiet */ }
+  };
+  checkForUpdate();
+  setInterval(checkForUpdate, UPDATE_CHECK_INTERVAL_MS);
 
-  currentPreviewOriginal = filePath;
-  currentPreviewOutput = outputPath;
-
-  currentTimeEl.textContent = '0:00';
-  totalTimeEl.textContent = '0:00';
-  btnPlayMain.textContent = '▶';
-
-  const src = previewMode === 'original' ? filePath : outputPath;
-  audioPlayer.src = `file://${src}`;
-  audioPlayer.load();
-
-  await loadWaveform(src);
-}
-
-async function switchAB(mode) {
-  if (mode === previewMode) return;
-
-  const wasPlaying = !audioPlayer.paused;
-  const savedTime = audioPlayer.currentTime;
-
-  audioPlayer.pause();
-  cancelAnimationFrame(rafId);
-
-  previewMode = mode;
-  abOriginal.classList.toggle('active', mode === 'original');
-  abProcessed.classList.toggle('active', mode === 'processed');
-
-  const filePath   = currentPreviewOriginal;
-  const outputPath = currentPreviewOutput;
-  if (!filePath) return;
-
-  const src = mode === 'original' ? filePath : outputPath;
-  audioPlayer.src = `file://${src}`;
-  audioPlayer.load();
-
-  // Load waveform and wait for metadata in parallel
-  await Promise.all([
-    loadWaveform(src),
-    new Promise(resolve => {
-      if (audioPlayer.readyState >= 1) return resolve();
-      audioPlayer.addEventListener('loadedmetadata', resolve, { once: true });
-    }),
-  ]);
-
-  if (isFinite(audioPlayer.duration)) {
-    audioPlayer.currentTime = Math.min(savedTime, audioPlayer.duration);
-  }
-  drawPlayheadAt(audioPlayer.currentTime);
-  if (wasPlaying) audioPlayer.play().catch(() => {});
-}
-
-abOriginal.addEventListener('click', () => switchAB('original'));
-abProcessed.addEventListener('click', () => switchAB('processed'));
-
-// ── Waveform ──
-function sizePreviewCanvas() {
-  const wrap = previewCanvas.parentElement;
-  const dpr = window.devicePixelRatio || 1;
-  const w = wrap.clientWidth || 600;
-  const h = wrap.clientHeight || 160;
-  previewCanvas.width = Math.round(w * dpr);
-  previewCanvas.height = Math.round(h * dpr);
-  previewCanvas.style.width = w + 'px';
-  previewCanvas.style.height = h + 'px';
-}
-
-async function loadWaveform(filePath) {
-  const loadId = ++waveformLoadId; // Cancel any in-flight load
-  previewLoading.hidden = false;
-  previewCanvas.style.opacity = '0';
-  waveformImageData = null;
-
-  sizePreviewCanvas();
-  let numPeaks = previewCanvas.width;
-  // Canvas may be 0-width if the view isn't visible yet — retry after a frame
-  if (numPeaks < 10) {
-    await new Promise(r => requestAnimationFrame(r));
-    if (loadId !== waveformLoadId) return; // Cancelled
-    sizePreviewCanvas();
-    numPeaks = previewCanvas.width;
-  }
-  if (numPeaks < 10) numPeaks = 800; // fallback
-
-  let peaks = waveformCache.get(filePath);
-  if (!peaks && window.api) {
-    peaks = await window.api.audio.peaks(filePath, numPeaks);
-    if (loadId !== waveformLoadId) return; // Cancelled — user switched files
-    if (peaks) waveformCacheSet(filePath, peaks);
-  }
-
-  previewLoading.hidden = true;
-  previewCanvas.style.opacity = '1';
-
-  if (peaks) {
-    drawWaveform(peaks);
-    drawPlayheadAt(audioPlayer.currentTime);
-  }
-}
-
-function drawWaveform(peaks) {
-  const ctx = previewCanvas.getContext('2d');
-  const W = previewCanvas.width;
-  const H = previewCanvas.height;
-  const mid = H / 2;
-
-  ctx.clearRect(0, 0, W, H);
-
-  // Center line
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, mid);
-  ctx.lineTo(W, mid);
-  ctx.stroke();
-
-  // Normalize peaks to fill the available height
-  // Find the max peak value and scale everything to [0, 1]
-  let peakMax = 0;
-  for (let i = 0; i < peaks.length; i++) {
-    if (peaks[i] > peakMax) peakMax = peaks[i];
-  }
-  const scale = peakMax > 0 ? 1 / peakMax : 1;
-
-  // Gradient fill
-  const grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, 'rgba(74,143,232,0.95)');
-  grad.addColorStop(0.5, 'rgba(74,143,232,0.75)');
-  grad.addColorStop(1, 'rgba(74,143,232,0.35)');
-  ctx.fillStyle = grad;
-
-  const barW = Math.max(1, W / peaks.length);
-  const step = peaks.length / W;
-
-  for (let x = 0; x < W; x++) {
-    const idx = Math.floor(x * step);
-    const v = ((peaks[idx] ?? 0) * scale) * 0.92;  // 0.92 = slight padding from edges
-    const barH = Math.max(1, v * mid * 2);
-    ctx.fillRect(x, mid - v * mid, barW, barH);
-  }
-
-  // Save image without playhead
-  waveformImageData = ctx.getImageData(0, 0, W, H);
-}
-
-function drawPlayheadAt(currentTime) {
-  if (!audioPlayer.duration || !waveformImageData) return;
-  const ctx = previewCanvas.getContext('2d');
-  ctx.putImageData(waveformImageData, 0, 0);
-  const x = (currentTime / audioPlayer.duration) * previewCanvas.width;
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(x, 0);
-  ctx.lineTo(x, previewCanvas.height);
-  ctx.stroke();
-
-  // Playhead knob
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.arc(x, previewCanvas.height / 2, 4, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function startPlayheadLoop() {
-  cancelAnimationFrame(rafId);
-  function tick() {
-    drawPlayheadAt(audioPlayer.currentTime);
-    currentTimeEl.textContent = formatAudioTime(audioPlayer.currentTime);
-    if (!audioPlayer.paused) rafId = requestAnimationFrame(tick);
-  }
-  rafId = requestAnimationFrame(tick);
-}
-
-// ── Waveform seek ──
-let isScrubbing = false;
-
-function seekFromEvent(e) {
-  if (!audioPlayer.duration) return;
-  const rect = previewCanvas.getBoundingClientRect();
-  const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
-  audioPlayer.currentTime = (x / rect.width) * audioPlayer.duration;
-  drawPlayheadAt(audioPlayer.currentTime);
-  currentTimeEl.textContent = formatAudioTime(audioPlayer.currentTime);
-}
-
-previewCanvas.addEventListener('mousedown', (e) => {
-  isScrubbing = true;
-  seekFromEvent(e);
-});
-document.addEventListener('mousemove', (e) => {
-  if (isScrubbing) seekFromEvent(e);
-});
-document.addEventListener('mouseup', () => { isScrubbing = false; });
-window.addEventListener('blur', () => { isScrubbing = false; });
-
-// ── Transport controls ──
-function togglePlayPause() {
-  if (audioPlayer.paused) {
-    audioPlayer.play().catch(() => {});
-  } else {
-    audioPlayer.pause();
-  }
-}
-
-audioPlayer.addEventListener('play', () => {
-  btnPlayMain.textContent = '⏸';
-  startPlayheadLoop();
-});
-
-audioPlayer.addEventListener('pause', () => {
-  cancelAnimationFrame(rafId);
-  btnPlayMain.textContent = '▶';
-  drawPlayheadAt(audioPlayer.currentTime);
-});
-
-audioPlayer.addEventListener('ended', () => {
-  cancelAnimationFrame(rafId);
-  btnPlayMain.textContent = '▶';
-  audioPlayer.currentTime = 0;
-  drawPlayheadAt(0);
-  currentTimeEl.textContent = '0:00';
-});
-
-audioPlayer.addEventListener('loadedmetadata', () => {
-  totalTimeEl.textContent = formatAudioTime(audioPlayer.duration);
-  currentTimeEl.textContent = '0:00';
-});
-
-audioPlayer.addEventListener('timeupdate', () => {
-  if (audioPlayer.paused) {
-    currentTimeEl.textContent = formatAudioTime(audioPlayer.currentTime);
-  }
-});
-
-btnPlayMain.addEventListener('click', togglePlayPause);
-
-btnStopMain.addEventListener('click', () => {
-  cancelAnimationFrame(rafId);
-  audioPlayer.pause();
-  audioPlayer.currentTime = 0;
-  btnPlayMain.textContent = '▶';
-  drawPlayheadAt(0);
-  currentTimeEl.textContent = '0:00';
-});
-
-btnSkipBack.addEventListener('click', () => {
-  audioPlayer.currentTime = Math.max(0, audioPlayer.currentTime - 5);
-  drawPlayheadAt(audioPlayer.currentTime);
-});
-
-btnSkipFwd.addEventListener('click', () => {
-  audioPlayer.currentTime = Math.min(audioPlayer.duration || 0, audioPlayer.currentTime + 5);
-  drawPlayheadAt(audioPlayer.currentTime);
-});
-
-volumeSlider.addEventListener('input', () => {
-  audioPlayer.volume = parseFloat(volumeSlider.value);
-});
-
-// ── Keyboard shortcuts (preview tab only) ──
-document.addEventListener('keydown', (e) => {
-  if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
-  const activeView = document.querySelector('.view.active');
-  if (!activeView || activeView.id !== 'view-preview') return;
-
-  if (e.key === ' ') {
-    e.preventDefault();
-    togglePlayPause();
-  } else if (e.key === 'ArrowLeft') {
-    e.preventDefault();
-    audioPlayer.currentTime = Math.max(0, audioPlayer.currentTime - 5);
-    drawPlayheadAt(audioPlayer.currentTime);
-  } else if (e.key === 'ArrowRight') {
-    e.preventDefault();
-    audioPlayer.currentTime = Math.min(audioPlayer.duration || 0, audioPlayer.currentTime + 5);
-    drawPlayheadAt(audioPlayer.currentTime);
-  } else if (e.key === 'a' || e.key === 'A') {
-    e.preventDefault();
-    switchAB(previewMode === 'original' ? 'processed' : 'original');
-  }
-});
-
-// ── Window resize — re-size waveform canvas ──
-const resizeObserver = new ResizeObserver(() => {
-  const activeView = document.querySelector('.view.active');
-  if (activeView?.id === 'view-preview' && waveformImageData) {
-    sizePreviewCanvas();
-    // Reload waveform for current file
-    if (currentPreviewOriginal) {
-      const src = previewMode === 'original' ? currentPreviewOriginal : currentPreviewOutput;
-      if (src) loadWaveform(src);
+  btnUpdate.addEventListener('click', async () => {
+    if (btnUpdate.disabled) return;
+    btnUpdate.disabled = true;
+    updateIcon.classList.add('spinning');
+    try {
+      if (updateAvailable) {
+        btnUpdate.title = 'Downloading and applying the update\u2026';
+        const res = await window.api.update.apply();
+        if (res?.ok && res.changed) {
+          versionLabel.textContent = 'v' + res.version;
+          btnUpdate.title = 'Updated \u2014 relaunching\u2026';
+          await window.api.update.relaunch();
+          return; // app is about to exit
+        }
+        if (res?.ok) {
+          // Someone else already updated us, or remote rolled back — re-check.
+          updateAvailable = false;
+          btnUpdate.classList.remove('has-update');
+          btnUpdate.title = `Already on the latest (v${res.version}).`;
+        } else {
+          btnUpdate.title = `Update failed: ${res?.error ?? 'unknown'} \u2014 click to retry`;
+          window.api.log?.push('update', 'Update failed', res?.error);
+        }
+      } else {
+        await checkForUpdate();
+        if (!updateAvailable) {
+          // Nothing new — plain reload, useful to recover a wedged renderer.
+          window.location.reload();
+          return;
+        }
+        btnUpdate.title = `New version found \u2014 click again to update.`;
+      }
+    } finally {
+      btnUpdate.disabled = false;
+      updateIcon.classList.remove('spinning');
     }
-  }
-});
-resizeObserver.observe(document.getElementById('preview-waveform-wrap'));
+  });
+}
 
 // ── Init ──
 loadPrefs();

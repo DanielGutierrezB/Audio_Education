@@ -4,7 +4,16 @@ out/
 bin/
 build/icons/
 *.dmg
+*.dmg.prev*
 *.pkg
 *.log
 .DS_Store
 build/icon.iconset/
+
+# AppleDouble metadata files (exFAT filesystems create these).
+._*
+
+# Editor / tooling local state.
+.claude/
+.vscode/
+.idea/

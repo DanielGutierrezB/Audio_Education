@@ -1,47 +1,71 @@
 const { app, BrowserWindow, ipcMain, dialog, Notification, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const Store = require('electron-store');
 const pipeline = require('./src/pipeline');
 const binPaths = require('./src/bin-paths');
 const logger = require('./src/logger');
+const pairing = require('./src/pairing');
+const fusion = require('./src/fusion');
+const spectrogram = require('./src/spectrogram');
+const qcReport = require('./src/qc-report');
+const updater = require('./src/updater');
+const { DELIVERY_PRESETS, DEFAULT_PRESET } = require('./src/presets');
 
 const VALID_STORE_KEYS = new Set([
-  'processingMode', 'lufsTarget', 'hpfFrequency', 'deEsserEnabled',
-  'noiseGateEnabled', 'stereoToMonoEnabled', 'silenceTrimEnabled',
-  'breathReductionEnabled', 'multiBandCompEnabled', 'outputFormat',
-  'sampleRate', 'showNotifications',
+  'hpfFrequency', 'deEsserEnabled',
+  'outputFormat', 'sampleRate', 'showNotifications',
   // Manual EQ override (FFmpeg filter chain string + on/off flag).
   // When manualEqApply is true the pipeline uses manualEqChain in place
-  // of its built-in voice-warm EQ.
+  // of the built-in base EQ.
   'manualEqChain', 'manualEqApply',
-  // Adaptive EQ — when ON, appends voice-profile-derived notches to the
-  // static voice-warm EQ. OFF by default; the static curve is unchanged.
-  'adaptiveEqEnabled',
-  // Custom output directory ('' = default sibling Audio_Pro/ next to source)
+  // Custom output directory ('' = default sibling Audio_Pro/ next to source).
   'customOutputDir',
+  // Delivery target (docs/PLAN.md §2.3).
+  'platformPreset',
+  // Dynamics / tone extras (docs/PLAN.md §2.6).
+  'denoiseMode', 'compressionMode', 'bodyPct', 'airExtraEnabled', 'trimSilence', 'normalizeMode',
+  // Mode 2 fusion — original + Adobe Podcast Enhance 100% (docs/PLAN.md §2.4).
+  'fusionEnabled', 'fusionMode', 'fusionCrossoverHz', 'fusionOriginalPct',
 ]);
+
+const ENUM_VALUES = {
+  platformPreset:  Object.keys(DELIVERY_PRESETS),
+  denoiseMode:     ['auto', 'off'],
+  compressionMode: ['auto', 'off'],
+  normalizeMode:   ['both', 'raiseOnly'],
+  fusionMode:      ['bands', 'bed', 'bands_bed'],
+};
+const RANGE_VALUES = {
+  bodyPct:           [0, 100],
+  fusionCrossoverHz: [80, 500],
+  fusionOriginalPct: [0, 40],
+};
 
 const store = new Store({
   defaults: {
-    processingMode: 'quality',
-    lufsTarget: -16,
     hpfFrequency: 80,
-    deEsserEnabled: true,
-    noiseGateEnabled: true,
-    stereoToMonoEnabled: true,
-    silenceTrimEnabled: true,
-    breathReductionEnabled: false,
-    multiBandCompEnabled: true,
+    deEsserEnabled: false,
     outputFormat: 'wav24',
     sampleRate: 48000,
     showNotifications: true,
     manualEqChain: '',
     manualEqApply: false,
-    adaptiveEqEnabled: false,
-    // Empty = sibling Audio_Pro/ behavior. Otherwise an absolute path.
     customOutputDir: '',
+    platformPreset: DEFAULT_PRESET,
+    denoiseMode: 'auto',
+    compressionMode: 'auto',
+    bodyPct: 0,
+    airExtraEnabled: false,
+    trimSilence: true,
+    normalizeMode: 'both',
+    fusionEnabled: true,
+    fusionMode: 'bands',
+    fusionCrossoverHz: 200,
+    fusionOriginalPct: 20,
   },
 });
 
@@ -70,7 +94,6 @@ app.whenReady().then(() => {
   logger.init();
   logger.push('bin', `ffmpeg: ${binPaths.ffmpeg()}`);
   logger.push('bin', `ffprobe: ${binPaths.ffprobe()}`);
-  logger.push('bin', `deep-filter: ${binPaths.deepFilter()}`);
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -86,12 +109,14 @@ app.on('before-quit', () => {
     pipelineState.cancelled = true;
     pipelineState.currentProc?.kill('SIGTERM');
   }
+  for (const f of previewTempFiles) {
+    try { fs.unlinkSync(f); } catch { /* best effort */ }
+  }
 });
 
 // ── Logger IPC ──
 ipcMain.handle('log:getFormatted', () => logger.formatForClipboard());
 ipcMain.handle('log:push', (_, category, message, data) => {
-  // Cap renderer log input to prevent abuse
   const cat = String(category ?? 'renderer').slice(0, 32);
   const msg = String(message ?? '').slice(0, 500);
   const d = data !== undefined ? String(typeof data === 'string' ? data : JSON.stringify(data)).slice(0, 2000) : undefined;
@@ -101,22 +126,24 @@ ipcMain.handle('log:push', (_, category, message, data) => {
 ipcMain.handle('store:get', (_, key) => store.get(key));
 ipcMain.handle('store:set', (_, key, value) => {
   if (typeof key !== 'string' || !VALID_STORE_KEYS.has(key)) return;
-  // Type-validate values to prevent store corruption
-  const BOOL_KEYS = new Set(['deEsserEnabled', 'noiseGateEnabled', 'stereoToMonoEnabled',
-    'silenceTrimEnabled', 'breathReductionEnabled', 'multiBandCompEnabled', 'showNotifications',
-    'manualEqApply', 'adaptiveEqEnabled']);
-  const STRING_KEYS = new Set(['processingMode', 'outputFormat', 'manualEqChain', 'customOutputDir']);
-  const INT_KEYS = new Set(['lufsTarget', 'hpfFrequency', 'sampleRate']);
+  const BOOL_KEYS = new Set([
+    'deEsserEnabled', 'showNotifications', 'manualEqApply',
+    'airExtraEnabled', 'trimSilence', 'fusionEnabled',
+  ]);
+  const STRING_KEYS = new Set(['outputFormat', 'manualEqChain', 'customOutputDir']);
+  const INT_KEYS = new Set(['hpfFrequency', 'sampleRate', 'bodyPct', 'fusionCrossoverHz', 'fusionOriginalPct']);
   if (BOOL_KEYS.has(key) && typeof value !== 'boolean') return;
   if (STRING_KEYS.has(key) && typeof value !== 'string') return;
   if (INT_KEYS.has(key) && (typeof value !== 'number' || !Number.isFinite(value))) return;
-  // manualEqChain: cap length and reject obvious shell metacharacters that
-  // could break out of the FFmpeg `-af` argument.
+  if (ENUM_VALUES[key] && !ENUM_VALUES[key].includes(value)) return;
+  if (RANGE_VALUES[key]) {
+    const [lo, hi] = RANGE_VALUES[key];
+    if (value < lo || value > hi) return;
+  }
   if (key === 'manualEqChain') {
     if (value.length > 4096) return;
     if (/[`$;&|<>\\\n\r]/.test(value)) return;
   }
-  // customOutputDir: empty (= default behavior) or an absolute path.
   if (key === 'customOutputDir') {
     if (value !== '' && (!path.isAbsolute(value) || value.includes('..') || value.length > 1024)) return;
   }
@@ -137,9 +164,9 @@ ipcMain.handle('folders:open', async (event) => {
 ipcMain.handle('files:open', async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const result = await dialog.showOpenDialog(win, {
-    title: 'Select WAV files',
+    title: 'Select audio files',
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: 'WAV Files', extensions: ['wav'] }],
+    filters: [{ name: 'Audio Files', extensions: pairing.AUDIO_EXTS.map(e => e.slice(1)) }],
   });
   if (result.canceled) return [];
   return result.filePaths.map(filePath => {
@@ -152,7 +179,6 @@ ipcMain.handle('files:open', async (event) => {
 
 ipcMain.handle('shell:openPath', (_, filePath) => {
   if (typeof filePath !== 'string' || !filePath) return;
-  // Block path traversal — only allow absolute paths without .. components
   const resolved = path.resolve(filePath);
   if (resolved !== filePath && resolved !== path.normalize(filePath)) return;
   if (filePath.includes('..')) return;
@@ -181,17 +207,20 @@ ipcMain.handle('output:openDir', () => {
   return true;
 });
 
+// Scans a dropped/selected folder for audio files and auto-detects Mode 2
+// candidates via the `adobe-podcast-batch` `Enhanced/` convention
+// (docs/PLAN.md §2.1, §2.4, §3). Originals that pair with an enhanced
+// counterpart carry a `pairPath`; everything else queues as Mode 1.
 ipcMain.handle('folders:scan', (_, folderPath) => {
   if (typeof folderPath !== 'string' || !folderPath || folderPath.includes('..')) return [];
   try {
-    const entries = fs.readdirSync(folderPath, { withFileTypes: true });
-    return entries
-      .filter(e => e.isFile() && e.name.toLowerCase().endsWith('.wav'))
-      .map(e => {
-        const filePath = path.join(folderPath, e.name);
-        const { size } = fs.statSync(filePath);
-        return { path: filePath, name: e.name, size };
-      });
+    const { pairs, singles } = pairing.findPairs(folderPath);
+    const paired = pairs.map(({ original, enhanced }) => ({ ...original, pairPath: enhanced.path }));
+    const result = [...paired, ...singles];
+    if (pairs.length) {
+      logger.push('files', `Mode 2 pairs detected in ${folderPath}: ${pairs.length}`, pairs.map(p => path.basename(p.original.path)));
+    }
+    return result;
   } catch {
     return [];
   }
@@ -203,7 +232,6 @@ let pipelineState = null;
 
 ipcMain.handle('pipeline:start', (event, files) => {
   if (pipelineState?.running) return { error: 'Already processing' };
-  // Validate files array from renderer
   if (!Array.isArray(files) || files.length === 0 || files.length > 10000) {
     return { error: 'Invalid files list' };
   }
@@ -211,45 +239,51 @@ ipcMain.handle('pipeline:start', (event, files) => {
     if (typeof f?.path !== 'string' || !f.path || f.path.includes('..')) {
       return { error: 'Invalid file path in list' };
     }
+    if (f.pairPath !== undefined && (typeof f.pairPath !== 'string' || !f.pairPath || f.pairPath.includes('..'))) {
+      return { error: 'Invalid pair path in list' };
+    }
   }
 
   const win = BrowserWindow.fromWebContents(event.sender);
   const settings = {
-    mode:                  store.get('processingMode'),
-    lufsTarget:            store.get('lufsTarget'),
-    hpfFrequency:          store.get('hpfFrequency'),
-    deEsserEnabled:        store.get('deEsserEnabled'),
-    noiseGateEnabled:      store.get('noiseGateEnabled'),
-    stereoToMonoEnabled:   store.get('stereoToMonoEnabled'),
-    silenceTrimEnabled:    store.get('silenceTrimEnabled'),
-    breathReductionEnabled:store.get('breathReductionEnabled'),
-    multiBandCompEnabled:  store.get('multiBandCompEnabled'),
-    outputFormat:          store.get('outputFormat'),
-    sampleRate:            store.get('sampleRate'),
-    manualEqChain:         store.get('manualEqChain'),
-    manualEqApply:         store.get('manualEqApply'),
-    adaptiveEqEnabled:     store.get('adaptiveEqEnabled'),
-    customOutputDir:       store.get('customOutputDir'),
+    hpfFrequency:      store.get('hpfFrequency'),
+    deEsserEnabled:    store.get('deEsserEnabled'),
+    outputFormat:      store.get('outputFormat'),
+    sampleRate:        store.get('sampleRate'),
+    manualEqChain:     store.get('manualEqChain'),
+    manualEqApply:     store.get('manualEqApply'),
+    customOutputDir:   store.get('customOutputDir'),
+    platformPreset:    store.get('platformPreset'),
+    denoiseMode:       store.get('denoiseMode'),
+    compressionMode:   store.get('compressionMode'),
+    bodyPct:           store.get('bodyPct'),
+    airExtraEnabled:   store.get('airExtraEnabled'),
+    trimSilence:       store.get('trimSilence'),
+    normalizeMode:     store.get('normalizeMode'),
+    fusionEnabled:     store.get('fusionEnabled'),
+    fusionMode:        store.get('fusionMode'),
+    fusionCrossoverHz: store.get('fusionCrossoverHz'),
+    fusionOriginalPct: store.get('fusionOriginalPct'),
   };
 
   pipelineState = { running: true, cancelled: false, currentProc: null };
 
-  logger.push('pipeline', `Starting batch: ${files.length} files`, {
-    mode: settings.mode,
-    lufsTarget: settings.lufsTarget,
+  const pairedCount = files.filter(f => f.pairPath).length;
+  logger.push('pipeline', `Starting batch: ${files.length} files (${pairedCount} Mode 2 pairs)`, {
     outputFormat: settings.outputFormat,
     sampleRate: settings.sampleRate,
+    manualEq: settings.manualEqApply,
+    platformPreset: settings.platformPreset,
   });
 
   const emit = (type, data) => {
     if (!win.isDestroyed()) win.webContents.send('pipeline:event', { type, ...data });
-    // Log significant pipeline events
     if (type === 'file:start') logger.push('pipeline', `▶ Processing: ${data.file}`, `${data.index + 1}/${data.total}`);
-    if (type === 'file:done') logger.push('pipeline', `✓ Done: ${data.file}`, `→ ${data.outputPath}`);
+    if (type === 'file:done') logger.push('pipeline', `✓ Done: ${data.file} [Mode ${data.mode}]`, `→ ${data.outputPath}`);
     if (type === 'file:error') logger.push('pipeline', `✗ Error: ${data.file}`, data.error);
-    if (type === 'analysis') logger.push('analysis', `Analysis: ${data.file}`, data.recommendations?.reasoning);
+    if (type === 'loudness') logger.push('loudness', data.message, path.basename(data.file));
+    if (type === 'qc') logger.push('qc', `Flags for ${path.basename(data.file)} [Mode ${data.mode}]`, data.flags.map(f => f.code).join(', ') || 'none');
     if (type === 'progress' && data.stepIndex !== undefined) {
-      // Log step transitions (first progress event per step, identified by low pct or new step name)
       const stepKey = `${data.file}:${data.stepIndex}`;
       if (!emit._loggedSteps) emit._loggedSteps = new Set();
       if (!emit._loggedSteps.has(stepKey)) {
@@ -290,52 +324,136 @@ ipcMain.handle('pipeline:cancel', () => {
   }
 });
 
-ipcMain.handle('audio:peaks', (_, filePath, numPeaks) => {
-  if (typeof filePath !== 'string' || !filePath || filePath.includes('..')) return null;
-  if (typeof numPeaks !== 'number' || numPeaks < 10 || numPeaks > 10000) numPeaks = 800;
-  logger.push('waveform', `Generating peaks: ${path.basename(filePath)} (${numPeaks} points)`);
-  return new Promise(resolve => {
-    const timer = setTimeout(() => resolve(null), 30_000);
-    const done = (val) => { clearTimeout(timer); resolve(val); };
-    const probeProc = spawn(binPaths.ffprobe(), [
-      '-v', 'quiet', '-print_format', 'json', '-show_format', filePath,
-    ]);
-    let probeOut = '';
-    probeProc.stdout.on('data', c => { probeOut += c; });
-    probeProc.on('close', code => {
-      if (code !== 0) return done(null);
-      let duration = 1;
-      try { duration = parseFloat(JSON.parse(probeOut).format?.duration) || 1; } catch { /* ok */ }
+// ── EQ preview helpers: spectrogram, fusion 3-way A/B, QC report export ──
+// (docs/PLAN.md §4 Fase 8). Spectrogram and fusion preview write disposable
+// files under a dedicated temp subfolder — unlike the pipeline's real
+// output, none of this is meant to persist, so before-quit sweeps it up.
 
-      const rate = Math.max(50, Math.ceil(numPeaks / duration));
-      const proc = spawn(binPaths.ffmpeg(), [
-        '-i', filePath,
-        '-af', `aresample=${rate}`,
-        '-f', 'f32le', '-ac', '1', 'pipe:1',
-      ]);
-      const chunks = [];
-      proc.stdout.on('data', chunk => chunks.push(chunk));
-      proc.on('close', code2 => {
-        if (code2 !== 0) return done(null);
-        const buf = Buffer.concat(chunks);
-        const count = Math.floor(buf.length / 4);
-        const floats = new Float32Array(buf.buffer, buf.byteOffset, count);
-        const step = Math.max(1, Math.floor(count / numPeaks));
-        const peaks = [];
-        for (let i = 0; i < numPeaks; i++) {
-          let max = 0;
-          for (let j = 0; j < step; j++) {
-            const v = Math.abs(floats[i * step + j] ?? 0);
-            if (v > max) max = v;
-          }
-          peaks.push(max);
-        }
-        done(peaks);
-      });
-      proc.on('error', (err) => { logger.push('waveform', `ffmpeg error: ${err.message}`); done(null); });
-    });
-    probeProc.on('error', (err) => { logger.push('waveform', `ffprobe error: ${err.message}`); done(null); });
+const previewTempFiles = new Set();
+
+function previewTempDir() {
+  const dir = path.join(os.tmpdir(), 'audiopro-previews');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function forgetAndUnlink(filePath) {
+  previewTempFiles.delete(filePath);
+  try { fs.unlinkSync(filePath); } catch { /* already gone or never existed */ }
+}
+
+ipcMain.handle('spectrogram:generate', async (_, filePath) => {
+  if (typeof filePath !== 'string' || !filePath || filePath.includes('..')) return { error: 'Invalid file path' };
+  const outPath = path.join(previewTempDir(), `spec-${crypto.randomBytes(6).toString('hex')}.png`);
+  previewTempFiles.add(outPath);
+  try {
+    await spectrogram.generateSpectrogram(filePath, outPath);
+    logger.push('spectrogram', `Generated spectrogram for ${path.basename(filePath)}`);
+    return { path: outPath };
+  } catch (err) {
+    forgetAndUnlink(outPath);
+    logger.push('spectrogram', `Failed for ${path.basename(filePath)}`, err.message);
+    return { error: err.message };
+  }
+});
+
+// Caches the last fusion preview per original file so re-selecting
+// "Fusion" in the EQ tab's 3-way A/B doesn't re-render on every click —
+// a fusion settings change (crossover, strategy, original %) invalidates
+// it automatically since the cache key is a hash of those settings.
+const fusionPreviewCache = new Map(); // originalPath -> { key, path }
+
+ipcMain.handle('fusion:preview', async (_, originalPath, pairPath) => {
+  if (typeof originalPath !== 'string' || !originalPath || originalPath.includes('..')) return { error: 'Invalid file path' };
+  if (typeof pairPath !== 'string' || !pairPath || pairPath.includes('..')) return { error: 'Invalid pair path' };
+
+  const settings = {
+    fusionMode:        store.get('fusionMode'),
+    fusionCrossoverHz: store.get('fusionCrossoverHz'),
+    fusionOriginalPct: store.get('fusionOriginalPct'),
+  };
+  const key = JSON.stringify(settings);
+  const cached = fusionPreviewCache.get(originalPath);
+  if (cached && cached.key === key && fs.existsSync(cached.path)) {
+    return { path: cached.path };
+  }
+
+  const outPath = path.join(previewTempDir(), `fusion-${crypto.randomBytes(6).toString('hex')}.wav`);
+  try {
+    await fusion.runFusion(originalPath, pairPath, outPath, settings);
+    previewTempFiles.add(outPath);
+    if (cached) forgetAndUnlink(cached.path);
+    fusionPreviewCache.set(originalPath, { key, path: outPath });
+    logger.push('fusion', `Preview rendered for ${path.basename(originalPath)}`, settings);
+    return { path: outPath };
+  } catch (err) {
+    forgetAndUnlink(outPath);
+    logger.push('fusion', `Preview failed for ${path.basename(originalPath)}`, err.message);
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('qc:saveReport', async (event, fileSummaries) => {
+  if (!Array.isArray(fileSummaries) || fileSummaries.length > 10000) return { error: 'Invalid file list' };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const markdown = qcReport.buildQcReportMarkdown(fileSummaries);
+  const result = await dialog.showSaveDialog(win, {
+    title: 'Export QC report',
+    defaultPath: qcReport.defaultReportFilename(),
+    filters: [{ name: 'Markdown', extensions: ['md'] }],
   });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  try {
+    fs.writeFileSync(result.filePath, markdown, 'utf8');
+    logger.push('qc', `Report exported: ${result.filePath}`, `${fileSummaries.length} files`);
+    return { path: result.filePath };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// ── Self-update (⟳ button in the titlebar) ──
+// The app checks the GitHub repo's version and updates itself in place —
+// same pattern as HyperPremiere's ⟳. With asar disabled, __dirname is the
+// live app root both in dev (repo checkout) and packaged (Resources/app),
+// so the updater reads and writes the exact files this process runs from.
+
+ipcMain.handle('app:getVersion', () => app.getVersion());
+
+ipcMain.handle('update:check', async () => {
+  const res = await updater.checkUpdate(__dirname);
+  if (res.ok && res.changed) {
+    logger.push('update', `Nueva versión disponible: v${res.current} → v${res.remote}`);
+  } else if (!res.ok) {
+    logger.push('update', `Chequeo de actualización falló: ${res.error}`);
+  }
+  return res;
+});
+
+let updateInFlight = false;
+ipcMain.handle('update:apply', async () => {
+  if (updateInFlight) return { ok: false, error: 'Ya hay una actualización en curso' };
+  if (pipelineState?.running) return { ok: false, error: 'Hay un lote procesándose — esperá a que termine antes de actualizar' };
+  updateInFlight = true;
+  try {
+    logger.push('update', 'Aplicando actualización desde GitHub…');
+    const res = await updater.applyUpdate(__dirname);
+    if (res.ok && res.changed) {
+      logger.push('update', `Actualizado: v${res.previous} → v${res.version}. Reiniciando…`);
+    } else if (res.ok) {
+      logger.push('update', `Ya en la última versión (v${res.version}).`);
+    } else {
+      logger.push('update', `Actualización falló: ${res.error}`);
+    }
+    return res;
+  } finally {
+    updateInFlight = false;
+  }
+});
+
+ipcMain.handle('update:relaunch', () => {
+  app.relaunch();
+  app.exit(0);
 });
 
 ipcMain.handle('ffprobe:metadata', (_, filePath) => {

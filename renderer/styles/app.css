@@ -65,14 +65,50 @@ body {
   padding-left: 76px;
 }
 
-.titlebar-version {
+/* ── Update pill (⟳ + version, right side of the titlebar) ── */
+.titlebar-update {
+  font-family: inherit;
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.3);
-  padding-right: 14px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  margin-right: 12px;
   margin-left: auto;
   flex-shrink: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   -webkit-app-region: no-drag;
-  letter-spacing: 0.3px;
+  transition: border-color 160ms ease-out, color 160ms ease-out, background 160ms ease-out;
+}
+.titlebar-update:hover { border-color: var(--accent); color: var(--text); }
+.titlebar-update:disabled { opacity: 0.6; cursor: default; }
+
+.update-icon {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+.update-icon.spinning { animation: ap-spin 0.8s linear infinite; }
+@keyframes ap-spin { to { transform: rotate(360deg); } }
+
+/* New version available on GitHub — the pill highlights and pulses. */
+.titlebar-update.has-update {
+  color: var(--warning);
+  border-color: var(--warning);
+  background: rgba(232, 168, 74, 0.12);
+  animation: ap-update-pulse 2s ease-in-out infinite;
+}
+.titlebar-update.has-update:hover { background: rgba(232, 168, 74, 0.2); }
+@keyframes ap-update-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(232, 168, 74, 0.5); }
+  50% { box-shadow: 0 0 0 4px rgba(232, 168, 74, 0); }
 }
 
 /* ── Tabs ── */
@@ -257,10 +293,16 @@ body {
 .settings-categories {
   display: flex;
   gap: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
+.settings-categories::-webkit-scrollbar { height: 5px; }
+.settings-categories::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
 .settings-category {
-  flex: 1;
+  flex: 1 1 210px;
+  min-width: 210px;
   padding: 0 14px;
   border-right: 1px solid var(--border);
 }
@@ -502,8 +544,8 @@ body {
 
 .file-item {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 3px;
   padding: 6px 12px;
   font-size: 12.5px;
   transition: background 0.1s;
@@ -511,6 +553,12 @@ body {
 }
 .file-item:hover { background: rgba(255,255,255,0.03); }
 .file-item.selected { background: rgba(74, 143, 232, 0.08); }
+
+.file-item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 
 .file-checkbox {
   flex-shrink: 0;
@@ -560,6 +608,45 @@ body {
 }
 .file-item:hover .btn-remove-file { color: var(--text-3); }
 .btn-remove-file:hover { color: var(--error) !important; background: rgba(232, 74, 90, 0.12); }
+
+/* ── Mode badge (Mode 2 pairing / fusion status — docs/PLAN.md §2.1) ── */
+.file-mode-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  cursor: help;
+  white-space: nowrap;
+}
+.file-mode-badge.mode-2       { background: var(--accent-dim); color: var(--accent); }
+.file-mode-badge.mode-pending { background: rgba(255, 255, 255, 0.07); color: var(--text-2); }
+.file-mode-badge.mode-fallback { background: rgba(232, 168, 74, 0.16); color: var(--warning); }
+
+/* ── QC flag chips (artefact catalogue — docs/PLAN.md §1.4) ── */
+.file-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-left: 40px; /* aligns under file name, past checkbox + status icon */
+}
+
+.flag-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  line-height: 1.6;
+  cursor: help;
+  white-space: nowrap;
+}
+.flag-warn { background: rgba(232, 74, 90, 0.14); color: var(--error); }
+.flag-info { background: rgba(255, 255, 255, 0.06); color: var(--text-2); }
+.flag-ok   { background: rgba(74, 184, 126, 0.14); color: var(--success); }
 
 /* ── Context menu ── */
 .ctx-menu {
@@ -636,174 +723,7 @@ body {
   color: var(--text-2);
 }
 
-/* ── Preview view ── */
-
-/* ── Processed file list (top of Preview) ── */
-.preview-file-list {
-  flex-shrink: 0;
-  max-height: 160px;
-  overflow-y: auto;
-  border-bottom: 1px solid var(--border);
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
-}
-.preview-file-list::-webkit-scrollbar { width: 4px; }
-.preview-file-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-.preview-file-list-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 14px 16px;
-  font-size: 12px;
-}
-
-.preview-file-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 14px;
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: background 0.1s;
-  border-bottom: 1px solid rgba(255,255,255,0.03);
-}
-.preview-file-item:last-child { border-bottom: none; }
-.preview-file-item:hover { background: rgba(255,255,255,0.03); }
-.preview-file-item.active { background: var(--accent-dim); }
-
-.preview-file-icon {
-  flex-shrink: 0;
-  font-size: 12px;
-  color: var(--success);
-}
-
-.preview-file-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text);
-}
-
-.preview-file-folder {
-  font-size: 11px;
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 200px;
-  font-family: 'SF Mono', 'Menlo', monospace;
-}
-
-/* ── Preview top bar (A/B toggle) ── */
-.preview-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-/* ── A/B Toggle ── */
-.ab-toggle {
-  display: flex;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  flex-shrink: 0;
-}
-.ab-btn {
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 12px;
-  font-weight: 500;
-  padding: 5px 14px;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-  white-space: nowrap;
-}
-.ab-btn:hover { color: var(--text); background: rgba(255,255,255,0.05); }
-.ab-btn.active { background: var(--accent); color: #fff; }
-
-/* ── Preview waveform ── */
-.preview-waveform-section {
-  flex: 1;
-  overflow: hidden;
-  padding: 12px 16px;
-}
-
-.preview-waveform-wrap {
-  width: 100%;
-  height: 100%;
-  min-height: 120px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-  position: relative;
-  cursor: crosshair;
-}
-
-#preview-waveform {
-  display: block;
-  width: 100%;
-  height: 100%;
-  transition: opacity 0.2s;
-}
-
-.preview-waveform-loading {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  color: var(--text-3);
-  background: var(--bg-surface);
-}
-
-/* ── Transport controls ── */
-.preview-transport {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 10px 16px;
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-  background: rgba(18, 18, 20, 0.5);
-}
-
-.transport-time {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  flex-shrink: 0;
-}
-.time-mono {
-  font-family: 'SF Mono', 'Menlo', monospace;
-  font-size: 12px;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-  min-width: 32px;
-  text-align: center;
-}
-.time-sep { color: var(--text-3); }
-
-.transport-buttons {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  justify-content: center;
-}
-
+/* ── Transport buttons (used by EQ tab) ── */
 .btn-transport {
   appearance: none;
   border: 1px solid var(--border);
@@ -819,34 +739,6 @@ body {
 }
 .btn-transport:hover { background: var(--bg-input); color: var(--text); border-color: rgba(255,255,255,0.15); }
 .btn-transport:active { transform: scale(0.95); }
-
-.btn-transport-play {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-  font-size: 14px;
-  width: 38px;
-  height: 34px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-}
-.btn-transport-play:hover { background: var(--accent-hover); border-color: var(--accent-hover); color: #fff; }
-
-.transport-volume {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  flex-shrink: 0;
-}
-.volume-icon { font-size: 15px; color: var(--text-3); }
-.volume-slider {
-  width: 80px;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
 
 /* ── About view ── */
 .about-container {
@@ -1051,6 +943,12 @@ strong { font-weight: 600; color: var(--text); }
   font-size: 12px;
   min-width: 220px;
 }
+.eq-auto-info {
+  font-size: 11.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.eq-auto-info[hidden] { display: none; }
 .eq-transport {
   display: flex;
   align-items: center;
@@ -1069,6 +967,13 @@ strong { font-weight: 600; color: var(--text); }
   font-size: 12px;
   color: var(--text-2);
   cursor: pointer;
+}
+.eq-makeup-info {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+  white-space: nowrap;
 }
 .eq-canvas-wrap {
   position: relative;
@@ -1098,3 +1003,67 @@ strong { font-weight: 600; color: var(--text); }
   font-size: 11.5px;
   color: var(--text-3);
 }
+
+/* ── Modal overlay (spectrogram viewer — docs/PLAN.md §4 Fase 8c) ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal-overlay[hidden] { display: none; }
+
+.modal-card {
+  background: var(--bg-elevated);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  width: 480px;
+  max-width: 90vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.modal-card-wide { width: 900px; }
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.modal-title { font-size: 13px; font-weight: 600; color: var(--text); }
+
+.modal-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+}
+
+.modal-footer {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.spectrogram-loading {
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.spectrogram-image {
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  display: block;
+}
+.spectrogram-image[hidden] { display: none; }

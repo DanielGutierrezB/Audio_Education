@@ -1012,10 +1012,19 @@ setEnhanceMix.addEventListener('input', () => {
 });
 
 // ── Adobe connection (embedded Enhance) ──
+// The token's identity field is sometimes a real email and sometimes an
+// opaque AdobeID GUID (e.g. "4E67…@AdobeID") — only a real email is worth
+// showing; the GUID goes in the tooltip instead of cluttering the row.
+function adobeDisplayName(email) {
+  if (typeof email === 'string' && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return email;
+  return 'Connected';
+}
+
 function refreshAdobeConn(status) {
   const connected = status?.connected === true;
   adobeDot.classList.toggle('on', connected);
-  adobeConnText.textContent = connected ? (status.email || 'Connected') : 'Not connected';
+  adobeConnText.textContent = connected ? adobeDisplayName(status.email) : 'Not connected';
+  adobeConnText.title = connected && status.email ? status.email : '';
   btnAdobeConnect.textContent = connected ? 'Reconnect' : 'Connect';
   btnAdobeDisconnect.hidden = !connected;
 }

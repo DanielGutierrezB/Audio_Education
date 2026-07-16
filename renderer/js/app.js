@@ -825,6 +825,8 @@ function handlePipelineEvent(event) {
         if (f) f.pairPath = event.enhancedPath;
         // Refresh the badge: the file now has a pair and will fuse as Mode 2.
         patchFileMode(event.file, undefined, findQueuedFile);
+        // The EQ editor's 3-way A/B keys off pairPath — let it re-read the queue.
+        notifyQueueChanged();
       }
       setEnhanceProgress(filename, event.ok ? 'Done' : 'Error');
       break;

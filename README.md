@@ -5,7 +5,7 @@ recording and get course-ready output with consistent loudness and a
 polished, full-bodied voice — including the Adobe Podcast Enhance Speech
 step, now embedded: the whole process runs from one interface.
 
-Current version: **v0.5.0** (macOS arm64 · Windows x64).
+Current version: **v0.5.1** (macOS arm64 · Windows x64).
 
 ## Purpose
 

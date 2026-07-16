@@ -733,6 +733,19 @@ body {
   flex-wrap: wrap;
 }
 
+.gh-token-row { flex-wrap: wrap; }
+.settings-input {
+  flex: 1;
+  min-width: 120px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 11.5px;
+  padding: 4px 8px;
+}
+.settings-input:focus { outline: none; border-color: var(--border-focus); }
+
 /* ── Progress bar ── */
 .progress-bar-section {
   flex-shrink: 0;

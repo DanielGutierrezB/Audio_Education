@@ -1180,6 +1180,36 @@ if (window.api?.update) {
   checkForUpdate();
   setInterval(checkForUpdate, UPDATE_CHECK_INTERVAL_MS);
 
+  // ── GitHub token for private-repo updates (Settings → Updates) ──
+  const setGhToken      = document.getElementById('set-gh-token');
+  const ghTokenStatus   = document.getElementById('gh-token-status');
+  const btnGhTokenSave  = document.getElementById('btn-gh-token-save');
+  const btnGhTokenClear = document.getElementById('btn-gh-token-clear');
+
+  function refreshGhToken(status) {
+    const has = status?.hasToken === true;
+    ghTokenStatus.textContent = status?.error ? status.error : (has ? 'saved \u2713' : 'not set');
+    btnGhTokenClear.hidden = !has;
+  }
+
+  window.api.update.tokenStatus().then(refreshGhToken).catch(() => {});
+
+  btnGhTokenSave.addEventListener('click', async () => {
+    const value = setGhToken.value.trim();
+    if (!value) return;
+    const res = await window.api.update.setToken(value);
+    refreshGhToken(res);
+    if (res?.hasToken && !res.error) {
+      setGhToken.value = '';
+      checkForUpdate(); // the pill can now see the private repo — recheck right away
+    }
+  });
+
+  btnGhTokenClear.addEventListener('click', async () => {
+    refreshGhToken(await window.api.update.setToken(''));
+    checkForUpdate();
+  });
+
   btnUpdate.addEventListener('click', async () => {
     if (btnUpdate.disabled) return;
     btnUpdate.disabled = true;

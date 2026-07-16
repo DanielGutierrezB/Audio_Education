@@ -60,5 +60,7 @@ contextBridge.exposeInMainWorld('api', {
     check: () => ipcRenderer.invoke('update:check'),
     apply: () => ipcRenderer.invoke('update:apply'),
     relaunch: () => ipcRenderer.invoke('update:relaunch'),
+    tokenStatus: () => ipcRenderer.invoke('update:tokenStatus'),
+    setToken: (value) => ipcRenderer.invoke('update:setToken', value),
   },
 });

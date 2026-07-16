@@ -1,6 +1,6 @@
 {
   "name": "audiopro",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Professional voice processing for educational content",
   "main": "main.js",
   "scripts": {

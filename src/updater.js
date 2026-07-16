@@ -18,9 +18,12 @@
 //     lives outside app/ as extraResources).
 //
 // Requires the packaged app to run from plain files (asar disabled in
-// electron-builder config) so files can be replaced individually, and the
-// GitHub repo to be readable anonymously — on a private repo the check
-// fails gracefully with a clear error instead of pretending to work.
+// electron-builder config) so files can be replaced individually. The
+// repo must be readable: anonymously when public, or — since the repo is
+// currently private — through a GitHub token (Settings → Updates) that
+// switches every request to the authenticated REST API. Without either,
+// the check fails gracefully with a clear error instead of pretending
+// to work.
 
 const fs = require('fs');
 const os = require('os');
@@ -32,6 +35,8 @@ const GH_REPO = 'Audio_Education';
 const GH_BRANCH = 'main';
 const RAW_PACKAGE_URL = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/${GH_BRANCH}/package.json`;
 const ZIP_URL = `https://codeload.github.com/${GH_OWNER}/${GH_REPO}/zip/refs/heads/${GH_BRANCH}`;
+const API_PACKAGE_URL = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/package.json?ref=${GH_BRANCH}`;
+const API_ZIP_URL = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/zipball/${GH_BRANCH}`;
 
 const CHECK_TIMEOUT_MS = 20_000;
 const DOWNLOAD_TIMEOUT_MS = 180_000;
@@ -89,29 +94,71 @@ function isGitInstall(appRoot) {
   try { return fs.existsSync(path.join(appRoot, '.git')); } catch { return false; }
 }
 
-async function fetchWithTimeout(url, timeoutMs) {
+async function fetchWithTimeout(url, timeoutMs, headers) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { signal: controller.signal });
+    return await fetch(url, { signal: controller.signal, headers });
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function fetchRemoteVersion() {
-  const res = await fetchWithTimeout(RAW_PACKAGE_URL + '?t=' + Date.now(), CHECK_TIMEOUT_MS);
+// Request spec for the remote version check: anonymous raw fetch when
+// there's no token; the authenticated contents API (raw media type) when
+// there is one — that's what makes a private repo readable. Exported for
+// tests.
+function versionRequest(token) {
+  if (token) {
+    return {
+      url: API_PACKAGE_URL,
+      headers: {
+        'authorization': `Bearer ${token}`,
+        'accept': 'application/vnd.github.raw+json',
+        'x-github-api-version': '2022-11-28',
+        'user-agent': 'AudioPro-updater',
+      },
+    };
+  }
+  return { url: RAW_PACKAGE_URL + '?t=' + Date.now(), headers: {} };
+}
+
+// Same split for the source zip. The API zipball redirects to codeload
+// with a short-lived token in the query string, so the download works
+// even though undici drops the Authorization header across origins.
+function zipRequest(token) {
+  if (token) {
+    return {
+      url: API_ZIP_URL,
+      headers: {
+        'authorization': `Bearer ${token}`,
+        'x-github-api-version': '2022-11-28',
+        'user-agent': 'AudioPro-updater',
+      },
+    };
+  }
+  return { url: ZIP_URL, headers: {} };
+}
+
+async function fetchRemoteVersion(token) {
+  const req = versionRequest(token);
+  const res = await fetchWithTimeout(req.url, CHECK_TIMEOUT_MS, req.headers);
   if (!res.ok) {
-    throw new Error(res.status === 404
-      ? 'HTTP 404 — el repositorio no es accesible anónimamente (¿es privado?)'
-      : 'HTTP ' + res.status);
+    if (res.status === 404) {
+      throw new Error(token
+        ? 'HTTP 404 — el token no tiene acceso al repositorio'
+        : 'HTTP 404 — el repositorio no es accesible anónimamente (¿es privado?). Guardá un token de GitHub en Ajustes → Updates.');
+    }
+    if (res.status === 401) throw new Error('HTTP 401 — el token de GitHub es inválido o expiró');
+    throw new Error('HTTP ' + res.status);
   }
   const data = JSON.parse(await res.text());
   return String(data.version || '').trim();
 }
 
-async function downloadZip(destFile) {
-  const res = await fetchWithTimeout(ZIP_URL, DOWNLOAD_TIMEOUT_MS);
+async function downloadZip(destFile, token) {
+  const req = zipRequest(token);
+  const res = await fetchWithTimeout(req.url, DOWNLOAD_TIMEOUT_MS, req.headers);
   if (!res.ok) throw new Error('HTTP ' + res.status + ' al descargar el zip');
   const buf = Buffer.from(await res.arrayBuffer());
   if (!buf.length) throw new Error('el zip vino vacío');
@@ -173,14 +220,14 @@ function stageFromExtracted(extractDir, stageDir) {
 
 // Downloads the branch zip and writes it over the live install, with a
 // backup to restore if the write fails midway. node_modules stays put.
-async function applyPackagedUpdate(appRoot) {
+async function applyPackagedUpdate(appRoot, token) {
   const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'audiopro-update-'));
   const zipFile = path.join(tmpBase, 'src.zip');
   const exDir = path.join(tmpBase, 'extract');
   const stage = path.join(tmpBase, 'stage');
   const backup = path.join(tmpBase, 'backup');
   try {
-    await downloadZip(zipFile);
+    await downloadZip(zipFile, token);
     await extractZip(zipFile, exDir);
     stageFromExtracted(exDir, stage);
 
@@ -244,11 +291,13 @@ async function applyGitUpdate(appRoot, current) {
 // Checks GitHub WITHOUT applying. Resolves { ok, current, remote, changed }
 // (plus `error` when ok is false). Only ever flags forward updates — a
 // local install ahead of the branch never counts as "changed".
-async function checkUpdate(appRoot) {
+// opts.token: GitHub token for private-repo access (packaged installs
+// only — dev checkouts go through git and the user's own credentials).
+async function checkUpdate(appRoot, opts = {}) {
   const current = readLocalVersion(appRoot);
   if (isGitInstall(appRoot)) return checkGitUpdate(appRoot, current);
   try {
-    const remote = await fetchRemoteVersion();
+    const remote = await fetchRemoteVersion(opts.token);
     return { ok: true, current, remote, changed: !!remote && cmpVersions(remote, current) > 0 };
   } catch (err) {
     return { ok: false, current, error: 'No se pudo consultar GitHub: ' + err.message };
@@ -257,13 +306,13 @@ async function checkUpdate(appRoot) {
 
 // Applies the update. Resolves { ok, changed, version, previous, remote }
 // (plus `error` when ok is false). Caller relaunches the app on changed.
-async function applyUpdate(appRoot) {
+async function applyUpdate(appRoot, opts = {}) {
   const before = readLocalVersion(appRoot);
   if (isGitInstall(appRoot)) return applyGitUpdate(appRoot, before);
 
   let remote;
   try {
-    remote = await fetchRemoteVersion();
+    remote = await fetchRemoteVersion(opts.token);
   } catch (err) {
     return { ok: false, error: 'No se pudo consultar GitHub: ' + err.message };
   }
@@ -271,7 +320,7 @@ async function applyUpdate(appRoot) {
   if (cmpVersions(remote, before) <= 0) return { ok: true, changed: false, version: before, remote };
 
   try {
-    await applyPackagedUpdate(appRoot);
+    await applyPackagedUpdate(appRoot, opts.token);
     return { ok: true, changed: true, version: readLocalVersion(appRoot), previous: before, remote };
   } catch (err) {
     return { ok: false, error: 'No se pudo actualizar: ' + err.message };
@@ -289,5 +338,7 @@ module.exports = {
   skipPathForCopy,
   applyPackagedUpdate,
   extractZip,
+  versionRequest,
+  zipRequest,
   GH_OWNER, GH_REPO, GH_BRANCH,
 };

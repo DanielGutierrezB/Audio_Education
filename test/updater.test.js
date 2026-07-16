@@ -57,6 +57,29 @@ test('isGitInstall: true only when a .git folder exists at the root', () => {
   }
 });
 
+// ── versionRequest / zipRequest (private-repo token support) ──
+
+test('versionRequest: anonymous raw fetch without token, authenticated API with one', () => {
+  const anon = updater.versionRequest(null);
+  assert.match(anon.url, /^https:\/\/raw\.githubusercontent\.com\//);
+  assert.deepStrictEqual(anon.headers, {});
+
+  const auth = updater.versionRequest('ghp_test123');
+  assert.match(auth.url, /^https:\/\/api\.github\.com\/repos\/.+\/contents\/package\.json\?ref=/);
+  assert.strictEqual(auth.headers.authorization, 'Bearer ghp_test123');
+  assert.strictEqual(auth.headers.accept, 'application/vnd.github.raw+json');
+});
+
+test('zipRequest: codeload without token, API zipball with one', () => {
+  const anon = updater.zipRequest(undefined);
+  assert.match(anon.url, /^https:\/\/codeload\.github\.com\//);
+  assert.deepStrictEqual(anon.headers, {});
+
+  const auth = updater.zipRequest('github_pat_abc');
+  assert.match(auth.url, /^https:\/\/api\.github\.com\/repos\/.+\/zipball\//);
+  assert.strictEqual(auth.headers.authorization, 'Bearer github_pat_abc');
+});
+
 // ── skipPathForCopy ──
 
 test('skipPathForCopy: excludes node_modules, .git, and .DS_Store at any depth', () => {

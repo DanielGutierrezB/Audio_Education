@@ -24,7 +24,7 @@
       <button class="titlebar-update" id="btn-update" type="button"
         title="Check GitHub for a new version and reload — turns into an update button when one is available">
         <span class="update-icon" id="update-icon">&#10227;</span>
-        <span id="version-label">v0.5.1</span>
+        <span id="version-label">v0.5.2</span>
       </button>
     </header>
 
@@ -214,6 +214,22 @@
             </div>
 
             <div class="settings-category">
+              <div class="settings-cat-title">Updates</div>
+              <div class="settings-row settings-row-note">
+                <span class="settings-note">While this repo is private, the &#10227; update pill needs a GitHub token (fine-grained, read-only <em>Contents</em> on this repo). Stored encrypted on this machine; leave empty if the repo goes public.</span>
+              </div>
+              <div class="settings-row">
+                <span class="settings-label" title="GitHub personal access token used only to check and download updates from the private repo.">GitHub token</span>
+                <span class="settings-note" id="gh-token-status">not set</span>
+              </div>
+              <div class="settings-row gh-token-row">
+                <input type="password" class="settings-input" id="set-gh-token" placeholder="github_pat_… / ghp_…" autocomplete="off" spellcheck="false" aria-label="GitHub token for updates">
+                <button class="btn btn-secondary btn-sm" id="btn-gh-token-save" title="Save the token (encrypted) and re-check for updates">Save</button>
+                <button class="btn btn-secondary btn-sm" id="btn-gh-token-clear" hidden title="Forget the stored token">Clear</button>
+              </div>
+            </div>
+
+            <div class="settings-category">
               <div class="settings-cat-title">Fusion &middot; Mode 2</div>
               <div class="settings-row settings-row-note">
                 <span class="settings-note">Applies only to files auto-paired with an <code>Enhanced/</code> counterpart &mdash; from the embedded Enhance above, or from dropping an <code>adobe-podcast-batch</code> output folder.</span>
@@ -334,7 +350,7 @@
       <section class="view" id="view-about" role="tabpanel" hidden>
         <div class="about-container">
           <div class="about-header">
-            <h1>AudioPro <span class="version" id="about-version">v0.5.1</span></h1>
+            <h1>AudioPro <span class="version" id="about-version">v0.5.2</span></h1>
             <p class="about-tagline">The best version of the voice &mdash; raw take to mastered class, Adobe Enhance included, in one interface.</p>
           </div>
 

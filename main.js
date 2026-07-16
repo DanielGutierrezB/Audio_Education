@@ -13,6 +13,7 @@ const fusion = require('./src/fusion');
 const spectrogram = require('./src/spectrogram');
 const qcReport = require('./src/qc-report');
 const updater = require('./src/updater');
+const ghToken = require('./src/gh-token');
 const adobeAuth = require('./src/adobe-auth');
 const enhanceBatch = require('./src/enhance/batch');
 const { DELIVERY_PRESETS, DEFAULT_PRESET } = require('./src/presets');
@@ -534,8 +535,27 @@ ipcMain.handle('qc:saveReport', async (event, fileSummaries) => {
 
 ipcMain.handle('app:getVersion', () => app.getVersion());
 
+// GitHub token for private-repo update checks (packaged installs). The
+// renderer only ever learns whether a token exists — never its value.
+ipcMain.handle('update:tokenStatus', () => ({ hasToken: ghToken.hasToken() }));
+ipcMain.handle('update:setToken', (_, value) => {
+  if (value === '' || value == null) {
+    ghToken.clearToken();
+    logger.push('update', 'GitHub token cleared');
+    return { hasToken: false };
+  }
+  if (!ghToken.looksLikeToken(value)) return { hasToken: ghToken.hasToken(), error: 'Eso no parece un token de GitHub' };
+  try {
+    ghToken.saveToken(value.trim());
+    logger.push('update', 'GitHub token saved');
+    return { hasToken: true };
+  } catch (err) {
+    return { hasToken: ghToken.hasToken(), error: err.message };
+  }
+});
+
 ipcMain.handle('update:check', async () => {
-  const res = await updater.checkUpdate(__dirname);
+  const res = await updater.checkUpdate(__dirname, { token: ghToken.loadToken() });
   if (res.ok && res.changed) {
     logger.push('update', `Nueva versión disponible: v${res.current} → v${res.remote}`);
   } else if (!res.ok) {
@@ -551,7 +571,7 @@ ipcMain.handle('update:apply', async () => {
   updateInFlight = true;
   try {
     logger.push('update', 'Aplicando actualización desde GitHub…');
-    const res = await updater.applyUpdate(__dirname);
+    const res = await updater.applyUpdate(__dirname, { token: ghToken.loadToken() });
     if (res.ok && res.changed) {
       logger.push('update', `Actualizado: v${res.previous} → v${res.version}. Reiniciando…`);
     } else if (res.ok) {

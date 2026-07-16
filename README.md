@@ -5,7 +5,7 @@ recording and get course-ready output with consistent loudness and a
 polished, full-bodied voice — including the Adobe Podcast Enhance Speech
 step, now embedded: the whole process runs from one interface.
 
-Current version: **v0.5.1** (macOS arm64 · Windows x64).
+Current version: **v0.5.2** (macOS arm64 · Windows x64).
 
 ## Purpose
 
@@ -178,11 +178,11 @@ target, or "raise only" as a conservative legacy mode.
 
 ## Updating the app
 
-The version pill in the titlebar (⟳ v0.5.0) is the updater — same pattern as
+The version pill in the titlebar (⟳ v0.5.2) is the updater — same pattern as
 [HyperPremiere](https://github.com/DanielGutierrezB/HyperPremiere)'s ⟳ button:
 the app itself checks the GitHub repo's `package.json` on `main` at launch
 and every 30 minutes. When a newer version exists the pill highlights and
-shows `v0.5.0 → v0.6.0`; clicking it downloads the branch zip from GitHub,
+shows `v0.5.2 → v0.6.0`; clicking it downloads the branch zip from GitHub,
 replaces the app files in place (`src/updater.js`), and relaunches. With
 nothing new, a click just re-checks and reloads the window.
 
@@ -196,6 +196,15 @@ nothing new, a click just re-checks and reloads the window.
 - **Dev checkout (has `.git`)** — `git fetch` + compare; applying runs
   `git reset --hard origin/main`, and refuses to run at all if the checkout
   is on any branch other than `main` (so it can't wipe feature-branch work).
+- **Private repo** — anonymous checks 404 while this repository is private,
+  so packaged installs need a GitHub token: **Settings → Updates → GitHub
+  token** (a fine-grained PAT with read-only *Contents* permission on this
+  repo). With a token saved, the updater switches to the authenticated
+  GitHub API for both the version check and the zip download. The token is
+  stored encrypted per machine (`safeStorage`, like the Adobe session) and
+  never leaves the main process. If the repo goes public, leave it empty —
+  anonymous checks work as before. Dev checkouts never need it (git uses
+  your own credentials).
 
 ## QC tools
 
@@ -326,6 +335,7 @@ src/
   spectrogram.js              showspectrumpic PNG render for the QC spectrogram modal
   qc-report.js                Markdown QC report builder for the batch export button
   updater.js                  Self-update from GitHub (git reset in dev, zip-in-place when packaged)
+  gh-token.js                 Encrypted GitHub token store for private-repo update checks
 test/
   fixtures.js                 Synthetic WAV generator (ffmpeg lavfi) for the corpus below
   *.test.js                   node:test suite — metrics, pairing, fusion, presets, pipeline,
@@ -353,9 +363,8 @@ bin/                          (gitignored) populated by the fetch scripts
   notice, and it consumes your Adobe account's Enhance credits. Mode 2 with
   a manually produced `Enhanced/` folder and Mode 1 remain the fallbacks
   (`docs/PLAN.md` §3.1).
-- The in-app updater reads the repo anonymously (raw `package.json` + branch
-  zip, no token). **While this repository is private, packaged installs
-  can't check for updates** — the pill reports "No se pudo consultar GitHub
-  (HTTP 404 — ¿es privado?)" and nothing breaks, but self-update only works
-  once the repo is public (like HyperPremiere) or the updater grows token
-  support. Dev checkouts are unaffected (git uses your credentials).
+- While this repository is private, packaged installs need a GitHub token
+  for the ⟳ updater to work (Settings → Updates, see "Updating the app"
+  above) — without one the pill reports the 404 clearly and nothing breaks.
+  Installs older than v0.5.2 predate token support entirely and must be
+  updated by installing a release DMG/installer manually once.

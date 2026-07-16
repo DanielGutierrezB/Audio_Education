@@ -1,16 +1,16 @@
 # AudioPro
 
 Professional voice processing for educational audio content. Drop the raw
-recording, or the raw recording **plus** its Adobe Podcast Enhance Speech
-counterpart, and get course-ready output with consistent loudness and a
-polished, full-bodied voice.
+recording and get course-ready output with consistent loudness and a
+polished, full-bodied voice — including the Adobe Podcast Enhance Speech
+step, now embedded: the whole process runs from one interface.
 
-Current version: **v0.4.0** (macOS arm64 · Windows x64).
+Current version: **v0.5.0** (macOS arm64 · Windows x64).
 
 ## Purpose
 
-AudioPro accepts **two entry modes** (see `docs/PLAN.md` for the full design
-rationale):
+AudioPro accepts **three entry paths** (see `docs/PLAN.md` for the full
+design rationale):
 
 1. **Mode 1 — Original only.** Drop the raw take with no Adobe Podcast step.
    AudioPro analyzes it, applies conditional local denoise (RNNoise) only when
@@ -19,31 +19,42 @@ rationale):
    unconditional de-click pass since there's no reliable detector for those),
    then masters it.
 2. **Mode 2 — Original + Adobe Podcast at 100%.** Drop a folder containing the
-   raw recordings **and** the `Enhanced/` subfolder that
+   raw recordings **and** an `Enhanced/` subfolder — written either by
+   AudioPro's own embedded Enhance (below) or by a manual run of
    [`adobe-podcast-batch`](https://github.com/DanielGutierrezB/adobe-podcast-batch)
-   writes when its "Voz limpia" slider is left at 100%. AudioPro pairs each
-   file by name automatically, **fuses** the two signals to the ideal balance
+   with its "Voz limpia" slider left at 100%. AudioPro pairs each file by
+   name automatically, **fuses** the two signals to the ideal balance
    (by default: low end from the original, mids/highs from the enhanced
    track — restoring body and breaths that heavy AI denoise thins out), and
    masters from that best-of-both starting point.
+3. **Embedded Enhance — the whole process in one click.** Turn on
+   **Enhance with Adobe** in Settings, connect your Adobe account once, and
+   drop just the raw takes. On **Process All**, AudioPro uploads each
+   unpaired file to Adobe Podcast Enhance Speech itself (5 in parallel,
+   waiting out credit limits automatically), saves the 100% clean voice to
+   `Enhanced/` next to the original, then continues as Mode 2 — fusion +
+   mastering — with no manual handoff between tools.
 
-In both modes the same finishing chain applies: conditional repair → tone
+In all paths the same finishing chain applies: conditional repair → tone
 (EQ) → dynamics (leveler + optional parallel "body" compression) → dynamic
 de-esser → two-pass loudness normalization to a delivery preset → true-peak
 limiter → a fast re-measure to verify the render landed on target.
 
-FFmpeg (+ its native `arnndn`/RNNoise filter) is the only processing runtime;
-there is no Python and no external ML service. The Adobe Podcast step itself
-stays a separate, manual run of `adobe-podcast-batch` — AudioPro auto-detects
-its `Enhanced/` output folder convention, but does not (yet) drive Adobe's
-API directly (see `docs/PLAN.md` §3.1 "Nivel 2 — Enhance embebido", not
-implemented in this version).
+FFmpeg (+ its native `arnndn`/RNNoise filter) is the only local processing
+runtime; there is no Python and no external ML service. The embedded Enhance
+stage reuses the proven client from `adobe-podcast-batch` (ported into
+`src/enhance/`, see `docs/PLAN.md` §3.1 "Nivel 2 — Enhance embebido") and
+talks to Adobe's internal Enhance Speech endpoint with your own Adobe
+session. Running `adobe-podcast-batch` separately still works exactly as
+before — its output folders are detected and never re-uploaded.
 
 ## Pipeline
 
 ```
-Mode 1: original ─────────────────────────────────────────────┐
-Mode 2: original + enhanced ─▶ 0. Fuse (bands / bed crossover) ┤
+Mode 1: original ────────────────────────────────────────────────┐
+Embedded Enhance: original ─▶ −1. Enhance (upload to Adobe,      │
+   save 100% clean voice to Enhanced/, wait out credit limits) ─┐│
+Mode 2: original + enhanced ─▶ 0. Fuse (bands / bed crossover) ─┴┤
                                                                 ▼
                 1. Analyze — one read-only ffmpeg pass: loudness (I/LRA/TP),
                    spectral rolloff, band energies, silence edges → QC flags
@@ -92,6 +103,42 @@ See `docs/PLAN.md` §1.4 for the full A1–A14 catalogue, including artifacts
 specific to Adobe Podcast's AI enhancement (robotic timbre, broken esses,
 muffled starts/ends) and how Mode 2's fusion counteracts them.
 
+## Embedded Adobe Enhance
+
+The `adobe-podcast-batch` engine now lives inside AudioPro (`src/enhance/`),
+so the full raw-take → clean voice → fusion → master run happens without
+leaving the app:
+
+- **Connect once.** Settings → Adobe Enhance → **Connect** opens Adobe's own
+  login (`podcast.adobe.com`) in a window; the session token is extracted
+  in-memory and stored encrypted with the OS keychain (`safeStorage`). The
+  session persists across restarts and re-authenticates silently when the
+  token expires mid-batch.
+- **Enhance with Adobe** (toggle). When on, **Process All** first uploads
+  every queued file that doesn't already have an `Enhanced/` pair — 5 in
+  parallel, the same ceiling Adobe applies per account. When Adobe runs out
+  of credits the whole batch pauses with a visible countdown and resumes by
+  itself; nothing is lost and nothing needs re-clicking.
+- **Every intermediate is saved**, not just the final master:
+  - the **original** is never touched;
+  - the **100% clean voice** ("generated with Enhance") persists in
+    `Enhanced/` next to the original — the exact folder convention
+    `adobe-podcast-batch` uses, so the pair keeps working with either tool;
+  - an optional **percentage mix** (N% clean + (100−N)% original, the
+    "Clean voice mix" slider) is rendered locally with FFmpeg into
+    `Enhanced/Mix N/` — no extra Adobe credits;
+  - the **mastered output** lands in `Audio_Pro/` as always.
+- **No double spending.** Files that already have an `Enhanced/<name>.wav`
+  on disk (from a previous run of AudioPro or of `adobe-podcast-batch`) skip
+  the upload entirely and go straight to fusion. Fusion always works from
+  the two pure signals (original + 100% clean), never from a pre-blended
+  mix — so you can re-fuse with different settings forever without paying
+  Adobe again.
+- **Risk note:** the Enhance endpoint is Adobe-internal and unofficial (the
+  same one `adobe-podcast-batch` has always used); it can change without
+  notice. If it does, Mode 2 with a manually produced `Enhanced/` folder and
+  Mode 1 keep working as fallbacks.
+
 ## Delivery presets
 
 Loudness target is a toolbar selector, not a fixed constant:
@@ -131,11 +178,11 @@ target, or "raise only" as a conservative legacy mode.
 
 ## Updating the app
 
-The version pill in the titlebar (⟳ v0.4.0) is the updater — same pattern as
+The version pill in the titlebar (⟳ v0.5.0) is the updater — same pattern as
 [HyperPremiere](https://github.com/DanielGutierrezB/HyperPremiere)'s ⟳ button:
 the app itself checks the GitHub repo's `package.json` on `main` at launch
 and every 30 minutes. When a newer version exists the pill highlights and
-shows `v0.4.0 → v0.5.0`; clicking it downloads the branch zip from GitHub,
+shows `v0.5.0 → v0.6.0`; clicking it downloads the branch zip from GitHub,
 replaces the app files in place (`src/updater.js`), and relaunches. With
 nothing new, a click just re-checks and reloads the window.
 
@@ -164,8 +211,11 @@ nothing new, a click just re-checks and reloads the window.
 ## Output
 
 - WAV 24-bit (default), WAV 16-bit, or FLAC — 48 kHz or 44.1 kHz.
-- Files land in **`Audio_Pro/`** next to the source folder, or in a custom
+- Masters land in **`Audio_Pro/`** next to the source folder, or in a custom
   folder picked from the toolbar.
+- With embedded Enhance on, the clean voices land in **`Enhanced/`** and the
+  optional percentage mixes in **`Enhanced/Mix N/`**, both next to the
+  originals (see "Embedded Adobe Enhance" above).
 
 ## Requirements
 
@@ -203,7 +253,9 @@ npm test    # node:test — generates synthetic fixtures on the fly, no bin/ nee
 The suite (`test/`) builds its own WAV fixtures with ffmpeg's `lavfi` sources
 (clean, noisy, hum, sibilant, clipped, band-limited, silence-padded, DC-biased
 voice-like signals) and asserts on: every QC detector, preset conformity,
-pairing (`Enhanced/` convention), the fusion filter graph, and full Mode
+pairing (`Enhanced/` convention), the fusion filter graph, the embedded
+enhance orchestration (credits gate, auth retry, `Enhanced/` reuse, the
+`Mix N/` render — with the Adobe network client stubbed), and full Mode
 1/Mode 2 end-to-end renders (duration match, cancellation). Runs against
 whatever `ffmpeg`/`ffprobe` is on `PATH` — no bundled binaries required. CI
 runs it on every push/PR via `.github/workflows/test.yml`.
@@ -236,6 +288,11 @@ All settings persist across sessions via `electron-store`:
   only), body amount (parallel compression blend), presence extra
   (`aexciter`, off by default), trim silence, normalize mode (both
   directions / raise only).
+- **Adobe Enhance** — "Enhance with Adobe" toggle (embedded Enhance stage on
+  Process All), "Clean voice mix" percentage (extra `Enhanced/Mix N/`
+  deliverable; 100% = no extra file), and the Adobe account
+  connect/sign-out. The session token is stored encrypted per machine, not
+  in `electron-store`.
 - **Fusion · Mode 2** — enable/disable, strategy (bands / bed / bands+bed),
   crossover frequency, original blend percentage.
 - Manual EQ chain override (set from the EQ tab, not directly exposed as a
@@ -255,6 +312,10 @@ renderer/
   styles/app.css              Styling
 src/
   pipeline.js                 Per-file orchestration: fuse → analyze → repair → tone/dynamics → loudness → verify
+  enhance/
+    phonos.js                 Adobe Enhance Speech client (ported from adobe-podcast-batch)
+    batch.js                  Embedded-enhance workers + shared credits gate; saves Enhanced/ + Mix N/
+  adobe-auth.js               Adobe login window, token persistence (safeStorage), silent reauth
   metrics.js                  QC analysis pass (loudness, bands, rolloff, silences) → flags
   pairing.js                  Detects original ↔ Enhanced/ pairs (adobe-podcast-batch convention)
   fusion.js                   Mode 2 blend (bands / bed / bands+bed filter graphs)
@@ -268,7 +329,7 @@ src/
 test/
   fixtures.js                 Synthetic WAV generator (ffmpeg lavfi) for the corpus below
   *.test.js                   node:test suite — metrics, pairing, fusion, presets, pipeline,
-                               ffmpeg-run, spectrogram, qc-report, updater
+                               enhance (embedded), ffmpeg-run, spectrogram, qc-report, updater
 scripts/
   fetch-bin.sh                Downloads macOS arm64 ffmpeg/ffprobe/RNNoise model (SHA256-pinned)
   fetch-bin.ps1                Downloads Windows x64 ffmpeg/ffprobe/RNNoise model
@@ -287,9 +348,11 @@ bin/                          (gitignored) populated by the fetch scripts
   pending validation experiment (measure a published class's actual level).
 - QC thresholds are calibrated against the synthetic corpus in `test/`, not
   yet against real course recordings (`docs/PLAN.md` §5 D4).
-- Mode 2 relies on running `adobe-podcast-batch` separately and dropping its
-  output folder; there is no embedded Adobe login/upload yet (`docs/PLAN.md`
-  §3.1 Nivel 2 / Fase 10).
+- The embedded Enhance talks to Adobe's internal, unofficial endpoint (the
+  same one `adobe-podcast-batch` uses) — it can change or break without
+  notice, and it consumes your Adobe account's Enhance credits. Mode 2 with
+  a manually produced `Enhanced/` folder and Mode 1 remain the fallbacks
+  (`docs/PLAN.md` §3.1).
 - The in-app updater reads the repo anonymously (raw `package.json` + branch
   zip, no token). **While this repository is private, packaged installs
   can't check for updates** — the pill reports "No se pudo consultar GitHub

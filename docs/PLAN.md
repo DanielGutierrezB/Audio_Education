@@ -1,12 +1,15 @@
 # Plan de acción — AudioPro: la mejor voz para cursos
 
-> Estado: **Fases 1–9 implementadas, v0.3.4 actual.** Fase 8 completa: A/B con
-> nivel igualado en el editor EQ, A/B de tres vías en Modo 2, espectrograma
-> opcional por archivo y export del informe QC del lote, además de los chips QC +
-> badge de modo + verificación de salida ya existentes. Fase 10 (enhance
-> embebido, Nivel 2 de §3.1) **no** se aborda — sigue pendiente de la decisión D6
-> (§5). Ver `§4` para el detalle fase por fase y `test/` (Fase 9) para la suite
-> que valida los detectores y ambos modos.
+> Estado: **Fases 1–10 implementadas, v0.5.0 actual.** Fase 10 (enhance
+> embebido, Nivel 2 de §3.1) implementada en v0.5.0: el motor de
+> `adobe-podcast-batch` (cliente phonos + compuerta de créditos) vive ahora en
+> `src/enhance/`, con login de Adobe embebido (`src/adobe-auth.js`), toggle
+> "Enhance with Adobe" en Ajustes, y guardado de todos los intermedios
+> (`Enhanced/` con la voz 100 % limpia, `Enhanced/Mix N/` con la mezcla por
+> porcentaje, originales intactos). La D6 (§5) quedó resuelta como "copiar el
+> módulo y sincronizar a mano" — ver la nota en Fase 10. Ver `§4` para el
+> detalle fase por fase y `test/` (Fase 9 + `enhance.test.js`) para la suite
+> que valida los detectores, ambos modos y la orquestación del enhance.
 > Revisión 2 (misma sesión de diseño): incorpora los **dos modos de entrada**
 > definidos por Daniel y la integración con
 > [`adobe-podcast-batch`](https://github.com/DanielGutierrezB/adobe-podcast-batch).
@@ -44,9 +47,10 @@ En ambos modos el master debe garantizar tres cosas en cada clase:
    Modo 1; los de la IA de Adobe en Modo 2, donde el original es el recurso de
    reparación.
 
-Meta final (§3.1): **todo en un solo proceso** — se arrastran los originales crudos,
-AudioPro obtiene la voz limpia con el motor de `adobe-podcast-batch`, fusiona y
-masteriza en una sola cola.
+Meta final (§3.1) ✅ *alcanzada en v0.5.0*: **todo en un solo proceso** — se
+arrastran los originales crudos, AudioPro obtiene la voz limpia con el motor de
+`adobe-podcast-batch` (embebido en `src/enhance/`), fusiona y masteriza en una sola
+cola.
 
 ---
 
@@ -432,12 +436,13 @@ todo el lote. El "proceso único" es: correr `adobe-podcast-batch` (que ya es
 desatendido: cola + espera de créditos) y al terminar soltar la carpeta en AudioPro.
 Cero acoplamiento entre las dos apps.
 
-**Nivel 2 — Enhance embebido (la meta):** AudioPro incorpora `phonos.js` + la
-compuerta de créditos de `batch.js` como dependencia (idealmente publicando el motor
-como paquete compartido entre ambas apps, p. ej. `@daniel/phonos-client`, para no
-duplicar el código que ya funciona). Flujo: arrastras **solo los originales crudos**
-→ AudioPro sube a Adobe (token con el mismo login embebido), descarga la voz 100 %
-limpia, fusiona (§2.4) y masteriza — una sola cola, un solo botón. Consideraciones:
+**Nivel 2 — Enhance embebido (la meta)** ✅ *implementado en v0.5.0 (Fase 10)*:
+AudioPro incorpora `phonos.js` + la compuerta de créditos de `batch.js` en
+`src/enhance/` (copia sincronizada a mano — ver D6 en §5 para la decisión sobre el
+paquete compartido). Flujo: arrastras **solo los originales crudos** → AudioPro sube
+a Adobe (token con el mismo login embebido), descarga la voz 100 % limpia a
+`Enhanced/`, fusiona (§2.4) y masteriza — una sola cola, un solo botón.
+Consideraciones (todas vigentes en la implementación):
 
 - El pipeline de AudioPro pasa a tener una etapa 0 remota con esperas largas
   (créditos, cola de Adobe): la UI de cola ya distingue estados; habría que sumar
@@ -602,16 +607,31 @@ limpieza local), y al final el enhance embebido.
 - **Aceptación:** suite verde; añadir un artefacto nuevo al corpus rompe el test hasta
   implementar su detector.
 
-### Fase 10 — "Un solo proceso": enhance embebido (Nivel 2 de §3.1) ⏳ no iniciada
-**Archivos:** `src/enhance/` (motor phonos compartido), `main.js` (login Adobe + token), renderer (estados remotos en la cola).
-- Incorporar `phonos.js` + compuerta de créditos de `batch.js` (idealmente como
-  paquete compartido con `adobe-podcast-batch` para no bifurcar el motor).
-- Flujo: arrastrar solo originales → subir a Adobe (5 en paralelo, espera de créditos
-  automática) → descargar voz 100 % → Fase 6 (fusión) → master. Toggle "Enhance con
-  Adobe" en la toolbar; sin token → se ofrece el login embebido.
-- **Aceptación:** un lote de 3 originales crudos termina en 3 masters verificados sin
-  intervención; si Adobe corta por créditos, la cola espera y reanuda sola; sin red o
-  sin token, el lote degrada a Modo 1 con aviso.
+### Fase 10 — "Un solo proceso": enhance embebido (Nivel 2 de §3.1) ✅ implementada (v0.5.0)
+**Archivos:** `src/enhance/phonos.js` + `src/enhance/batch.js` (motor portado),
+`src/adobe-auth.js` (login + token), `main.js` (IPC `adobe:*` + etapa 0 del lote),
+`preload.js`, renderer (categoría "Adobe Enhance" en Ajustes, estados remotos en la
+barra de progreso, banner de créditos), `test/enhance.test.js`.
+- `phonos.js` + la compuerta de créditos de `batch.js` portados desde
+  `adobe-podcast-batch` (D6 resuelta como **copia sincronizada a mano**, no paquete
+  compartido: cero dependencias nuevas y el módulo se mantiene línea-a-línea cercano
+  al upstream para poder sincronizar arreglos cuando Adobe cambie algo).
+- Flujo implementado: toggle **Enhance with Adobe** en Ajustes → `Process All` sube
+  los archivos **sin par** a Adobe (5 en paralelo, espera de créditos automática con
+  cuenta regresiva visible, reauth silencioso ante 401) → guarda la voz 100 % limpia
+  en `Enhanced/<stem>.wav` (misma convención que detecta `pairing.js`) → opcionalmente
+  renderiza la mezcla N % en `Enhanced/Mix N/` (ffmpeg local, sin gastar créditos) →
+  el archivo entra a Fase 6 (fusión) + master como cualquier par de Modo 2.
+- Se conservan **todos** los intermedios: original intacto, voz limpia en `Enhanced/`,
+  mezcla por porcentaje en `Enhanced/Mix N/`, master en `Audio_Pro/`.
+- Si `Enhanced/<stem>.wav` ya existe (de una corrida previa de cualquiera de las dos
+  apps) se reutiliza sin subir de nuevo. Login: ventana `podcast.adobe.com` con
+  partición persistente; token cifrado con `safeStorage` en `adobe-token.dat`.
+- **Aceptación (cumplida):** un lote de originales crudos termina en masters
+  verificados sin intervención; si Adobe corta por créditos, la cola espera y reanuda
+  sola; sin token, el lote falla con aviso claro antes de subir nada (y desactivar el
+  toggle vuelve al comportamiento anterior). Lo que degrada a Modo 1 sigue siendo el
+  par con duración desalineada, como antes.
 
 **Dependencias:** 1 → 2 → 3 → 4 → 5 → {6, 7} (independientes entre sí); 8 y 9 pueden
 avanzar en paralelo desde la Fase 2; 10 requiere 6 y la decisión D6 (§5).
@@ -638,11 +658,13 @@ avanzar en paralelo desde la Fase 2; 10 requiere 6 y la decisión D6 (§5).
   Sin esto, los umbrales quedan en valores de literatura.
 - **D5 — Alcance de "salida a video"**: ¿AudioPro debe exportar también AAC/MP4 listo
   para pegar en Premiere, o el WAV es siempre el entregable?
-- **D6 — Enhance embebido (Fase 10)**: ¿de acuerdo con asumir el riesgo del endpoint
-  interno dentro de AudioPro (mismo riesgo que ya corre `adobe-podcast-batch`)?
-  ¿Extraemos `phonos.js` a un paquete compartido entre ambas apps, o copiamos el
-  módulo y lo sincronizamos a mano? Recomendación: paquete compartido — un solo motor
-  que arreglar cuando Adobe cambie algo.
+- **D6 — Enhance embebido (Fase 10)** ✅ *resuelta en v0.5.0*: se asumió el riesgo
+  del endpoint interno (el mismo que ya corre `adobe-podcast-batch`; el Nivel 1 y el
+  Modo 1 quedan como respaldo) y se optó por **copiar el módulo y sincronizarlo a
+  mano** en vez del paquete compartido: `src/enhance/phonos.js` se mantiene
+  línea-a-línea cercano al upstream justamente para que un diff manual baste cuando
+  Adobe cambie algo, sin introducir un paquete npm privado que complique el build de
+  ambas apps.
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "audiopro",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Professional voice processing for educational content",
   "main": "main.js",
   "scripts": {
@@ -13,7 +13,8 @@
     "build:icon": "rsvg-convert -w 512 -h 512 build/icon.svg -o build/icons/512x512.png && rsvg-convert -w 1024 -h 1024 build/icon.svg -o build/icons/1024x1024.png || (convert build/icon.svg -resize 512x512 build/icons/512x512.png && convert build/icon.svg -resize 1024x1024 build/icons/1024x1024.png)"
   },
   "dependencies": {
-    "electron-store": "^8.1.0"
+    "electron-store": "^8.1.0",
+    "electron-updater": "^6.8.9"
   },
   "devDependencies": {
     "electron": "^29.4.6",
@@ -23,7 +24,11 @@
     "appId": "com.platzi.audiopro",
     "productName": "AudioPro",
     "icon": "build/icon.icns",
-    "publish": null,
+    "publish": {
+      "provider": "github",
+      "owner": "DanielGutierrezB",
+      "repo": "audiopro-releases"
+    },
     "asar": false,
     "files": [
       "main.js",
@@ -45,6 +50,12 @@
       "category": "public.app-category.music",
       "darkModeSupport": true,
       "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        },
         {
           "target": "dmg",
           "arch": [

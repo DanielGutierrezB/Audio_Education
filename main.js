@@ -5,6 +5,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const Store = require('electron-store');
+const { autoUpdater } = require('electron-updater');
 const pipeline = require('./src/pipeline');
 const binPaths = require('./src/bin-paths');
 const logger = require('./src/logger');
@@ -527,15 +528,57 @@ ipcMain.handle('qc:saveReport', async (event, fileSummaries) => {
 });
 
 // ── Self-update (⟳ button in the titlebar) ──
-// The app checks the GitHub repo's version and updates itself in place —
-// same pattern as HyperPremiere's ⟳. With asar disabled, __dirname is the
-// live app root both in dev (repo checkout) and packaged (Resources/app),
-// so the updater reads and writes the exact files this process runs from.
+// Same architecture as the Sync app (sync-app → sync-releases):
+//
+//   - Packaged install → `electron-updater` against the PUBLIC
+//     releases-only repo (audiopro-releases, set in package.json's
+//     build.publish). The source repo stays private; the update
+//     metadata (latest-mac.yml / latest.yml) and artifacts are public,
+//     so no token or login is ever needed.
+//   - Dev checkout → git fetch/reset via src/updater.js, using the
+//     developer's own credentials.
+//
+// The renderer contract is unchanged: check() → { ok, current, remote,
+// changed }; apply() downloads and returns { ok, changed, ... };
+// relaunch() restarts — which for a packaged install means
+// quitAndInstall() on the downloaded update.
 
 ipcMain.handle('app:getVersion', () => app.getVersion());
 
+if (app.isPackaged) {
+  autoUpdater.autoDownload = false;         // the ⟳ pill decides when to download
+  autoUpdater.autoInstallOnAppQuit = true;  // a downloaded update installs even if the user just quits
+  autoUpdater.logger = {
+    info:  (m) => logger.push('update', String(m)),
+    warn:  (m) => logger.push('update', `warn: ${m}`),
+    error: (m) => logger.push('update', `error: ${m}`),
+    debug: () => {},
+  };
+  autoUpdater.on('download-progress', (p) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('update:progress', { percent: Math.round(p.percent), bps: p.bytesPerSecond });
+    }
+  });
+}
+
+// Checks for a newer version WITHOUT downloading.
+async function checkPackagedUpdate() {
+  const current = app.getVersion();
+  try {
+    const r = await autoUpdater.checkForUpdates();
+    const remote = r?.updateInfo?.version ?? null;
+    const changed = !!remote && updater.cmpVersions(remote, current) > 0;
+    return { ok: true, current, remote: remote ?? current, changed };
+  } catch (err) {
+    return { ok: false, current, error: 'No se pudo consultar las releases: ' + String(err.message || err).slice(0, 200) };
+  }
+}
+
 ipcMain.handle('update:check', async () => {
-  const res = await updater.checkUpdate(__dirname);
+  const res = app.isPackaged
+    ? await checkPackagedUpdate()
+    : await updater.checkGitUpdate(__dirname);
   if (res.ok && res.changed) {
     logger.push('update', `Nueva versión disponible: v${res.current} → v${res.remote}`);
   } else if (!res.ok) {
@@ -545,15 +588,35 @@ ipcMain.handle('update:check', async () => {
 });
 
 let updateInFlight = false;
+let updateDownloaded = false;
+
 ipcMain.handle('update:apply', async () => {
   if (updateInFlight) return { ok: false, error: 'Ya hay una actualización en curso' };
   if (pipelineState?.running) return { ok: false, error: 'Hay un lote procesándose — esperá a que termine antes de actualizar' };
   updateInFlight = true;
   try {
-    logger.push('update', 'Aplicando actualización desde GitHub…');
-    const res = await updater.applyUpdate(__dirname);
+    let res;
+    if (app.isPackaged) {
+      const chk = await checkPackagedUpdate();
+      if (!chk.ok) {
+        res = { ok: false, error: chk.error };
+      } else if (!chk.changed) {
+        res = { ok: true, changed: false, version: chk.current, remote: chk.remote };
+      } else {
+        logger.push('update', `Descargando v${chk.remote} desde las releases…`);
+        try {
+          await autoUpdater.downloadUpdate();
+          updateDownloaded = true;
+          res = { ok: true, changed: true, version: chk.remote, previous: chk.current, remote: chk.remote };
+        } catch (err) {
+          res = { ok: false, error: 'No se pudo descargar la actualización: ' + String(err.message || err).slice(0, 200) };
+        }
+      }
+    } else {
+      res = await updater.applyGitUpdate(__dirname);
+    }
     if (res.ok && res.changed) {
-      logger.push('update', `Actualizado: v${res.previous} → v${res.version}. Reiniciando…`);
+      logger.push('update', `Actualización lista: v${res.previous} → v${res.version}. Reiniciando…`);
     } else if (res.ok) {
       logger.push('update', `Ya en la última versión (v${res.version}).`);
     } else {
@@ -566,6 +629,10 @@ ipcMain.handle('update:apply', async () => {
 });
 
 ipcMain.handle('update:relaunch', () => {
+  if (app.isPackaged && updateDownloaded) {
+    autoUpdater.quitAndInstall(false, true);
+    return;
+  }
   app.relaunch();
   app.exit(0);
 });

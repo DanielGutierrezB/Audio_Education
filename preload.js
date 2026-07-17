@@ -60,5 +60,10 @@ contextBridge.exposeInMainWorld('api', {
     check: () => ipcRenderer.invoke('update:check'),
     apply: () => ipcRenderer.invoke('update:apply'),
     relaunch: () => ipcRenderer.invoke('update:relaunch'),
+    onProgress: (cb) => {
+      const handler = (_, data) => cb(data);
+      ipcRenderer.on('update:progress', handler);
+      return () => ipcRenderer.removeListener('update:progress', handler);
+    },
   },
 });

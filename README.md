@@ -5,7 +5,7 @@ recording and get course-ready output with consistent loudness and a
 polished, full-bodied voice — including the Adobe Podcast Enhance Speech
 step, now embedded: the whole process runs from one interface.
 
-Current version: **v0.5.1** (macOS arm64 · Windows x64).
+Current version: **v0.6.0** (macOS arm64 · Windows x64).
 
 ## Purpose
 
@@ -178,24 +178,32 @@ target, or "raise only" as a conservative legacy mode.
 
 ## Updating the app
 
-The version pill in the titlebar (⟳ v0.5.0) is the updater — same pattern as
-[HyperPremiere](https://github.com/DanielGutierrezB/HyperPremiere)'s ⟳ button:
-the app itself checks the GitHub repo's `package.json` on `main` at launch
-and every 30 minutes. When a newer version exists the pill highlights and
-shows `v0.5.0 → v0.6.0`; clicking it downloads the branch zip from GitHub,
-replaces the app files in place (`src/updater.js`), and relaunches. With
-nothing new, a click just re-checks and reloads the window.
+The version pill in the titlebar (⟳ v0.6.0) is the updater. Same
+architecture as the Sync app (`sync-app` → `sync-releases`): the source
+repo stays private, and built artifacts + update metadata are published to
+the **public releases-only repo**
+[`audiopro-releases`](https://github.com/DanielGutierrezB/audiopro-releases),
+so installed apps never need a token or login to update. The pill checks at
+launch and every 30 minutes; when a newer version exists it highlights and
+shows `v0.6.0 → v0.7.0`, clicking downloads the update (with a live
+percentage on the pill) and relaunches into the new version.
 
-- **Packaged install (DMG / installer)** — downloads
-  `codeload.github.com/<repo>/zip/refs/heads/main`, stages `main.js`,
-  `preload.js`, `src/`, `renderer/` and `package.json`, backs up the live
-  install, and writes over `Resources/app` (asar is disabled so the app runs
-  from plain files). `node_modules` and the bundled ffmpeg binaries are
-  never touched, so an update that changes dependencies or binaries still
-  needs a fresh DMG.
-- **Dev checkout (has `.git`)** — `git fetch` + compare; applying runs
-  `git reset --hard origin/main`, and refuses to run at all if the checkout
-  is on any branch other than `main` (so it can't wipe feature-branch work).
+- **Packaged install (DMG / installer)** — `electron-updater` reads
+  `latest-mac.yml` / `latest.yml` from the latest `audiopro-releases`
+  release, verifies the artifact's SHA-512, and installs the full new
+  build (macOS: zip swap via Squirrel; Windows: silent NSIS). Because the
+  whole app is replaced, updates that change dependencies or the bundled
+  ffmpeg binaries are fine — no more "needs a fresh DMG" cases.
+- **Dev checkout (has `.git`)** — `git fetch` + compare against `origin/main`;
+  applying runs `git reset --hard origin/main`, and refuses to run at all if
+  the checkout is on any branch other than `main` (so it can't wipe
+  feature-branch work). Uses your own git credentials, so the private
+  source repo is not an issue.
+- **Publishing flow (CI)** — pushing a `v*.*.*` tag makes the macOS and
+  Windows workflows build and `--publish always` to `audiopro-releases`
+  via the `RELEASES_TOKEN` repo secret (a PAT with Contents read/write on
+  `audiopro-releases` only). Nothing is published to this repo's own
+  Releases anymore.
 
 ## QC tools
 
@@ -271,11 +279,15 @@ The artifacts are unsigned — first-time macOS users need to right-click →
 **Open** to bypass Gatekeeper.
 
 `.github/workflows/build-macos-dmg.yml` and `.github/workflows/build-windows.yml`
-build the DMG and the NSIS installer on a macOS / Windows Actions runner
+build the zip+DMG and the NSIS installer on a macOS / Windows Actions runner
 respectively (`windows-latest` is real Windows, so this is an actual build+
-package smoke test, not a cross-compile guess) and attach both to the same
-GitHub Release whenever a `v*.*.*` tag is pushed (or upload as workflow
-artifacts on a manual `workflow_dispatch` run, without publishing a release).
+package smoke test, not a cross-compile guess) and publish both — plus the
+`latest-mac.yml` / `latest.yml` metadata the in-app updater reads — to the
+public [`audiopro-releases`](https://github.com/DanielGutierrezB/audiopro-releases)
+repo whenever a `v*.*.*` tag is pushed (or upload as workflow artifacts on
+a manual `workflow_dispatch` run, without publishing anything). Publishing
+needs the `RELEASES_TOKEN` secret on this repo: a fine-grained PAT with
+**Contents read/write on `audiopro-releases`** only.
 
 ## Settings
 
@@ -325,7 +337,8 @@ src/
   logger.js                   Structured logging (copyable from the app)
   spectrogram.js              showspectrumpic PNG render for the QC spectrogram modal
   qc-report.js                Markdown QC report builder for the batch export button
-  updater.js                  Self-update from GitHub (git reset in dev, zip-in-place when packaged)
+  updater.js                  Self-update helpers (git reset path for dev checkouts; packaged
+                               installs use electron-updater against audiopro-releases, wired in main.js)
 test/
   fixtures.js                 Synthetic WAV generator (ffmpeg lavfi) for the corpus below
   *.test.js                   node:test suite — metrics, pairing, fusion, presets, pipeline,
@@ -353,9 +366,11 @@ bin/                          (gitignored) populated by the fetch scripts
   notice, and it consumes your Adobe account's Enhance credits. Mode 2 with
   a manually produced `Enhanced/` folder and Mode 1 remain the fallbacks
   (`docs/PLAN.md` §3.1).
-- The in-app updater reads the repo anonymously (raw `package.json` + branch
-  zip, no token). **While this repository is private, packaged installs
-  can't check for updates** — the pill reports "No se pudo consultar GitHub
-  (HTTP 404 — ¿es privado?)" and nothing breaks, but self-update only works
-  once the repo is public (like HyperPremiere) or the updater grows token
-  support. Dev checkouts are unaffected (git uses your credentials).
+- Installs older than v0.6.0 carry the previous updater, which read this
+  (private) repo's `main` anonymously and therefore could never see an
+  update — they must be updated by installing a release DMG/installer
+  manually once. From v0.6.0 on, updates come from the public
+  `audiopro-releases` repo and need no token.
+- `electron-updater` on unsigned macOS builds relies on the same ad-hoc
+  arm64 signing the Sync app ships with; if a macOS update ever fails to
+  apply, the fallback is simply installing the release DMG over the app.

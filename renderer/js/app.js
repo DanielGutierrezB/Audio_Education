@@ -1187,7 +1187,11 @@ if (window.api?.update) {
     try {
       if (updateAvailable) {
         btnUpdate.title = 'Downloading and applying the update\u2026';
+        const unsubProgress = window.api.update.onProgress?.(({ percent }) => {
+          versionLabel.textContent = `downloading ${percent}%`;
+        });
         const res = await window.api.update.apply();
+        unsubProgress?.();
         if (res?.ok && res.changed) {
           versionLabel.textContent = 'v' + res.version;
           btnUpdate.title = 'Updated \u2014 relaunching\u2026';

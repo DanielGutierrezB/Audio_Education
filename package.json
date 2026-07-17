@@ -27,7 +27,8 @@
     "publish": {
       "provider": "github",
       "owner": "DanielGutierrezB",
-      "repo": "audiopro-releases"
+      "repo": "audiopro-releases",
+      "releaseType": "release"
     },
     "asar": false,
     "files": [

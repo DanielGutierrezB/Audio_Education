@@ -101,6 +101,16 @@ function statusIcon(status) {
 }
 
 // ── Queue management ──
+// Default queue order is by file name, natural/numeric so "10" follows "9"
+// (not "1") and case doesn't matter. Applied when files enter the queue;
+// manual Move up/down still overrides it afterwards.
+function fileSortKey(f) {
+  return f.name || (f.path || '').split(/[\\/]/).pop() || '';
+}
+function byFileName(a, b) {
+  return fileSortKey(a).localeCompare(fileSortKey(b), undefined, { numeric: true, sensitivity: 'base' });
+}
+
 async function addFoldersViaDialog() {
   if (!window.api) return;
   const paths = await window.api.folders.open();
@@ -119,13 +129,14 @@ async function processFolderPaths(folderPaths) {
     if (queue.has(fp)) continue;
     const wavFiles = await window.api.folders.scan(fp);
     if (!wavFiles.length) continue;
+    const sorted = [...wavFiles].sort(byFileName);
     queue.set(fp, {
-      files: wavFiles.map(f => ({ ...f, duration: null, status: 'queued' })),
+      files: sorted.map(f => ({ ...f, duration: null, status: 'queued' })),
       collapsed: false,
     });
     // New files start selected so the common "process everything" case still
     // works in one click; Clear selection + pick lets the user narrow it down.
-    for (const f of wavFiles) selectedFiles.add(f.path);
+    for (const f of sorted) selectedFiles.add(f.path);
     added.push(fp);
   }
   if (!added.length) return;
@@ -135,6 +146,7 @@ async function processFolderPaths(folderPaths) {
 
 function addIndividualFiles(fileInfos) {
   // Group by parent directory
+  const touched = new Set();
   for (const fi of fileInfos) {
     const dir = fi.path.substring(0, fi.path.lastIndexOf('/'));
     if (!queue.has(dir)) {
@@ -144,8 +156,11 @@ function addIndividualFiles(fileInfos) {
     if (!group.files.find(f => f.path === fi.path)) {
       group.files.push({ ...fi, duration: null, status: 'queued' });
       selectedFiles.add(fi.path);
+      touched.add(dir);
     }
   }
+  // Keep each group that got new files ordered by name (natural sort).
+  for (const dir of touched) queue.get(dir)?.files.sort(byFileName);
   renderQueue();
   for (const fi of fileInfos) {
     loadSingleFileMeta(fi.path);

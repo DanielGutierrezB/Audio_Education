@@ -15,7 +15,9 @@ const tabs           = document.querySelectorAll('.tab');
 const views          = document.querySelectorAll('.view');
 const btnAddFolders  = document.getElementById('btn-add-folders');
 const btnAddFiles    = document.getElementById('btn-add-files');
-const btnProcessAll  = document.getElementById('btn-process-all');
+const btnProcessSelection = document.getElementById('btn-process-selection');
+const btnSelectAll   = document.getElementById('btn-select-all');
+const btnClearSelection = document.getElementById('btn-clear-selection');
 const btnClearAll    = document.getElementById('btn-clear-all');
 const btnRemoveDone  = document.getElementById('btn-remove-completed');
 const queueEmpty     = document.getElementById('queue-empty');
@@ -121,6 +123,9 @@ async function processFolderPaths(folderPaths) {
       files: wavFiles.map(f => ({ ...f, duration: null, status: 'queued' })),
       collapsed: false,
     });
+    // New files start selected so the common "process everything" case still
+    // works in one click; Clear selection + pick lets the user narrow it down.
+    for (const f of wavFiles) selectedFiles.add(f.path);
     added.push(fp);
   }
   if (!added.length) return;
@@ -138,6 +143,7 @@ function addIndividualFiles(fileInfos) {
     const group = queue.get(dir);
     if (!group.files.find(f => f.path === fi.path)) {
       group.files.push({ ...fi, duration: null, status: 'queued' });
+      selectedFiles.add(fi.path);
     }
   }
   renderQueue();
@@ -225,6 +231,42 @@ function removeCompleted() {
   renderQueue();
 }
 
+// ── Selection ──
+// How many queued files are both selected and still processable (not done).
+// This is what "Process Selection" acts on and what gates the button.
+function processableSelectedCount() {
+  let n = 0;
+  for (const [, group] of queue) {
+    for (const f of group.files) {
+      if (f.status !== 'done' && selectedFiles.has(f.path)) n++;
+    }
+  }
+  return n;
+}
+
+function selectAllFiles() {
+  for (const [, group] of queue) {
+    for (const f of group.files) {
+      if (f.status !== 'done') selectedFiles.add(f.path);
+    }
+  }
+  renderQueue();
+}
+
+function clearSelection() {
+  selectedFiles.clear();
+  renderQueue();
+}
+
+// Keeps the process button + selection toolbar in sync with the current
+// selection. Called from renderQueue and on every checkbox toggle.
+function refreshSelectionControls() {
+  const hasFiles = queue.size > 0;
+  btnSelectAll.hidden = !hasFiles;
+  btnClearSelection.hidden = !hasFiles;
+  if (!processing) btnProcessSelection.disabled = processableSelectedCount() === 0;
+}
+
 // ── Render queue ──
 function renderQueue() {
   // Single source of truth for the EQ editor's file dropdown: every time
@@ -233,8 +275,8 @@ function renderQueue() {
   const hasFiles = queue.size > 0;
   queueEmpty.hidden = hasFiles;
   queueList.hidden = !hasFiles;
-  btnProcessAll.disabled = !hasFiles;
   btnClearAll.hidden = !hasFiles;
+  refreshSelectionControls();
 
   const hasDone = hasFiles && [...queue.values()].some(g => g.files.some(f => f.status === 'done'));
   btnRemoveDone.hidden = !hasDone;
@@ -356,7 +398,7 @@ function buildModeBadge(file) {
   } else {
     badge.className = 'file-mode-badge mode-pending';
     badge.textContent = 'Pair detected';
-    badge.title = `Will fuse with ${file.pairPath.split('/').pop()} on Process All`;
+    badge.title = `Will fuse with ${file.pairPath.split('/').pop()} on Process Selection`;
   }
   return badge;
 }
@@ -379,6 +421,7 @@ function buildFileItem(file) {
     else selectedFiles.delete(file.path);
     item.classList.toggle('selected', cb.checked);
     updateQueueSummary();
+    refreshSelectionControls();
   });
 
   const statusEl = document.createElement('span');
@@ -756,15 +799,15 @@ function startProcessing() {
   const files = [];
   for (const [, group] of queue) {
     for (const file of group.files) {
-      if (file.status !== 'done') {
+      if (file.status !== 'done' && selectedFiles.has(file.path)) {
         files.push({ path: file.path, duration: file.duration, ...(file.pairPath ? { pairPath: file.pairPath } : {}) });
       }
     }
   }
   if (!files.length) { processing = false; return; }
 
-  btnProcessAll.textContent = 'Cancel';
-  btnProcessAll.classList.replace('btn-accent', 'btn-secondary');
+  btnProcessSelection.textContent = 'Cancel';
+  btnProcessSelection.classList.replace('btn-accent', 'btn-secondary');
   btnAddFolders.disabled = true;
   btnAddFiles.disabled = true;
 
@@ -790,8 +833,8 @@ function finishProcessing() {
   processing = false;
   if (unsubPipeline) { unsubPipeline(); unsubPipeline = null; }
 
-  btnProcessAll.textContent = '▶ Process All';
-  btnProcessAll.classList.replace('btn-secondary', 'btn-accent');
+  btnProcessSelection.textContent = '▶ Process Selection';
+  btnProcessSelection.classList.replace('btn-secondary', 'btn-accent');
   btnAddFolders.disabled = false;
   btnAddFiles.disabled = false;
 
@@ -1051,6 +1094,8 @@ btnAddFolders.addEventListener('click', addFoldersViaDialog);
 btnAddFiles.addEventListener('click', addFilesViaDialog);
 btnClearAll.addEventListener('click', clearAll);
 btnRemoveDone.addEventListener('click', removeCompleted);
+btnSelectAll.addEventListener('click', selectAllFiles);
+btnClearSelection.addEventListener('click', clearSelection);
 
 // ── Custom output directory ──
 const btnOutputDir    = document.getElementById('btn-output-dir');
@@ -1108,7 +1153,7 @@ btnCopyLog.addEventListener('click', async () => {
 document.getElementById('btn-empty-folders').addEventListener('click', addFoldersViaDialog);
 document.getElementById('btn-empty-files').addEventListener('click', addFilesViaDialog);
 
-btnProcessAll.addEventListener('click', () => {
+btnProcessSelection.addEventListener('click', () => {
   if (processing) cancelProcessing();
   else startProcessing();
 });

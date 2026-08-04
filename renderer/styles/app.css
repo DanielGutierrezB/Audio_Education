@@ -292,15 +292,19 @@ body {
 /* ── Settings panel ── */
 /* Categories live on a responsive grid: columns wrap into extra rows on
    narrow windows instead of forcing a sideways scroll (which quietly let
-   sliders and buttons bleed into the neighbouring column). The panel
-   itself caps its height and scrolls vertically so wrapped rows never
-   squeeze the queue out of view. */
+   sliders and buttons bleed into the neighbouring column). A tighter
+   min-column width lets more categories share a single row as the window
+   widens — on a typical desktop width all five collapse to one short row,
+   so the panel opens without its own scrollbar. The cap is generous
+   (72vh) so on any reasonably tall window the whole panel is visible at
+   once; it only scrolls on genuinely short windows, and the queue below
+   (which absorbs the remaining space) is what shrinks first. */
 .settings-panel {
   border-bottom: 1px solid var(--border);
   background: var(--bg-surface);
   padding: 14px 16px;
   flex-shrink: 0;
-  max-height: 48vh;
+  max-height: 72vh;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
@@ -310,8 +314,8 @@ body {
 
 .settings-categories {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 18px 28px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px 22px;
 }
 
 .settings-category {
@@ -324,7 +328,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-3);
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .settings-row {
@@ -332,8 +336,8 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 26px;
-  margin-bottom: 6px;
+  min-height: 24px;
+  margin-bottom: 5px;
 }
 
 .settings-row:last-child { margin-bottom: 0; }
@@ -425,6 +429,7 @@ body {
 /* ── Queue container ── */
 .queue-container {
   flex: 1;
+  min-height: 0; /* let the queue shrink (and scroll internally) instead of pushing the view past the window */
   overflow-y: auto;
   overflow-x: hidden;
   padding: 12px 14px;
@@ -435,17 +440,21 @@ body {
 .queue-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
 /* ── Empty state ── */
+/* min-height (not height) so the placeholder still centres in a tall queue
+   but is free to grow and scroll instead of clipping its last line when the
+   settings drawer is open and the queue area is short. */
 .queue-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100%;
-  gap: 8px;
+  min-height: 100%;
+  gap: 7px;
   text-align: center;
+  padding: 4px 0;
 }
 
-.queue-empty-icon { font-size: 44px; margin-bottom: 4px; opacity: 0.5; }
+.queue-empty-icon { font-size: 34px; margin-bottom: 2px; opacity: 0.5; }
 
 .queue-empty-title {
   font-size: 16px;
@@ -1117,3 +1126,39 @@ strong { font-weight: 600; color: var(--text); }
   display: block;
 }
 .spectrogram-image[hidden] { display: none; }
+
+/* ── Responsive density ──────────────────────────────────────────────
+   The whole app already lives inside a 100vh shell (html/body overflow
+   hidden), so the window itself never scrolls; these rules keep the
+   *inner* sections from needing their own scrollbars on smaller windows
+   by tightening spacing as vertical/horizontal room runs out. */
+
+/* Short windows: compress the settings drawer and the empty state so the
+   Processing view still fits without an internal scrollbar. */
+@media (max-height: 760px) {
+  .settings-panel { max-height: 66vh; padding: 11px 16px; }
+  .settings-cat-title { margin-bottom: 6px; }
+  .settings-row { min-height: 22px; margin-bottom: 4px; }
+  .settings-categories { gap: 11px 20px; }
+  .queue-empty { gap: 6px; }
+  .queue-empty-icon { font-size: 30px; }
+  .queue-empty-hint { margin-top: 2px; }
+  .about-container { padding: 20px 30px; }
+  .pipeline-diagram { padding: 12px 0; margin-bottom: 16px; }
+}
+
+@media (max-height: 620px) {
+  .settings-panel { max-height: 58vh; padding: 9px 16px; }
+  .settings-row { min-height: 20px; margin-bottom: 3px; }
+  .queue-empty-icon { font-size: 26px; }
+  .queue-empty-sub { font-size: 12px; }
+}
+
+/* Narrow windows: drop the settings grid to a single column (it scrolls
+   as one tidy list rather than squeezing controls sideways) and let the
+   toolbar breathe a little less. */
+@media (max-width: 620px) {
+  .settings-categories { grid-template-columns: 1fr; gap: 10px; }
+  .toolbar { padding: 8px 10px; gap: 5px 6px; }
+  .queue-container { padding: 10px 10px; }
+}

@@ -42,9 +42,9 @@
             title="Add individual audio files (or drag audio files onto the list)">
             <span class="btn-icon">+</span> Files
           </button>
-          <button class="btn btn-accent" id="btn-process-all" disabled
-            title="Process all queued files through the full pipeline">
-            &#9654; Process All
+          <button class="btn btn-accent" id="btn-process-selection" disabled
+            title="Process the selected files through the full pipeline">
+            &#9654; Process Selection
           </button>
           <button class="btn btn-secondary btn-output" id="btn-output-dir"
             title="Choose where processed files are saved. Default writes to Audio_Pro/ next to each source folder.">
@@ -61,6 +61,10 @@
           </select>
           <span class="toolbar-spacer"></span>
           <span class="queue-summary" id="queue-summary"></span>
+          <button class="btn btn-secondary btn-sm" id="btn-select-all" hidden
+            title="Select every file in the queue">Select all</button>
+          <button class="btn btn-secondary btn-sm" id="btn-clear-selection" hidden
+            title="Unselect all files (keeps them in the queue)">Clear selection</button>
           <button class="btn btn-secondary btn-sm" id="btn-remove-completed" hidden
             title="Remove completed files from the queue">Remove Done</button>
           <button class="btn btn-secondary btn-sm" id="btn-clear-all" hidden
@@ -122,7 +126,7 @@
                 </label>
               </div>
               <div class="settings-row settings-row-note">
-                <span class="settings-note">For finer control use the EQ tab &mdash; every band edit auto-saves and overrides the base curve for <strong>Process All</strong>, no separate apply step.</span>
+                <span class="settings-note">For finer control use the EQ tab &mdash; every band edit auto-saves and overrides the base curve for <strong>Process Selection</strong>, no separate apply step.</span>
               </div>
             </div>
 
@@ -181,11 +185,11 @@
             <div class="settings-category">
               <div class="settings-cat-title">Adobe Enhance</div>
               <div class="settings-row settings-row-note">
-                <span class="settings-note">Embedded Enhance Speech &mdash; <strong>Process All</strong> uploads unpaired files to Adobe Podcast first, saves the clean voice to <code>Enhanced/</code> next to each original, then fuses and masters. Originals are never modified. Files that already have an <code>Enhanced/</code> pair skip the upload (no credits spent twice).</span>
+                <span class="settings-note">Embedded Enhance Speech &mdash; <strong>Process Selection</strong> uploads unpaired files to Adobe Podcast first, saves the clean voice to <code>Enhanced/</code> next to each original, then fuses and masters. Originals are never modified. Files that already have an <code>Enhanced/</code> pair skip the upload (no credits spent twice).</span>
               </div>
               <div class="settings-row">
                 <label class="settings-label" for="set-enhance-enabled"
-                  title="When on, Process All runs unpaired files through Adobe Podcast Enhance Speech automatically (5 in parallel, waits out credit limits) before fusing and mastering. Requires connecting your Adobe account below.">
+                  title="When on, Process Selection runs unpaired files through Adobe Podcast Enhance Speech automatically (5 in parallel, waits out credit limits) before fusing and mastering. Requires connecting your Adobe account below.">
                   Enhance with Adobe
                 </label>
                 <label class="toggle">
@@ -323,7 +327,7 @@
 
           <div class="eq-canvas-wrap">
             <canvas id="eq-canvas" width="980" height="380"></canvas>
-            <div class="eq-status" id="eq-status">EQ for batch: <span id="eq-status-value" class="eq-status-off">base — pipeline will use the built-in EQ when you Process All</span></div>
+            <div class="eq-status" id="eq-status">EQ for batch: <span id="eq-status-value" class="eq-status-off">base — pipeline will use the built-in EQ when you Process Selection</span></div>
             <div class="eq-readout" id="eq-readout">Click and drag a band — scroll to change Q</div>
           </div>
 
@@ -399,7 +403,7 @@
               <div class="step-number">3</div>
               <div class="step-body">
                 <h3>Embedded Enhance &middot; the whole process in one click</h3>
-                <p>Turn on <strong>Enhance with Adobe</strong> in Settings, connect your Adobe account once (the session is stored encrypted and refreshes silently), and drop just the raw takes. <strong>Process All</strong> uploads each unpaired file to Adobe Podcast Enhance Speech &mdash; 5 in parallel, pausing with a countdown when credits run out and resuming on its own &mdash; saves the 100% clean voice to <code>Enhanced/</code> next to the original (plus an optional <code>Enhanced/Mix N/</code> dry/wet blend at the "Clean voice mix" percentage), then continues as Mode 2. Originals are never modified, and files that already have an <code>Enhanced/</code> pair never re-upload, so no credits are spent twice.</p>
+                <p>Turn on <strong>Enhance with Adobe</strong> in Settings, connect your Adobe account once (the session is stored encrypted and refreshes silently), and drop just the raw takes. <strong>Process Selection</strong> uploads each unpaired file to Adobe Podcast Enhance Speech &mdash; 5 in parallel, pausing with a countdown when credits run out and resuming on its own &mdash; saves the 100% clean voice to <code>Enhanced/</code> next to the original (plus an optional <code>Enhanced/Mix N/</code> dry/wet blend at the "Clean voice mix" percentage), then continues as Mode 2. Originals are never modified, and files that already have an <code>Enhanced/</code> pair never re-upload, so no credits are spent twice.</p>
               </div>
             </div>
           </div>
@@ -443,7 +447,7 @@
               <div class="step-number">5</div>
               <div class="step-body">
                 <h3>EQ editor</h3>
-                <p>Open the EQ tab, pick a source file from the dropdown, hit Play and drag bands in real time (shift-click a band to disable it, scroll to change its Q). Every band change auto-saves &mdash; when you go back to Processing and hit <strong>Process All</strong>, the pipeline uses whatever curve the editor is currently showing. <strong>Reset</strong> returns to the base EQ; <strong>Bypass</strong> A/Bs the preview level-matched to the current curve (a make-up gain measured on that file&rsquo;s own spectrum cancels the average loudness the EQ adds, so the A/B judges tone, not volume). Mode 2 pairs add an <strong>Original / Enhanced / Fusion</strong> switch to compare the three raw candidate signals &mdash; each one still plays through the same live EQ curve you're editing, so you're choosing the best starting point, not toggling the EQ on and off.</p>
+                <p>Open the EQ tab, pick a source file from the dropdown, hit Play and drag bands in real time (shift-click a band to disable it, scroll to change its Q). Every band change auto-saves &mdash; when you go back to Processing and hit <strong>Process Selection</strong>, the pipeline uses whatever curve the editor is currently showing. <strong>Reset</strong> returns to the base EQ; <strong>Bypass</strong> A/Bs the preview level-matched to the current curve (a make-up gain measured on that file&rsquo;s own spectrum cancels the average loudness the EQ adds, so the A/B judges tone, not volume). Mode 2 pairs add an <strong>Original / Enhanced / Fusion</strong> switch to compare the three raw candidate signals &mdash; each one still plays through the same live EQ curve you're editing, so you're choosing the best starting point, not toggling the EQ on and off.</p>
               </div>
             </div>
 

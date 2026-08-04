@@ -8,7 +8,7 @@
 // Web Audio routes the file through a BiquadFilterNode chain in real time
 // so the user hears the EQ as they edit. Every change auto-saves (debounced,
 // see scheduleAutoSave/persistEqState below) as an FFmpeg filter string that
-// the pipeline honours on Process All — there's no separate "apply" step.
+// the pipeline honours on Process Selection — there's no separate "apply" step.
 
 (function () {
 
@@ -629,7 +629,7 @@
   }
 
   // ── Auto-save (debounced) ──
-  // Every band tweak persists the manual chain immediately so "Process All"
+  // Every band tweak persists the manual chain immediately so "Process Selection"
   // always reflects what the user is hearing in the editor. When the bands
   // match the built-in defaults, manualEqApply is set to false so the
   // pipeline uses its base EQ path (semantically the same audio, less
@@ -879,10 +879,10 @@
   }
   function updateStatus() {
     if (manualEqApply) {
-      statusVal.textContent = 'custom — your EQ will be applied when you Process All';
+      statusVal.textContent = 'custom — your EQ will be applied when you Process Selection';
       statusVal.className = 'eq-status-on';
     } else {
-      statusVal.textContent = 'base — pipeline will use the built-in EQ when you Process All';
+      statusVal.textContent = 'base — pipeline will use the built-in EQ when you Process Selection';
       statusVal.className = 'eq-status-off';
     }
   }

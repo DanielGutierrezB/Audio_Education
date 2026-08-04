@@ -18,6 +18,7 @@
             <span class="tab-badge" id="badge-done" hidden></span>
           </button>
           <button class="tab" data-tab="eq" role="tab" aria-selected="false">EQ</button>
+          <button class="tab" data-tab="history" role="tab" aria-selected="false">History</button>
           <button class="tab" data-tab="about" role="tab" aria-selected="false">About</button>
         </nav>
       </div>
@@ -480,6 +481,21 @@
             <p class="text-muted">Built for Platzi &mdash; educational audio at scale.</p>
           </div>
         </div>
+      </section>
+
+      <!-- History view -->
+      <section class="view" id="view-history" role="tabpanel" hidden>
+        <div class="history-toolbar">
+          <span class="history-title">Render history</span>
+          <span class="history-count" id="history-count"></span>
+          <span class="toolbar-spacer"></span>
+          <button class="btn btn-secondary btn-sm" id="btn-clear-history" hidden
+            title="Remove every entry from the render history">Clear history</button>
+        </div>
+        <div class="history-empty" id="history-empty">
+          <p>No renders yet. Processed files show up here &mdash; with their QC tags and a shortcut to open each file's location.</p>
+        </div>
+        <div class="history-list" id="history-list" hidden></div>
       </section>
 
     </main>

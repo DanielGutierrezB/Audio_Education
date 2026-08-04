@@ -36,6 +36,11 @@ contextBridge.exposeInMainWorld('api', {
   qc: {
     saveReport: (fileSummaries) => ipcRenderer.invoke('qc:saveReport', fileSummaries),
   },
+  history: {
+    add: (record) => ipcRenderer.invoke('history:add', record),
+    list: () => ipcRenderer.invoke('history:list'),
+    clear: () => ipcRenderer.invoke('history:clear'),
+  },
   adobe: {
     status: () => ipcRenderer.invoke('adobe:status'),
     connect: () => ipcRenderer.invoke('adobe:connect'),

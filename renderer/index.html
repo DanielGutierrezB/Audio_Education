@@ -117,14 +117,12 @@
                 </div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="set-deesser"
-                  title="Force the dynamic de-esser on for every file. It already auto-engages when the SIBILANT flag fires.">
-                  De-esser (force on)
-                </label>
-                <label class="toggle">
-                  <input type="checkbox" id="set-deesser">
-                  <span class="toggle-track"></span>
-                </label>
+                <span class="settings-label"
+                  title="De-esser dinámico sobre la sibilancia (~6.5 kHz). 0% = off. Aun en 0% se auto-activa si se detecta el flag SIBILANT.">De-esser</span>
+                <div class="range-row">
+                  <input type="range" id="set-deesser" min="0" max="100" step="5" value="0" aria-label="De-esser amount">
+                  <span class="range-value" id="deesser-value">0%</span>
+                </div>
               </div>
               <div class="settings-row settings-row-note">
                 <span class="settings-note">For finer control use the EQ tab &mdash; every band edit auto-saves and overrides the base curve for <strong>Process Selection</strong>, no separate apply step.</span>
@@ -155,14 +153,12 @@
                 </div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="set-air-extra"
-                  title="Extra harmonic excitement (aexciter) on top of the air shelf. Off by default — validate by ear before enabling per source.">
-                  Presence extra
-                </label>
-                <label class="toggle">
-                  <input type="checkbox" id="set-air-extra">
-                  <span class="toggle-track"></span>
-                </label>
+                <span class="settings-label"
+                  title="Exciter armónico (aexciter) encima del air shelf. 0% = off. Valida a oído antes de subirlo por fuente.">Presence extra</span>
+                <div class="range-row">
+                  <input type="range" id="set-air-extra" min="0" max="100" step="5" value="0" aria-label="Presence extra amount">
+                  <span class="range-value" id="air-extra-value">0%</span>
+                </div>
               </div>
               <div class="settings-row">
                 <label class="settings-label" for="set-trim-silence"
@@ -342,13 +338,15 @@
             </div>
             <div class="eq-strip-ctrl">
               <label class="eq-strip-label" for="eq-air-extra"
-                title="Exciter armónico — brillo/aire extra encima de la EQ.">Presence extra</label>
-              <input type="checkbox" id="eq-air-extra">
+                title="Exciter armónico — brillo/aire extra encima de la EQ. 0% = off.">Presence extra</label>
+              <input type="range" id="eq-air-extra" min="0" max="100" step="5" value="0" aria-label="Presence extra amount">
+              <span class="range-value" id="eq-air-extra-value">0%</span>
             </div>
             <div class="eq-strip-ctrl">
               <label class="eq-strip-label" for="eq-deesser"
-                title="De-esser dinámico sobre la banda de sibilancia (~6.5 kHz).">De-esser</label>
-              <input type="checkbox" id="eq-deesser">
+                title="De-esser dinámico sobre la banda de sibilancia (~6.5 kHz). 0% = off.">De-esser</label>
+              <input type="range" id="eq-deesser" min="0" max="100" step="5" value="0" aria-label="De-esser amount">
+              <span class="range-value" id="eq-deesser-value">0%</span>
             </div>
             <span class="toolbar-spacer"></span>
             <span class="eq-strip-note" title="El preview de Web Audio es una aproximación (como el GUI de un plugin); el máster final lo renderiza ffmpeg.">preview aprox. · máster = ffmpeg</span>

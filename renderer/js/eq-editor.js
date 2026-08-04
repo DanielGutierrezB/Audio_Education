@@ -307,8 +307,10 @@
   const tabEq       = document.querySelector('[data-tab="eq"]');
   const bodySlider  = document.getElementById('eq-body');
   const bodyValueEl = document.getElementById('eq-body-value');
-  const airExtraChk = document.getElementById('eq-air-extra');
-  const deEsserChk  = document.getElementById('eq-deesser');
+  const airSlider   = document.getElementById('eq-air-extra');
+  const airValueEl  = document.getElementById('eq-air-extra-value');
+  const deSlider    = document.getElementById('eq-deesser');
+  const deValueEl   = document.getElementById('eq-deesser-value');
 
   // ── Coordinate helpers ──
   function plotArea() {
@@ -342,16 +344,16 @@
   // so it never colours the EQ-only preview unless engaged. Values persist
   // to the same store keys the pipeline reads (bodyPct / airExtraEnabled /
   // deEsserEnabled), keeping one source of truth with the Settings panel.
-  let procBodyPct = 0, procAirExtra = false, procDeEsser = false;
+  let procBodyPct = 0, procAirAmount = 0, procDeAmount = 0;
   let bodyComp = null, bodyMakeup = null, bodyWetGain = null;
   let exWetGain = null;
-  let deBypassGain = null, deLowGain = null, deHighGain = null;
+  let deBypassGain = null, deLowGain = null, deHighGain = null, deComp = null;
 
-  const BODY_MAKEUP_DB = 8;    // matches the pipeline's parallel-comp makeup
-  const EXCITER_BLEND  = 0.3;  // matches aexciter blend=0.3
-  const EXCITER_FREQ   = 7500;
-  const EXCITER_CEIL   = 15000;
-  const DEESS_FREQ     = 6500;
+  const BODY_MAKEUP_DB   = 8;    // matches the pipeline's parallel-comp makeup
+  const EXCITER_BLEND_MAX = 0.6; // wet blend of the saturated highs at 100%
+  const EXCITER_FREQ     = 7500;
+  const EXCITER_CEIL     = 15000;
+  const DEESS_FREQ       = 6500;
 
   function ensureAudio() {
     if (audioCtx) return;
@@ -443,7 +445,7 @@
     const deLow = ctx.createBiquadFilter(); deLow.type = 'lowpass'; deLow.frequency.value = DEESS_FREQ; deLow.Q.value = 0.707;
     deLowGain = ctx.createGain(); deLowGain.gain.value = 0;
     const deHigh = ctx.createBiquadFilter(); deHigh.type = 'highpass'; deHigh.frequency.value = DEESS_FREQ; deHigh.Q.value = 0.707;
-    const deComp = ctx.createDynamicsCompressor();
+    deComp = ctx.createDynamicsCompressor();
     deComp.threshold.value = -30; deComp.knee.value = 3; deComp.ratio.value = 6; deComp.attack.value = 0.001; deComp.release.value = 0.05;
     deHighGain = ctx.createGain(); deHighGain.gain.value = 0;
     exOut.connect(deBypassGain); deBypassGain.connect(deOut);
@@ -454,12 +456,21 @@
   }
 
   function applyBodyToNodes()    { if (bodyWetGain) bodyWetGain.gain.value = Math.max(0, Math.min(50, procBodyPct)) / 100; }
-  function applyExciterToNodes() { if (exWetGain)   exWetGain.gain.value = procAirExtra ? EXCITER_BLEND : 0; }
+  function applyExciterToNodes() {
+    if (exWetGain) exWetGain.gain.value = Math.max(0, Math.min(100, procAirAmount)) / 100 * EXCITER_BLEND_MAX;
+  }
   function applyDeesserToNodes() {
     if (!deBypassGain) return;
-    deBypassGain.gain.value = procDeEsser ? 0 : 1;
-    deLowGain.gain.value    = procDeEsser ? 1 : 0;
-    deHighGain.gain.value   = procDeEsser ? 1 : 0;
+    const on = procDeAmount > 0;
+    deBypassGain.gain.value = on ? 0 : 1;   // pure pass-through when off
+    deLowGain.gain.value    = on ? 1 : 0;
+    deHighGain.gain.value   = on ? 1 : 0;
+    if (on && deComp) {
+      // More intensity → lower threshold (catches more sibilance) + harder ratio.
+      const f = Math.max(0, Math.min(100, procDeAmount)) / 100;
+      deComp.threshold.value = -14 - f * 22; // -14 → -36 dB
+      deComp.ratio.value     = 4 + f * 6;    // 4 → 10
+    }
   }
   function applyProcToNodes() { applyBodyToNodes(); applyExciterToNodes(); applyDeesserToNodes(); }
 
@@ -469,20 +480,24 @@
   async function loadProcessingControls() {
     if (window.api?.store) {
       try {
-        const [bp, ae, de] = await Promise.all([
+        const [bp, aAmt, aOn, dAmt, dOn] = await Promise.all([
           window.api.store.get('bodyPct'),
+          window.api.store.get('airExtraAmount'),
           window.api.store.get('airExtraEnabled'),
+          window.api.store.get('deEsserAmount'),
           window.api.store.get('deEsserEnabled'),
         ]);
-        procBodyPct  = typeof bp === 'number' ? bp : 0;
-        procAirExtra = ae === true;
-        procDeEsser  = de === true;
+        procBodyPct   = typeof bp === 'number' ? bp : 0;
+        procAirAmount = typeof aAmt === 'number' ? aAmt : (aOn === true ? 60 : 0);
+        procDeAmount  = typeof dAmt === 'number' ? dAmt : (dOn === true ? 60 : 0);
       } catch { /* ignore — keep current */ }
     }
     if (bodySlider)  bodySlider.value = String(procBodyPct);
     if (bodyValueEl) bodyValueEl.textContent = `${procBodyPct}%`;
-    if (airExtraChk) airExtraChk.checked = procAirExtra;
-    if (deEsserChk)  deEsserChk.checked = procDeEsser;
+    if (airSlider)   airSlider.value = String(procAirAmount);
+    if (airValueEl)  airValueEl.textContent = `${procAirAmount}%`;
+    if (deSlider)    deSlider.value = String(procDeAmount);
+    if (deValueEl)   deValueEl.textContent = `${procDeAmount}%`;
     applyProcToNodes();
   }
   function applyBandToNode(b, n) {
@@ -1033,17 +1048,21 @@
     const sb = document.getElementById('set-body'); if (sb) sb.value = String(procBodyPct);
     const sbv = document.getElementById('body-value'); if (sbv) sbv.textContent = `${procBodyPct}%`;
   });
-  if (airExtraChk) airExtraChk.addEventListener('change', () => {
-    procAirExtra = airExtraChk.checked;
+  if (airSlider) airSlider.addEventListener('input', () => {
+    procAirAmount = parseInt(airSlider.value, 10) || 0;
+    if (airValueEl) airValueEl.textContent = `${procAirAmount}%`;
     applyExciterToNodes();
-    if (window.api?.store) window.api.store.set('airExtraEnabled', procAirExtra);
-    const se = document.getElementById('set-air-extra'); if (se) se.checked = procAirExtra;
+    if (window.api?.store) window.api.store.set('airExtraAmount', procAirAmount);
+    const se = document.getElementById('set-air-extra'); if (se) se.value = String(procAirAmount);
+    const sev = document.getElementById('air-extra-value'); if (sev) sev.textContent = `${procAirAmount}%`;
   });
-  if (deEsserChk) deEsserChk.addEventListener('change', () => {
-    procDeEsser = deEsserChk.checked;
+  if (deSlider) deSlider.addEventListener('input', () => {
+    procDeAmount = parseInt(deSlider.value, 10) || 0;
+    if (deValueEl) deValueEl.textContent = `${procDeAmount}%`;
     applyDeesserToNodes();
-    if (window.api?.store) window.api.store.set('deEsserEnabled', procDeEsser);
-    const sd = document.getElementById('set-deesser'); if (sd) sd.checked = procDeEsser;
+    if (window.api?.store) window.api.store.set('deEsserAmount', procDeAmount);
+    const sd = document.getElementById('set-deesser'); if (sd) sd.value = String(procDeAmount);
+    const sdv = document.getElementById('deesser-value'); if (sdv) sdv.textContent = `${procDeAmount}%`;
   });
   window.addEventListener('audiopro:queue-changed', refreshFileSelect);
   refreshFileSelect();

@@ -1118,6 +1118,8 @@ const setDenoise       = document.getElementById('set-denoise');
 const setBody          = document.getElementById('set-body');
 const bodyValue        = document.getElementById('body-value');
 const setAirExtra      = document.getElementById('set-air-extra');
+const airExtraValue    = document.getElementById('air-extra-value');
+const deesserValue     = document.getElementById('deesser-value');
 const setTrimSilence   = document.getElementById('set-trim-silence');
 const setNormalize     = document.getElementById('set-normalize');
 const setFusionEnabled = document.getElementById('set-fusion-enabled');
@@ -1143,7 +1145,9 @@ btnSettings.addEventListener('click', () => {
 function applySettingsUI(p) {
   setHpf.value = p.hpfFrequency ?? 80;
   hpfValue.textContent = `${setHpf.value} Hz`;
-  setDeEsser.checked = p.deEsserEnabled === true;
+  const deAmt = p.deEsserAmount != null ? p.deEsserAmount : (p.deEsserEnabled ? 60 : 0);
+  setDeEsser.value = deAmt;
+  if (deesserValue) deesserValue.textContent = `${deAmt}%`;
   setFormat.value = p.outputFormat ?? 'wav24';
   setSampleRate.value = String(p.sampleRate ?? 48000);
   applyOutputDirUI(p.customOutputDir || '');
@@ -1153,7 +1157,9 @@ function applySettingsUI(p) {
   setDenoise.value = p.denoiseMode ?? 'auto';
   setBody.value = p.bodyPct ?? 0;
   bodyValue.textContent = `${setBody.value}%`;
-  setAirExtra.checked = p.airExtraEnabled === true;
+  const airAmt = p.airExtraAmount != null ? p.airExtraAmount : (p.airExtraEnabled ? 60 : 0);
+  setAirExtra.value = airAmt;
+  if (airExtraValue) airExtraValue.textContent = `${airAmt}%`;
   setTrimSilence.checked = p.trimSilence !== false;
   setNormalize.value = p.normalizeMode ?? 'both';
   setFusionEnabled.checked = p.fusionEnabled !== false;
@@ -1178,7 +1184,11 @@ setHpf.addEventListener('input', () => {
   savePref('hpfFrequency', v);
 });
 
-setDeEsser.addEventListener('change', () => savePref('deEsserEnabled', setDeEsser.checked));
+setDeEsser.addEventListener('input', () => {
+  const v = parseInt(setDeEsser.value) || 0;
+  if (deesserValue) deesserValue.textContent = `${v}%`;
+  savePref('deEsserAmount', v);
+});
 setFormat.addEventListener('change', () => savePref('outputFormat', setFormat.value));
 setSampleRate.addEventListener('change', () => savePref('sampleRate', parseInt(setSampleRate.value)));
 
@@ -1190,7 +1200,11 @@ setBody.addEventListener('input', () => {
   bodyValue.textContent = `${v}%`;
   savePref('bodyPct', v);
 });
-setAirExtra.addEventListener('change', () => savePref('airExtraEnabled', setAirExtra.checked));
+setAirExtra.addEventListener('input', () => {
+  const v = parseInt(setAirExtra.value) || 0;
+  if (airExtraValue) airExtraValue.textContent = `${v}%`;
+  savePref('airExtraAmount', v);
+});
 setTrimSilence.addEventListener('change', () => savePref('trimSilence', setTrimSilence.checked));
 setNormalize.addEventListener('change', () => savePref('normalizeMode', setNormalize.value));
 setFusionEnabled.addEventListener('change', () => savePref('fusionEnabled', setFusionEnabled.checked));

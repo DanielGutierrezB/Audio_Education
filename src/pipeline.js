@@ -113,14 +113,28 @@ function buildLevelerChain(qc, settings) {
   return 'acompressor=threshold=-24dB:ratio=3:attack=15:release=250:makeup=3:knee=6';
 }
 
+function clampPct(v) { return Math.max(0, Math.min(100, Number(v) || 0)); }
+
+// De-esser and exciter are now intensity-driven (0–100%). The old on/off
+// flags are honoured as a fallback (≈60%) so existing settings keep working.
 function buildDeesserChain(qc, settings) {
-  if (!settings.deEsserEnabled && !hasFlag(qc, 'SIBILANT')) return null;
-  return 'adynamicequalizer=dfrequency=6500:dqfactor=1.5:tfrequency=6500:tqfactor=1.5:threshold=15:ratio=6:range=18:mode=0';
+  let amt = settings.deEsserAmount != null ? clampPct(settings.deEsserAmount) : (settings.deEsserEnabled ? 60 : 0);
+  // Still auto-engage on measured sibilance even if the user left it at 0.
+  if (amt <= 0 && hasFlag(qc, 'SIBILANT')) amt = 50;
+  if (amt <= 0) return null;
+  const f = amt / 100;
+  const range = (f * 24).toFixed(1);          // up to 24 dB max reduction
+  const threshold = (20 - f * 12).toFixed(1); // 20 (gentle) → 8 dB (sensitive)
+  return `adynamicequalizer=dfrequency=6500:dqfactor=1.5:tfrequency=6500:tqfactor=1.5:threshold=${threshold}:ratio=6:range=${range}:mode=0`;
 }
 
 function buildExciterChain(settings) {
-  if (!settings.airExtraEnabled) return null;
-  return 'aexciter=amount=1.2:drive=6:blend=0.3:freq=7500:ceil=15000';
+  const amt = settings.airExtraAmount != null ? clampPct(settings.airExtraAmount) : (settings.airExtraEnabled ? 60 : 0);
+  if (amt <= 0) return null;
+  const f = amt / 100;
+  const amount = (f * 2).toFixed(2);  // 0 → 2
+  const blend  = (f * 0.5).toFixed(2); // 0 → 0.5
+  return `aexciter=amount=${amount}:drive=6:blend=${blend}:freq=7500:ceil=15000`;
 }
 
 function buildOutputCodecArgs(settings) {

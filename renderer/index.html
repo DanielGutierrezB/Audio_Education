@@ -332,6 +332,28 @@
             <div class="eq-readout" id="eq-readout">Click and drag a band — scroll to change Q</div>
           </div>
 
+          <div class="eq-strip" id="eq-strip">
+            <span class="eq-strip-title">Cadena en vivo</span>
+            <div class="eq-strip-ctrl">
+              <label class="eq-strip-label" for="eq-body"
+                title="Compresión paralela ('New York') mezclada bajo la señal seca — densidad/pecho sin aplastar transientes.">Body</label>
+              <input type="range" id="eq-body" min="0" max="50" step="5" value="0" aria-label="Body amount">
+              <span class="range-value" id="eq-body-value">0%</span>
+            </div>
+            <div class="eq-strip-ctrl">
+              <label class="eq-strip-label" for="eq-air-extra"
+                title="Exciter armónico — brillo/aire extra encima de la EQ.">Presence extra</label>
+              <input type="checkbox" id="eq-air-extra">
+            </div>
+            <div class="eq-strip-ctrl">
+              <label class="eq-strip-label" for="eq-deesser"
+                title="De-esser dinámico sobre la banda de sibilancia (~6.5 kHz).">De-esser</label>
+              <input type="checkbox" id="eq-deesser">
+            </div>
+            <span class="toolbar-spacer"></span>
+            <span class="eq-strip-note" title="El preview de Web Audio es una aproximación (como el GUI de un plugin); el máster final lo renderiza ffmpeg.">preview aprox. · máster = ffmpeg</span>
+          </div>
+
         </div>
       </section>
 

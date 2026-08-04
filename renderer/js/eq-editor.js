@@ -305,6 +305,10 @@
   const statusVal   = document.getElementById('eq-status-value');
   const readoutEl   = document.getElementById('eq-readout');
   const tabEq       = document.querySelector('[data-tab="eq"]');
+  const bodySlider  = document.getElementById('eq-body');
+  const bodyValueEl = document.getElementById('eq-body-value');
+  const airExtraChk = document.getElementById('eq-air-extra');
+  const deEsserChk  = document.getElementById('eq-deesser');
 
   // ── Coordinate helpers ──
   function plotArea() {
@@ -327,6 +331,27 @@
   // ── Audio (single, fixed topology — bypass swaps gains) ──
   let audioCtx = null, audioEl = null, sourceNode = null;
   let filterNodes = [], makeupGain = null, wetGain = null, dryGain = null;
+
+  // ── Live "channel strip" after the EQ chain (Body / Presence extra /
+  // De-esser) ──────────────────────────────────────────────────────────
+  // These mirror the pipeline's tone/dynamics stages using Web Audio nodes
+  // so the user can audition them in real time. They're APPROXIMATIONS
+  // (DynamicsCompressor ≠ ffmpeg acompressor, WaveShaper ≠ aexciter) — the
+  // final render is still done by src/pipeline.js. Each stage is transparent
+  // at its "off" default (0% body / exciter blend 0 / de-esser bypassed),
+  // so it never colours the EQ-only preview unless engaged. Values persist
+  // to the same store keys the pipeline reads (bodyPct / airExtraEnabled /
+  // deEsserEnabled), keeping one source of truth with the Settings panel.
+  let procBodyPct = 0, procAirExtra = false, procDeEsser = false;
+  let bodyComp = null, bodyMakeup = null, bodyWetGain = null;
+  let exWetGain = null;
+  let deBypassGain = null, deLowGain = null, deHighGain = null;
+
+  const BODY_MAKEUP_DB = 8;    // matches the pipeline's parallel-comp makeup
+  const EXCITER_BLEND  = 0.3;  // matches aexciter blend=0.3
+  const EXCITER_FREQ   = 7500;
+  const EXCITER_CEIL   = 15000;
+  const DEESS_FREQ     = 6500;
 
   function ensureAudio() {
     if (audioCtx) return;
@@ -360,13 +385,105 @@
     makeupGain = audioCtx.createGain();
     wetGain = audioCtx.createGain();
     dryGain = audioCtx.createGain();
-    filterNodes[filterNodes.length - 1].connect(makeupGain);
+    // EQ chain → [Body → Presence extra → De-esser] → make-up → wet bus.
+    const procOut = buildProcessingStages(filterNodes[filterNodes.length - 1]);
+    procOut.connect(makeupGain);
     makeupGain.connect(wetGain);
     sourceNode.connect(dryGain);
     wetGain.connect(audioCtx.destination);
     dryGain.connect(audioCtx.destination);
     applyBypass();
+    applyProcToNodes();
     updateGainCompensation();
+  }
+
+  // Soft-saturation transfer curve for the exciter (tanh, normalized).
+  function makeSaturationCurve(drive) {
+    const n = 1024;
+    const curve = new Float32Array(n);
+    const k = Math.tanh(drive) || 1;
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * 2 - 1;
+      curve[i] = Math.tanh(drive * x) / k;
+    }
+    return curve;
+  }
+
+  // Builds the three post-EQ stages as parallel sub-graphs gated by gain
+  // nodes (so each is transparent when off) and returns the final output
+  // node. Node refs are stored module-wide for live parameter updates.
+  function buildProcessingStages(input) {
+    const ctx = audioCtx;
+
+    // ── Body: parallel ("New York") compression ──
+    const bodyOut  = ctx.createGain();
+    const bodyDry  = ctx.createGain(); bodyDry.gain.value = 1;
+    bodyComp = ctx.createDynamicsCompressor();
+    bodyComp.threshold.value = -28; bodyComp.knee.value = 6; bodyComp.ratio.value = 6;
+    bodyComp.attack.value = 0.008; bodyComp.release.value = 0.28;
+    bodyMakeup = ctx.createGain(); bodyMakeup.gain.value = Math.pow(10, BODY_MAKEUP_DB / 20);
+    bodyWetGain = ctx.createGain(); bodyWetGain.gain.value = 0;
+    input.connect(bodyDry); bodyDry.connect(bodyOut);
+    input.connect(bodyComp); bodyComp.connect(bodyMakeup); bodyMakeup.connect(bodyWetGain); bodyWetGain.connect(bodyOut);
+
+    // ── Presence extra: high-band saturation blended on top ──
+    const exOut = ctx.createGain();
+    const exDry = ctx.createGain(); exDry.gain.value = 1;
+    const exHp  = ctx.createBiquadFilter(); exHp.type = 'highpass'; exHp.frequency.value = EXCITER_FREQ; exHp.Q.value = 0.707;
+    const exSh  = ctx.createWaveShaper(); exSh.curve = makeSaturationCurve(6); exSh.oversample = '2x';
+    const exLp  = ctx.createBiquadFilter(); exLp.type = 'lowpass'; exLp.frequency.value = EXCITER_CEIL; exLp.Q.value = 0.707;
+    exWetGain = ctx.createGain(); exWetGain.gain.value = 0;
+    bodyOut.connect(exDry); exDry.connect(exOut);
+    bodyOut.connect(exHp); exHp.connect(exSh); exSh.connect(exLp); exLp.connect(exWetGain); exWetGain.connect(exOut);
+
+    // ── De-esser: split-band dynamic (bypassed when off, so no crossover
+    // colouration unless engaged) ──
+    const deOut = ctx.createGain();
+    deBypassGain = ctx.createGain(); deBypassGain.gain.value = 1;
+    const deLow = ctx.createBiquadFilter(); deLow.type = 'lowpass'; deLow.frequency.value = DEESS_FREQ; deLow.Q.value = 0.707;
+    deLowGain = ctx.createGain(); deLowGain.gain.value = 0;
+    const deHigh = ctx.createBiquadFilter(); deHigh.type = 'highpass'; deHigh.frequency.value = DEESS_FREQ; deHigh.Q.value = 0.707;
+    const deComp = ctx.createDynamicsCompressor();
+    deComp.threshold.value = -30; deComp.knee.value = 3; deComp.ratio.value = 6; deComp.attack.value = 0.001; deComp.release.value = 0.05;
+    deHighGain = ctx.createGain(); deHighGain.gain.value = 0;
+    exOut.connect(deBypassGain); deBypassGain.connect(deOut);
+    exOut.connect(deLow); deLow.connect(deLowGain); deLowGain.connect(deOut);
+    exOut.connect(deHigh); deHigh.connect(deComp); deComp.connect(deHighGain); deHighGain.connect(deOut);
+
+    return deOut;
+  }
+
+  function applyBodyToNodes()    { if (bodyWetGain) bodyWetGain.gain.value = Math.max(0, Math.min(50, procBodyPct)) / 100; }
+  function applyExciterToNodes() { if (exWetGain)   exWetGain.gain.value = procAirExtra ? EXCITER_BLEND : 0; }
+  function applyDeesserToNodes() {
+    if (!deBypassGain) return;
+    deBypassGain.gain.value = procDeEsser ? 0 : 1;
+    deLowGain.gain.value    = procDeEsser ? 1 : 0;
+    deHighGain.gain.value   = procDeEsser ? 1 : 0;
+  }
+  function applyProcToNodes() { applyBodyToNodes(); applyExciterToNodes(); applyDeesserToNodes(); }
+
+  // Load the three values from the shared store and reflect them in the UI
+  // + live nodes. Called on init and whenever the EQ tab is opened, so it
+  // stays in sync with changes made in the Settings panel.
+  async function loadProcessingControls() {
+    if (window.api?.store) {
+      try {
+        const [bp, ae, de] = await Promise.all([
+          window.api.store.get('bodyPct'),
+          window.api.store.get('airExtraEnabled'),
+          window.api.store.get('deEsserEnabled'),
+        ]);
+        procBodyPct  = typeof bp === 'number' ? bp : 0;
+        procAirExtra = ae === true;
+        procDeEsser  = de === true;
+      } catch { /* ignore — keep current */ }
+    }
+    if (bodySlider)  bodySlider.value = String(procBodyPct);
+    if (bodyValueEl) bodyValueEl.textContent = `${procBodyPct}%`;
+    if (airExtraChk) airExtraChk.checked = procAirExtra;
+    if (deEsserChk)  deEsserChk.checked = procDeEsser;
+    applyProcToNodes();
   }
   function applyBandToNode(b, n) {
     if (n.type !== b.type) n.type = b.type;
@@ -897,13 +1014,37 @@
       updateStatus();
     } catch { /* ignore */ }
   })();
+  loadProcessingControls();
 
   if (tabEq) {
     tabEq.addEventListener('click', () => {
       refreshFileSelect();
+      loadProcessingControls();
       requestAnimationFrame(drawCurve);
     });
   }
+
+  // ── Live channel-strip controls (Body / Presence extra / De-esser) ──
+  if (bodySlider) bodySlider.addEventListener('input', () => {
+    procBodyPct = parseInt(bodySlider.value, 10) || 0;
+    if (bodyValueEl) bodyValueEl.textContent = `${procBodyPct}%`;
+    applyBodyToNodes();
+    if (window.api?.store) window.api.store.set('bodyPct', procBodyPct);
+    const sb = document.getElementById('set-body'); if (sb) sb.value = String(procBodyPct);
+    const sbv = document.getElementById('body-value'); if (sbv) sbv.textContent = `${procBodyPct}%`;
+  });
+  if (airExtraChk) airExtraChk.addEventListener('change', () => {
+    procAirExtra = airExtraChk.checked;
+    applyExciterToNodes();
+    if (window.api?.store) window.api.store.set('airExtraEnabled', procAirExtra);
+    const se = document.getElementById('set-air-extra'); if (se) se.checked = procAirExtra;
+  });
+  if (deEsserChk) deEsserChk.addEventListener('change', () => {
+    procDeEsser = deEsserChk.checked;
+    applyDeesserToNodes();
+    if (window.api?.store) window.api.store.set('deEsserEnabled', procDeEsser);
+    const sd = document.getElementById('set-deesser'); if (sd) sd.checked = procDeEsser;
+  });
   window.addEventListener('audiopro:queue-changed', refreshFileSelect);
   refreshFileSelect();
   fileSelect.addEventListener('change', onFileSelectionChanged);

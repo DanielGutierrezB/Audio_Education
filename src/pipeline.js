@@ -27,6 +27,32 @@ const EQ_PRESENCE = { f: 3589, q: 1.0, g: 1 };
 const EQ_AIR_SHELF = { f: 10000, g: 1.5 };
 const DEFAULT_HPF_HZ = 80;
 
+// ── Adaptive tilt correction ──
+// The cuts above are a fixed curve, so however dark a source arrives, it
+// leaves exactly that much darker. That is the remaining half of "Adobe gives
+// too much bass, it varies by voice": Adobe adds ~2.5 dB of relative low end,
+// but not the same amount every time, and different voices start from
+// different places. A shelf scaled to the measured tilt (src/metrics.js
+// tiltOf) pulls every source toward one balance instead.
+//
+// REFERENCE is the source tilt the fixed curve is calibrated against: the four
+// real classes measure 12.9-14.7 dB at this point in the chain (after Mode 2
+// fusion) and the curve takes them to a 10.2-11.7 dB master. A file arriving
+// at the reference therefore gets no extra shelf and renders exactly as the
+// validated chain did; everything else is pulled toward it.
+//
+// PER_DB is measured, not assumed: a low shelf at 300 Hz moves tilt by
+// 0.65 dB for every 1 dB of gain, linearly and consistently across all three
+// classes tested (15.1 -> 11.2 dB over a 6 dB shelf).
+const TONE_TILT_REFERENCE_DB = 14;
+const TONE_TILT_SHELF_HZ = 300;
+const TONE_TILT_DB_PER_SHELF_DB = 0.65;
+// Caps the shelf at a correction of roughly 4 dB of tilt in either direction.
+// Past that the source is not "a bit dark", it is a different problem (wrong
+// mic, proximity effect, a lowpassed take) that an EQ shelf should not paper
+// over.
+const TONE_TILT_MAX_SHELF_DB = 6;
+
 const DENOISE_WORKING_SR = 48000; // the bundled RNNoise model expects 48 kHz
 const HUM_NOTCH_WIDTH_Q = 24;
 const HUM_HARMONIC_MULT = 2;
@@ -36,10 +62,26 @@ const PAIR_DURATION_TOLERANCE_SEC = 0.5;
 function hasFlag(qc, code) { return qc != null && qc.flags.some(f => f.code === code); }
 function getFlag(qc, code) { return qc == null ? undefined : qc.flags.find(f => f.code === code); }
 
-function buildEqCutsChain(settings) {
+// Shelf gain that brings a source measured at `tilt` back to the reference,
+// or null when there is nothing to correct (no measurement, feature off, or
+// already within a rounding error of the target).
+function tiltShelfGainDb(qc, settings) {
+  if (settings.adaptiveToneEnabled === false) return null;
+  const tilt = qc?.tilt;
+  if (tilt == null) return null;
+  const target = settings.toneTiltTarget ?? TONE_TILT_REFERENCE_DB;
+  const excessDb = tilt - target;
+  const raw = -excessDb / TONE_TILT_DB_PER_SHELF_DB;
+  const gain = Math.max(-TONE_TILT_MAX_SHELF_DB, Math.min(TONE_TILT_MAX_SHELF_DB, raw));
+  return Math.abs(gain) < 0.2 ? null : gain;
+}
+
+function buildEqCutsChain(qc, settings) {
   const hpfF = settings.hpfFrequency ?? DEFAULT_HPF_HZ;
   const parts = [`highpass=f=${hpfF}:poles=2`];
   for (const b of EQ_CUTS) parts.push(`equalizer=f=${b.f}:width_type=q:width=${b.q}:g=${b.g}`);
+  const tiltGain = tiltShelfGainDb(qc, settings);
+  if (tiltGain != null) parts.push(`lowshelf=f=${TONE_TILT_SHELF_HZ}:g=${tiltGain.toFixed(2)}`);
   return parts.join(',');
 }
 
@@ -53,7 +95,7 @@ function buildToneChain(qc, settings) {
   if (settings.manualEqApply === true && typeof settings.manualEqChain === 'string' && settings.manualEqChain.trim()) {
     return { cuts: settings.manualEqChain.trim(), boosts: null };
   }
-  return { cuts: buildEqCutsChain(settings), boosts: buildEqBoostsChain(qc, settings) };
+  return { cuts: buildEqCutsChain(qc, settings), boosts: buildEqBoostsChain(qc, settings) };
 }
 
 // ── Conditional repair ──
@@ -105,12 +147,27 @@ function buildDenoiseSpec(qc, settings, mode) {
   };
 }
 
+// Gentle, voice-appropriate leveling — not a limiter. Evens out
+// sentence-to-sentence loudness swings before the final loudnorm pass.
+//
+// 2:1 rather than the 3:1 this used to run. Course audio arrives already
+// dense (the real corpus measures LRA 3.2-5.5 LU raw and 3.2-4.4 after Adobe
+// Podcast, which compresses on its own), and 3:1 on top of that took masters
+// down to 2.1-2.8 LU — flat enough that the output tripped the pipeline's own
+// FLAT_DYNAMICS detector. There is no range left to protect at that point,
+// only range left to lose.
+//
+// The skip threshold is LRA_LEVELER_SKIP rather than QC_THRESHOLDS.lraFlat:
+// FLAT_DYNAMICS answers "is this already squashed" for reporting, while this
+// answers "would compressing make it worse", and the second kicks in earlier.
+const LEVELER_SKIP_LRA = 4;
+
 function buildLevelerChain(qc, settings) {
   if (settings.compressionMode === 'off') return null;
   if (hasFlag(qc, 'FLAT_DYNAMICS')) return null;
-  // Gentle, voice-appropriate leveling — not a limiter. Evens out
-  // sentence-to-sentence loudness swings before the final loudnorm pass.
-  return 'acompressor=threshold=-24dB:ratio=3:attack=15:release=250:makeup=3:knee=6';
+  const lra = qc?.loudness?.lra;
+  if (lra != null && lra < LEVELER_SKIP_LRA) return null;
+  return 'acompressor=threshold=-24dB:ratio=2:attack=15:release=250:makeup=2:knee=6';
 }
 
 function clampPct(v) { return Math.max(0, Math.min(100, Number(v) || 0)); }
@@ -451,4 +508,9 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
   emit('batch:done', { total, done });
 }
 
-module.exports = { processQueue, buildDeesserChain, buildExciterChain };
+module.exports = {
+  processQueue,
+  buildDeesserChain, buildExciterChain, buildLevelerChain,
+  buildEqCutsChain, tiltShelfGainDb,
+  TONE_TILT_REFERENCE_DB, TONE_TILT_MAX_SHELF_DB, TONE_TILT_DB_PER_SHELF_DB,
+};

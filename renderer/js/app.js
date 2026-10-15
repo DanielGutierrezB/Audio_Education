@@ -488,6 +488,7 @@ function buildFileItem(file) {
 // docs/PLAN.md §1.4.
 const FLAG_SEVERITY = {
   CLIP: 'warn', HUM: 'warn', SIBILANT: 'warn', NOISY: 'warn', DC_OFFSET: 'warn',
+  PAIR_MISMATCH: 'warn', PAIR_REALIGNED: 'warn',
 };
 
 function renderFlagChips(container, flags) {

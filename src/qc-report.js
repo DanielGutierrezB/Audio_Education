@@ -12,7 +12,7 @@
 // Mirrors FLAG_SEVERITY in renderer/js/app.js — duplicated because the
 // renderer has no direct Node access across the context bridge (see the
 // AUDIO_EXTS comment there for the same situation).
-const WARN_FLAG_CODES = new Set(['CLIP', 'HUM', 'SIBILANT', 'NOISY', 'DC_OFFSET']);
+const WARN_FLAG_CODES = new Set(['CLIP', 'HUM', 'SIBILANT', 'NOISY', 'DC_OFFSET', 'PAIR_MISMATCH', 'PAIR_REALIGNED']);
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 

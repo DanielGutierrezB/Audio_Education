@@ -64,8 +64,9 @@ jobs:
       - name: Build macOS arm64 zip + pkg (publish to this repo's Releases on tags)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # electron-builder reads the certificate from these two. Empty when
-          # unconfigured, which is how it decides to skip signing.
+          # electron-builder reads the certificate and the notarization
+          # credentials from these. They are unset below when the secrets do
+          # not exist, which is what makes it skip signing.
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
           CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -73,6 +74,14 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          # A secret that does not exist arrives as an empty string, not as an
+          # absent variable, and electron-builder reads an empty CSC_LINK as a
+          # path to resolve rather than as "no certificate". Unset them so an
+          # unsigned build looks to it like one that was never configured.
+          for v in CSC_LINK CSC_KEY_PASSWORD APPLE_ID \
+                   APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!v}" ]; then unset "$v"; fi
+          done
           # Notarization is off in package.json and turned on here, so a local
           # `npm run build` never waits on Apple for a build nobody ships.
           args=()

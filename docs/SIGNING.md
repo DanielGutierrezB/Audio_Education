@@ -1,9 +1,14 @@
 # Signing and notarizing the macOS build
 
 Everything in the repo is ready for this. What is missing is an Apple
-Developer account, which costs USD 99/year and is a decision rather than a
-task — so the configuration is written to stay a no-op until the credentials
-exist, and to switch on by itself the moment they do.
+Developer account, which costs USD 99/year.
+
+**Daniel has decided against it for now**: the editors are a small known group
+who can right-click → Open once, and USD 99/year is not worth removing that
+single step. So this document describes what *would* happen, not what is
+about to. The configuration stays a no-op until the credentials exist and
+switches on by itself the moment they do, which is what makes the decision
+cheap to revisit — a reason to revisit it is below under "Why bother".
 
 ## Why bother
 

@@ -237,8 +237,8 @@ up/down still overrides the name order per file.
 
 ## Requirements
 
-- **macOS** 10.15+ on Apple Silicon (M1/M2/M3), or **Windows 10+** x64
-- Node.js 18+ (development only — the installers are self-contained)
+- **macOS** 11+ on Apple Silicon (M1/M2/M3), or **Windows 10+** x64
+- Node.js 20+ (development only — the installers are self-contained)
 
 `ffmpeg` / `ffprobe` and the RNNoise model are downloaded as static,
 SHA256-verified artifacts by the setup scripts — no Homebrew, no Rosetta, no

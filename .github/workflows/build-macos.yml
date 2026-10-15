@@ -79,10 +79,12 @@ jobs:
           if [ "${{ steps.signing.outputs.enabled }}" = "true" ]; then
             args+=(--config.mac.notarize=true)
           fi
+          # macOS ships bash 3.2, where expanding an empty array trips set -u.
+          # The ${x[@]+...} guard expands to nothing instead of erroring.
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            npm run build -- --publish always "${args[@]}"
+            npm run build -- --publish always ${args[@]+"${args[@]}"}
           else
-            npm run build -- --publish never "${args[@]}"
+            npm run build -- --publish never ${args[@]+"${args[@]}"}
           fi
 
       # Proves the artifact is actually signed and notarized, rather than

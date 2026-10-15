@@ -73,13 +73,6 @@ function formatSize(bytes) {
   return `${Math.round(bytes / 1024)} KB`;
 }
 
-function formatAudioTime(sec) {
-  if (!sec || isNaN(sec)) return '0:00';
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${String(s).padStart(2, '0')}`;
-}
-
 // Mirrors fileUrlFor in eq-editor.js — kept in sync manually since these
 // are separate plain <script> files with no shared module system. Used
 // here only for the spectrogram <img> preview.

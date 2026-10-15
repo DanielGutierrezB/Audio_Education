@@ -70,6 +70,18 @@ module.exports = [
     rules: { 'no-promise-executor-return': 'off' },
   },
   {
+    // Playwright specs run in Node, but the callbacks passed to page.evaluate
+    // are serialised and executed in the renderer, so `window` is a legitimate
+    // global inside them.
+    files: ['test/smoke/**/*.js', 'playwright.config.js'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'commonjs',
+      globals: { ...globals.node, window: 'readonly' },
+    },
+    rules: SHARED_RULES,
+  },
+  {
     files: ['test/**/*.js'],
     languageOptions: {
       ecmaVersion: 2023,

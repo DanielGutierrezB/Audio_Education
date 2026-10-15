@@ -322,6 +322,7 @@ npm start
 ```bash
 npm run setup:bin   # once, so the suite runs against the ffmpeg that ships
 npm test            # node:test — generates synthetic fixtures on the fly
+npm run test:smoke  # Playwright — boots the real app and checks the IPC bridge
 npm run lint        # eslint
 ```
 
@@ -344,6 +345,18 @@ and a suite that validates a different runtime than the one that ships
 cannot catch audio regressions. CI runs it on macOS arm64 against those same
 pinned binaries on every push/PR (`.github/workflows/test.yml`), together
 with `npm run lint` and `npm audit --omit=dev --audit-level=high`.
+
+`npm run test:smoke` (`test/smoke/`, Playwright-Electron) covers the one seam
+the suite above cannot: it **boots the real app**. Nothing in the node:test
+suite loads `main.js` or the renderer — they require `src/` modules directly
+— so a broken preload bridge, a renderer script that throws on load, or an
+IPC channel renamed on one side only would all ship green. It asserts the
+window paints, tabs switch, the renderer logged no errors, the whole `api`
+surface is exposed, settings round-trip through the real bridge (including a
+rejected value), and an empty batch is refused rather than crashed on. It is
+read-only: no batch is started and the Adobe session is never touched, and it
+runs against a throwaway userData directory so it can't read or write real
+settings.
 
 The ESLint config (`eslint.config.js`) is scoped to things that are bugs —
 an undefined name in a filter string, a duplicate key in a settings map, a

@@ -18,13 +18,14 @@
             <span class="tab-badge" id="badge-done" hidden></span>
           </button>
           <button class="tab" data-tab="eq" role="tab" aria-selected="false">EQ</button>
+          <button class="tab" data-tab="history" role="tab" aria-selected="false">History</button>
           <button class="tab" data-tab="about" role="tab" aria-selected="false">About</button>
         </nav>
       </div>
       <button class="titlebar-update" id="btn-update" type="button"
         title="Check GitHub for a new version and reload — turns into an update button when one is available">
         <span class="update-icon" id="update-icon">&#10227;</span>
-        <span id="version-label">v0.6.0</span>
+        <span id="version-label">v0.7.0</span>
       </button>
     </header>
 
@@ -42,9 +43,9 @@
             title="Add individual audio files (or drag audio files onto the list)">
             <span class="btn-icon">+</span> Files
           </button>
-          <button class="btn btn-accent" id="btn-process-all" disabled
-            title="Process all queued files through the full pipeline">
-            &#9654; Process All
+          <button class="btn btn-accent" id="btn-process-selection" disabled
+            title="Process the selected files through the full pipeline">
+            &#9654; Process Selection
           </button>
           <button class="btn btn-secondary btn-output" id="btn-output-dir"
             title="Choose where processed files are saved. Default writes to Audio_Pro/ next to each source folder.">
@@ -61,6 +62,10 @@
           </select>
           <span class="toolbar-spacer"></span>
           <span class="queue-summary" id="queue-summary"></span>
+          <button class="btn btn-secondary btn-sm" id="btn-select-all" hidden
+            title="Select every file in the queue">Select all</button>
+          <button class="btn btn-secondary btn-sm" id="btn-clear-selection" hidden
+            title="Unselect all files (keeps them in the queue)">Clear selection</button>
           <button class="btn btn-secondary btn-sm" id="btn-remove-completed" hidden
             title="Remove completed files from the queue">Remove Done</button>
           <button class="btn btn-secondary btn-sm" id="btn-clear-all" hidden
@@ -112,17 +117,15 @@
                 </div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="set-deesser"
-                  title="Force the dynamic de-esser on for every file. It already auto-engages when the SIBILANT flag fires.">
-                  De-esser (force on)
-                </label>
-                <label class="toggle">
-                  <input type="checkbox" id="set-deesser">
-                  <span class="toggle-track"></span>
-                </label>
+                <span class="settings-label"
+                  title="De-esser dinámico sobre la sibilancia (~6.5 kHz). 0% = off. Aun en 0% se auto-activa si se detecta el flag SIBILANT.">De-esser</span>
+                <div class="range-row">
+                  <input type="range" id="set-deesser" min="0" max="100" step="5" value="0" aria-label="De-esser amount">
+                  <span class="range-value" id="deesser-value">0%</span>
+                </div>
               </div>
               <div class="settings-row settings-row-note">
-                <span class="settings-note">For finer control use the EQ tab &mdash; every band edit auto-saves and overrides the base curve for <strong>Process All</strong>, no separate apply step.</span>
+                <span class="settings-note">For finer control use the EQ tab &mdash; every band edit auto-saves and overrides the base curve for <strong>Process Selection</strong>, no separate apply step.</span>
               </div>
             </div>
 
@@ -150,14 +153,12 @@
                 </div>
               </div>
               <div class="settings-row">
-                <label class="settings-label" for="set-air-extra"
-                  title="Extra harmonic excitement (aexciter) on top of the air shelf. Off by default — validate by ear before enabling per source.">
-                  Presence extra
-                </label>
-                <label class="toggle">
-                  <input type="checkbox" id="set-air-extra">
-                  <span class="toggle-track"></span>
-                </label>
+                <span class="settings-label"
+                  title="Exciter armónico (aexciter) encima del air shelf. 0% = off. Valida a oído antes de subirlo por fuente.">Presence extra</span>
+                <div class="range-row">
+                  <input type="range" id="set-air-extra" min="0" max="100" step="5" value="0" aria-label="Presence extra amount">
+                  <span class="range-value" id="air-extra-value">0%</span>
+                </div>
               </div>
               <div class="settings-row">
                 <label class="settings-label" for="set-trim-silence"
@@ -181,11 +182,11 @@
             <div class="settings-category">
               <div class="settings-cat-title">Adobe Enhance</div>
               <div class="settings-row settings-row-note">
-                <span class="settings-note">Embedded Enhance Speech &mdash; <strong>Process All</strong> uploads unpaired files to Adobe Podcast first, saves the clean voice to <code>Enhanced/</code> next to each original, then fuses and masters. Originals are never modified. Files that already have an <code>Enhanced/</code> pair skip the upload (no credits spent twice).</span>
+                <span class="settings-note">Embedded Enhance Speech &mdash; <strong>Process Selection</strong> uploads unpaired files to Adobe Podcast first, saves the clean voice to <code>Enhanced/</code> next to each original, then fuses and masters. Originals are never modified. Files that already have an <code>Enhanced/</code> pair skip the upload (no credits spent twice).</span>
               </div>
               <div class="settings-row">
                 <label class="settings-label" for="set-enhance-enabled"
-                  title="When on, Process All runs unpaired files through Adobe Podcast Enhance Speech automatically (5 in parallel, waits out credit limits) before fusing and mastering. Requires connecting your Adobe account below.">
+                  title="When on, Process Selection runs unpaired files through Adobe Podcast Enhance Speech automatically (5 in parallel, waits out credit limits) before fusing and mastering. Requires connecting your Adobe account below.">
                   Enhance with Adobe
                 </label>
                 <label class="toggle">
@@ -323,8 +324,32 @@
 
           <div class="eq-canvas-wrap">
             <canvas id="eq-canvas" width="980" height="380"></canvas>
-            <div class="eq-status" id="eq-status">EQ for batch: <span id="eq-status-value" class="eq-status-off">base — pipeline will use the built-in EQ when you Process All</span></div>
+            <div class="eq-status" id="eq-status">EQ for batch: <span id="eq-status-value" class="eq-status-off">base — pipeline will use the built-in EQ when you Process Selection</span></div>
             <div class="eq-readout" id="eq-readout">Click and drag a band — scroll to change Q</div>
+          </div>
+
+          <div class="eq-strip" id="eq-strip">
+            <span class="eq-strip-title">Cadena en vivo</span>
+            <div class="eq-strip-ctrl">
+              <label class="eq-strip-label" for="eq-body"
+                title="Compresión paralela ('New York') mezclada bajo la señal seca — densidad/pecho sin aplastar transientes.">Body</label>
+              <input type="range" id="eq-body" min="0" max="50" step="5" value="0" aria-label="Body amount">
+              <span class="range-value" id="eq-body-value">0%</span>
+            </div>
+            <div class="eq-strip-ctrl">
+              <label class="eq-strip-label" for="eq-air-extra"
+                title="Exciter armónico — brillo/aire extra encima de la EQ. 0% = off.">Presence extra</label>
+              <input type="range" id="eq-air-extra" min="0" max="100" step="5" value="0" aria-label="Presence extra amount">
+              <span class="range-value" id="eq-air-extra-value">0%</span>
+            </div>
+            <div class="eq-strip-ctrl">
+              <label class="eq-strip-label" for="eq-deesser"
+                title="De-esser dinámico sobre la banda de sibilancia (~6.5 kHz). 0% = off.">De-esser</label>
+              <input type="range" id="eq-deesser" min="0" max="100" step="5" value="0" aria-label="De-esser amount">
+              <span class="range-value" id="eq-deesser-value">0%</span>
+            </div>
+            <span class="toolbar-spacer"></span>
+            <span class="eq-strip-note" title="El preview de Web Audio es una aproximación (como el GUI de un plugin); el máster final lo renderiza ffmpeg.">preview aprox. · máster = ffmpeg</span>
           </div>
 
         </div>
@@ -334,7 +359,7 @@
       <section class="view" id="view-about" role="tabpanel" hidden>
         <div class="about-container">
           <div class="about-header">
-            <h1>AudioPro <span class="version" id="about-version">v0.6.0</span></h1>
+            <h1>AudioPro <span class="version" id="about-version">v0.7.0</span></h1>
             <p class="about-tagline">The best version of the voice &mdash; raw take to mastered class, Adobe Enhance included, in one interface.</p>
           </div>
 
@@ -399,7 +424,7 @@
               <div class="step-number">3</div>
               <div class="step-body">
                 <h3>Embedded Enhance &middot; the whole process in one click</h3>
-                <p>Turn on <strong>Enhance with Adobe</strong> in Settings, connect your Adobe account once (the session is stored encrypted and refreshes silently), and drop just the raw takes. <strong>Process All</strong> uploads each unpaired file to Adobe Podcast Enhance Speech &mdash; 5 in parallel, pausing with a countdown when credits run out and resuming on its own &mdash; saves the 100% clean voice to <code>Enhanced/</code> next to the original (plus an optional <code>Enhanced/Mix N/</code> dry/wet blend at the "Clean voice mix" percentage), then continues as Mode 2. Originals are never modified, and files that already have an <code>Enhanced/</code> pair never re-upload, so no credits are spent twice.</p>
+                <p>Turn on <strong>Enhance with Adobe</strong> in Settings, connect your Adobe account once (the session is stored encrypted and refreshes silently), and drop just the raw takes. <strong>Process Selection</strong> uploads each unpaired file to Adobe Podcast Enhance Speech &mdash; 5 in parallel, pausing with a countdown when credits run out and resuming on its own &mdash; saves the 100% clean voice to <code>Enhanced/</code> next to the original (plus an optional <code>Enhanced/Mix N/</code> dry/wet blend at the "Clean voice mix" percentage), then continues as Mode 2. Originals are never modified, and files that already have an <code>Enhanced/</code> pair never re-upload, so no credits are spent twice.</p>
               </div>
             </div>
           </div>
@@ -443,7 +468,7 @@
               <div class="step-number">5</div>
               <div class="step-body">
                 <h3>EQ editor</h3>
-                <p>Open the EQ tab, pick a source file from the dropdown, hit Play and drag bands in real time (shift-click a band to disable it, scroll to change its Q). Every band change auto-saves &mdash; when you go back to Processing and hit <strong>Process All</strong>, the pipeline uses whatever curve the editor is currently showing. <strong>Reset</strong> returns to the base EQ; <strong>Bypass</strong> A/Bs the preview level-matched to the current curve (a make-up gain measured on that file&rsquo;s own spectrum cancels the average loudness the EQ adds, so the A/B judges tone, not volume). Mode 2 pairs add an <strong>Original / Enhanced / Fusion</strong> switch to compare the three raw candidate signals &mdash; each one still plays through the same live EQ curve you're editing, so you're choosing the best starting point, not toggling the EQ on and off.</p>
+                <p>Open the EQ tab, pick a source file from the dropdown, hit Play and drag bands in real time (shift-click a band to disable it, scroll to change its Q). Every band change auto-saves &mdash; when you go back to Processing and hit <strong>Process Selection</strong>, the pipeline uses whatever curve the editor is currently showing. <strong>Reset</strong> returns to the base EQ; <strong>Bypass</strong> A/Bs the preview level-matched to the current curve (a make-up gain measured on that file&rsquo;s own spectrum cancels the average loudness the EQ adds, so the A/B judges tone, not volume). Mode 2 pairs add an <strong>Original / Enhanced / Fusion</strong> switch to compare the three raw candidate signals &mdash; each one still plays through the same live EQ curve you're editing, so you're choosing the best starting point, not toggling the EQ on and off.</p>
               </div>
             </div>
 
@@ -476,6 +501,21 @@
             <p class="text-muted">Built for Platzi &mdash; educational audio at scale.</p>
           </div>
         </div>
+      </section>
+
+      <!-- History view -->
+      <section class="view" id="view-history" role="tabpanel" hidden>
+        <div class="history-toolbar">
+          <span class="history-title">Render history</span>
+          <span class="history-count" id="history-count"></span>
+          <span class="toolbar-spacer"></span>
+          <button class="btn btn-secondary btn-sm" id="btn-clear-history" hidden
+            title="Remove every entry from the render history">Clear history</button>
+        </div>
+        <div class="history-empty" id="history-empty">
+          <p>No renders yet. Processed files show up here &mdash; with their QC tags and a shortcut to open each file's location.</p>
+        </div>
+        <div class="history-list" id="history-list" hidden></div>
       </section>
 
     </main>

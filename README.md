@@ -123,9 +123,13 @@ leaving the app:
 
 - **Connect once.** Settings → Adobe Enhance → **Connect** opens Adobe's own
   login (`podcast.adobe.com`) in a window; the session token is extracted
-  in-memory and stored encrypted with the OS keychain (`safeStorage`). The
-  session persists across restarts and re-authenticates silently when the
-  token expires mid-batch.
+  in-memory and stored in an owner-only (`0600`) file in the app's data
+  folder. The session persists across restarts and re-authenticates
+  silently when the token expires mid-batch. It deliberately does **not**
+  use the macOS Keychain: on an ad-hoc signed app the Keychain re-asks for
+  access after every update, and the Adobe session cookies — the credential
+  that actually matters — are stored unencrypted by Electron anyway, so the
+  Keychain was only guarding the short-lived token (see `src/adobe-auth.js`).
 - **Enhance with Adobe** (toggle). When on, **Process Selection** first uploads
   every queued file that doesn't already have an `Enhanced/` pair — 5 in
   parallel, the same ceiling Adobe applies per account. When Adobe runs out
@@ -448,7 +452,7 @@ src/
   enhance/
     phonos.js                 Adobe Enhance Speech client (ported from adobe-podcast-batch)
     batch.js                  Embedded-enhance workers + shared credits gate; saves Enhanced/ + Mix N/
-  adobe-auth.js               Adobe login window, token persistence (safeStorage), silent reauth
+  adobe-auth.js               Adobe login window, token persistence (0600 file), silent reauth
   metrics.js                  QC analysis pass (loudness, bands, rolloff, silences) → flags
   pairing.js                  Detects original ↔ Enhanced/ pairs (adobe-podcast-batch convention)
   align.js                    Recovers a Mode 2 pair's time offset (envelope cross-correlation)

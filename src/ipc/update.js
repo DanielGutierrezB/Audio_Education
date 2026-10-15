@@ -81,7 +81,7 @@ function register({ appRoot }) {
     // Replacing the app out from under a running batch would leave half a
     // course rendered with no way to tell which half.
     if (pipelineIpc.isRunning()) {
-      return { ok: false, error: 'Hay un lote procesándose — esperá a que termine antes de actualizar' };
+      return { ok: false, error: 'Hay un lote procesándose — espera a que termine antes de actualizar' };
     }
     inFlight = true;
     try {

@@ -252,7 +252,7 @@ async function safeJson(res) {
 }
 
 function makeAuthError() {
-  const e = new Error('Token expirado o inválido (401). Reconectá con Adobe.');
+  const e = new Error('Token expirado o inválido (401). Reconecta con Adobe.');
   e.code = 'AUTH';
   return e;
 }

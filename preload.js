@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('api', {
   log: {
     getFormatted: () => ipcRenderer.invoke('log:getFormatted'),
     push: (category, message, data) => ipcRenderer.invoke('log:push', category, message, data),
+    reveal: () => ipcRenderer.invoke('log:reveal'),
   },
   store: {
     get: (key) => ipcRenderer.invoke('store:get', key),

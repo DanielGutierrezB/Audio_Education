@@ -93,7 +93,7 @@ async function runEnhanceBatch({ files, mixPct = 100, model = DEFAULT_MODEL, con
           const tok = await reauth();
           if (tok) continue;
           send('enhance:auth-expired', {});
-          return { ok: false, error: 'Sesión de Adobe expirada — reconectá desde Ajustes' };
+          return { ok: false, error: 'Sesión de Adobe expirada — reconecta desde Ajustes' };
         }
         return { ok: false, error: String(err.message || err) };
       }

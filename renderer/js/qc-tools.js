@@ -59,6 +59,7 @@ function collectFileSummaries() {
         resolvedMode: f.resolvedMode ?? null,
         pairPath: f.pairPath ?? null,
         qcFlags: f.qcFlags ?? [],
+        tilt: f.tilt ?? null,
         verify: f.verify ?? null,
         outputPath: completedFiles.get(f.path) ?? null,
         errorMsg: f.errorMsg ?? null,

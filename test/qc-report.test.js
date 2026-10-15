@@ -3,7 +3,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildQcReportMarkdown, defaultReportFilename } = require('../src/qc-report');
+const qcReport = require('../src/qc-report');
+const { buildQcReportMarkdown, defaultReportFilename } = qcReport;
 
 const FIXED_NOW = new Date('2026-07-15T12:34:00Z');
 
@@ -74,4 +75,76 @@ test('buildQcReportMarkdown: escapes pipe characters in file names so the table 
 
 test('defaultReportFilename: produces a date-stamped markdown filename', () => {
   assert.equal(defaultReportFilename(FIXED_NOW), 'audiopro-qc-report-2026-07-15.md');
+});
+
+// ── Course consistency ──
+// What a viewer notices across a course is classes sounding different from
+// each other, more than any one sitting a dB from an absolute target. These
+// pin that section's thresholds and wording.
+
+const done = (name, { i = -16, tilt = 11 } = {}) =>
+  ({ name, status: 'done', verify: { i, tp: -2, badge: 'ok' }, tilt, qcFlags: [] });
+
+test('consistency: nothing to compare with fewer than two finished files', () => {
+  assert.equal(qcReport.analyzeConsistency([]), null);
+  assert.equal(qcReport.analyzeConsistency([done('a.wav')]), null);
+  assert.equal(
+    qcReport.analyzeConsistency([done('a.wav'), { name: 'b.wav', status: 'error' }]),
+    null,
+    'an errored file has nothing to measure');
+});
+
+test('consistency: a uniform batch reports no outliers', () => {
+  const c = qcReport.analyzeConsistency([
+    done('01.wav', { i: -16.0 }), done('02.wav', { i: -16.1 }), done('03.wav', { i: -15.9 }),
+  ]);
+  assert.ok(c.loudness.spread <= qcReport.LOUDNESS_SPREAD_LU);
+  assert.deepEqual(c.loudnessOutliers, []);
+  assert.deepEqual(c.tiltOutliers, []);
+});
+
+test('consistency: the class that did not land is named', () => {
+  const c = qcReport.analyzeConsistency([
+    done('01.wav', { i: -16.0 }), done('02.wav', { i: -16.0 }),
+    done('03.wav', { i: -16.1 }), done('04.wav', { i: -13.0 }),
+  ]);
+  assert.ok(c.loudness.spread > qcReport.LOUDNESS_SPREAD_LU);
+  assert.ok(c.loudnessOutliers.length >= 1);
+  assert.equal(c.loudnessOutliers[0].name, '04.wav', 'the worst offender reads first');
+});
+
+test('consistency: a differently-recorded class is flagged on source tone', () => {
+  const c = qcReport.analyzeConsistency([
+    done('01.wav', { tilt: 11 }), done('02.wav', { tilt: 11.4 }),
+    done('03.wav', { tilt: 10.8 }), done('04.wav', { tilt: 19 }),
+  ]);
+  assert.equal(c.tiltOutliers.length, 1);
+  assert.equal(c.tiltOutliers[0].name, '04.wav');
+  assert.ok(c.tiltOutliers[0].distance > qcReport.TILT_OUTLIER_DB);
+  // Tone is about the source, so it must not be reported as a loudness problem.
+  assert.deepEqual(c.loudnessOutliers, []);
+});
+
+test('consistency: files with no measurement are skipped, not counted as zero', () => {
+  const c = qcReport.analyzeConsistency([
+    done('01.wav', { i: -16 }), done('02.wav', { i: -16 }),
+    { name: '03.wav', status: 'done', verify: null, tilt: null, qcFlags: [] },
+  ]);
+  assert.equal(c.loudness.count, 2, 'an unmeasured file must not drag the spread to 16 LU');
+  assert.equal(c.tilt.count, 2);
+});
+
+test('the report renders the consistency section and calls out the outlier', () => {
+  const md = qcReport.buildQcReportMarkdown([
+    done('01.wav', { i: -16.0 }), done('02.wav', { i: -16.0 }), done('03.wav', { i: -12.5 }),
+  ]);
+  assert.match(md, /## Course consistency/);
+  assert.match(md, /Output loudness/);
+  assert.match(md, /Loudness is not uniform/);
+  assert.match(md, /03\.wav/);
+});
+
+test('the consistency section is omitted when there is nothing to compare', () => {
+  const md = qcReport.buildQcReportMarkdown([done('only.wav')]);
+  assert.doesNotMatch(md, /## Course consistency/);
 });

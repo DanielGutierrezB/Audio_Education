@@ -253,7 +253,13 @@ live percentage on the pill) and relaunches into the new version.
 - **Export QC report** — the toolbar button writes a Markdown summary of the
   whole batch (per-file mode, duration, QC flags, output verification badge,
   and a flagged-files detail section) to a location you choose, ready to
-  attach to a course deliverable.
+  attach to a course deliverable. It also carries a **Course consistency**
+  section: how alike the finished classes are, which is what a viewer
+  notices across a course far more than any single file's distance from
+  target. A class that didn't land on the shared loudness figure is named,
+  and so is one whose *source* tone sits far from the rest — the adaptive
+  correction absorbs that, but it means the class was recorded differently
+  and is worth a listen.
 - **History tab** — every finished render is logged (name, mode, target
   preset, QC flags, verification badge, output path) and kept across
   restarts, capped at the 500 most recent. Useful for answering "did this

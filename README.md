@@ -265,18 +265,28 @@ npm start
 ## Testing
 
 ```bash
-npm test    # node:test — generates synthetic fixtures on the fly, no bin/ needed
+npm run setup:bin   # once, so the suite runs against the ffmpeg that ships
+npm test            # node:test — generates synthetic fixtures on the fly
 ```
 
 The suite (`test/`) builds its own WAV fixtures with ffmpeg's `lavfi` sources
-(clean, noisy, hum, sibilant, clipped, band-limited, silence-padded, DC-biased
-voice-like signals) and asserts on: every QC detector, preset conformity,
-pairing (`Enhanced/` convention), the fusion filter graph, the embedded
-enhance orchestration (credits gate, auth retry, `Enhanced/` reuse, the
-`Mix N/` render — with the Adobe network client stubbed), and full Mode
-1/Mode 2 end-to-end renders (duration match, cancellation). Runs against
-whatever `ffmpeg`/`ffprobe` is on `PATH` — no bundled binaries required. CI
-runs it on every push/PR via `.github/workflows/test.yml`.
+(clean, noisy, hum, a steady sibilant bed, spaced ess transients, clipped,
+band-limited, silence-padded, DC-biased voice-like signals) and asserts on:
+every QC detector, preset conformity, pairing (`Enhanced/` convention), the
+fusion filter graph, the render-side tone behaviour (the de-esser must cut
+sibilance, spare presence and ignore input level), the render history
+whitelist, the embedded enhance orchestration (credits gate, auth retry,
+`Enhanced/` reuse, the `Mix N/` render — with the Adobe network client
+stubbed), and full Mode 1/Mode 2 end-to-end renders (duration match,
+cancellation).
+
+It runs against the **bundled** `ffmpeg`/`ffprobe` resolved by
+`src/bin-paths.js`, so run `npm run setup:bin` first. That is deliberate:
+filters differ between ffmpeg majors — `adynamicequalizer`'s `auto` option
+that the de-esser relies on does not take the same values on older builds —
+and a suite that validates a different runtime than the one that ships
+cannot catch audio regressions. CI runs it on macOS arm64 against those same
+pinned binaries on every push/PR (`.github/workflows/test.yml`).
 
 ## Build
 

@@ -5,7 +5,7 @@ recording and get course-ready output with consistent loudness and a
 polished, full-bodied voice — including the Adobe Podcast Enhance Speech
 step, now embedded: the whole process runs from one interface.
 
-Current version: **v0.7.0** (macOS arm64 · Windows x64).
+Current version: **v0.8.0** (macOS arm64 · Windows x64).
 
 ## Purpose
 
@@ -242,12 +242,12 @@ target, or "raise only" as a conservative legacy mode.
 
 ## Updating the app
 
-The version pill in the titlebar (⟳ v0.7.0) is the updater. This repo is
+The version pill in the titlebar (⟳ v0.8.0) is the updater. This repo is
 public, so the built artifacts and the update metadata live in its own
 [Releases](https://github.com/DanielGutierrezB/audio_education/releases) and
 installed apps read them anonymously — no token, no login, no GitHub account.
 The pill checks at launch and every 30 minutes; when a newer version exists it
-highlights and shows `v0.7.0 → v0.8.0`, clicking downloads the update (with a
+highlights and shows `v0.8.0 → v0.9.0`, clicking downloads the update (with a
 live percentage on the pill) and relaunches into the new version.
 
 - **Packaged install (pkg / installer)** — `electron-updater` reads
@@ -557,12 +557,12 @@ bin/                          (gitignored) populated by the fetch scripts
 ## Known limitations
 
 - Installers are not code-signed, so macOS asks for a right-click → Open on
-  the `.pkg` the first time. Everything needed to sign and notarize is already
-  in the repo (`build/entitlements.mac.plist`, `build.mac` in `package.json`,
-  and a CI step that switches on by itself); what is missing is an Apple
-  Developer account. See **`docs/SIGNING.md`** for the five secrets that
-  finish it and for what signing would also fix — the repeated Keychain
-  prompts among them.
+  the `.pkg` the first time, on every update. This is a deliberate choice, not
+  an oversight: an Apple Developer account costs USD 99/year and the editors
+  are a small known group. Everything needed to sign is already in the repo
+  (`build/entitlements.mac.plist`, `build.mac` in `package.json`, and a CI
+  step that switches on by itself once five secrets exist) — see
+  **`docs/SIGNING.md`** if the decision ever changes.
 - The Platzi loudness target (−16 LUFS) is the general spoken-word/podcast
   convention, not a measured spec. AudioPro does hit it: all four validated
   classes land at −16.0 LUFS / −2.0 dBTP. **The finished videos do not** —

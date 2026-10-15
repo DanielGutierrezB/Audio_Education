@@ -215,6 +215,6 @@ test('the version pill reports the running version', async () => {
   // proves that wiring ran. Matched on "contains" rather than equality: the
   // pill has two legitimate forms, and on a dev checkout it often shows the
   // second one. checkGitUpdate reports `changed` from the commit count, not
-  // the version, so any commit on main makes it read "v0.7.0 → v0.7.0".
+  // the version, so any commit on main makes it read "v0.8.0 → v0.8.0".
   await expect(win.locator('#version-label')).toContainText(`v${version}`);
 });

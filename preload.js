@@ -37,6 +37,14 @@ contextBridge.exposeInMainWorld('api', {
   qc: {
     saveReport: (fileSummaries) => ipcRenderer.invoke('qc:saveReport', fileSummaries),
   },
+  profiles: {
+    list: () => ipcRenderer.invoke('profiles:list'),
+    save: (name) => ipcRenderer.invoke('profiles:save', name),
+    apply: (name) => ipcRenderer.invoke('profiles:apply', name),
+    remove: (name) => ipcRenderer.invoke('profiles:remove', name),
+    rememberFolder: (folderPath, name) => ipcRenderer.invoke('profiles:rememberFolder', folderPath, name),
+    forFolder: (folderPath) => ipcRenderer.invoke('profiles:forFolder', folderPath),
+  },
   history: {
     add: (record) => ipcRenderer.invoke('history:add', record),
     list: () => ipcRenderer.invoke('history:list'),

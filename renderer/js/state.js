@@ -25,6 +25,10 @@ export const ui = {
   // True from "Process Selection" until batch:done, which is what makes the
   // same button cancel and keeps the queue controls disabled.
   processing: false,
+
+  // Name of the course profile currently in effect, or '' for none. Dropping
+  // a folder that remembers a profile sets this.
+  profile: '',
 };
 
 // A file is finished when its output on disk is what this configuration would

@@ -57,6 +57,15 @@
     "mac": {
       "category": "public.app-category.music",
       "darkModeSupport": true,
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "gatekeeperAssess": false,
+      "binaries": [
+        "Contents/Resources/bin/ffmpeg",
+        "Contents/Resources/bin/ffprobe"
+      ],
+      "notarize": false,
       "target": [
         {
           "target": "zip",

@@ -550,13 +550,19 @@ scripts/
 docs/
   PLAN.md                      Design doc + phased implementation plan + status
   DESIGN.md                    Earlier design notes
+  SIGNING.md                   What signing/notarizing needs, and what it would fix
 bin/                          (gitignored) populated by the fetch scripts
 ```
 
 ## Known limitations
 
-- Installers are not code-signed. Distribute over a trusted channel and
-  instruct users to right-click → Open the `.pkg` the first time (macOS).
+- Installers are not code-signed, so macOS asks for a right-click → Open on
+  the `.pkg` the first time. Everything needed to sign and notarize is already
+  in the repo (`build/entitlements.mac.plist`, `build.mac` in `package.json`,
+  and a CI step that switches on by itself); what is missing is an Apple
+  Developer account. See **`docs/SIGNING.md`** for the five secrets that
+  finish it and for what signing would also fix — the repeated Keychain
+  prompts among them.
 - The Platzi loudness target (−16 LUFS) is the general spoken-word/podcast
   convention, not a measured spec. AudioPro does hit it: all four validated
   classes land at −16.0 LUFS / −2.0 dBTP. **The finished videos do not** —

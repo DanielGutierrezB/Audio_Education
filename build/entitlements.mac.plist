@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened runtime entitlements. Required for notarization, which is what
+  stops macOS asking the user to right-click → Open, and what stops the
+  Keychain re-prompting after every update (see src/adobe-auth.js).
+
+  Only what Electron and this app actually need:
+
+  - allow-jit / allow-unsigned-executable-memory: V8 compiles JavaScript at
+    runtime, which the hardened runtime forbids by default.
+  - disable-library-validation: the app spawns the ffmpeg and ffprobe
+    binaries bundled in Contents/Resources/bin. They are signed with the same
+    Developer ID (see build.mac.binaries in package.json), but they are not
+    part of the main bundle, and library validation would reject loading
+    anything not signed by the same team as the *main executable*.
+
+  Deliberately absent: app-sandbox and its network/file entitlements. Those
+  are for the Mac App Store. This app is distributed directly, reads and
+  writes wherever the editor points it, and spawns helper binaries — none of
+  which a sandbox would permit without a much larger set of exceptions.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

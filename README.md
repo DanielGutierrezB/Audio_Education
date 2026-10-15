@@ -36,9 +36,16 @@ design rationale):
    mastering — with no manual handoff between tools.
 
 In all paths the same finishing chain applies: conditional repair → tone
-(EQ) → dynamics (leveler + optional parallel "body" compression) → dynamic
-de-esser → two-pass loudness normalization to a delivery preset → true-peak
-limiter → a fast re-measure to verify the render landed on target.
+(EQ cuts + a tilt shelf scaled to the measured balance) → dynamics (leveler
++ optional parallel "body" compression) → presence/air → dynamic de-esser →
+two-pass loudness normalization to a delivery preset → true-peak limiter →
+a fast re-measure to verify the render landed on target.
+
+When a Mode 2 pair's durations disagree, the offset is recovered by
+cross-correlating the two amplitude envelopes and trimmed out, so a take
+Adobe trimmed differently still gets fused. Only a pair that genuinely isn't
+the same recording falls back to Mode 1, and it says so on the file row
+(`PAIR_MISMATCH`) instead of dropping the Adobe pass silently.
 
 FFmpeg (+ its native `arnndn`/RNNoise filter) is the only local processing
 runtime; there is no Python and no external ML service. The embedded Enhance
@@ -54,7 +61,8 @@ before — its output folders are detected and never re-uploaded.
 Mode 1: original ────────────────────────────────────────────────┐
 Embedded Enhance: original ─▶ −1. Enhance (upload to Adobe,      │
    save 100% clean voice to Enhanced/, wait out credit limits) ─┐│
-Mode 2: original + enhanced ─▶ 0. Fuse (bands / bed crossover) ─┴┤
+Mode 2: original + enhanced ─▶ 0. Align (envelope cross-correlation
+   when the durations disagree), then fuse (bands / bed crossover) ─┴┤
                                                                 ▼
                 1. Analyze — one read-only ffmpeg pass: loudness (I/LRA/TP),
                    spectral rolloff, band energies, silence edges → QC flags
@@ -100,6 +108,8 @@ recordings; the rest against the synthetic fixtures in `test/fixtures.js`:
 | `FLAT_DYNAMICS` | Already squashed (LRA < 3 LU) | leveler compression skipped |
 | `DC_OFFSET` | DC bias | reported (HPF already removes it) |
 | `SILENCE_HEAD` / `SILENCE_TAIL` | ≥1s of dead air at start/end | trimmed with a small pad |
+| `PAIR_REALIGNED` | Mode 2 pair was out of sync; the offset was measured and trimmed | fusion proceeds normally |
+| `PAIR_MISMATCH` | Mode 2 pair can't be reconciled — not the same take | falls back to Mode 1 on the original |
 
 See `docs/PLAN.md` §1.4 for the full A1–A14 catalogue, including artifacts
 specific to Adobe Podcast's AI enhancement (robotic timbre, broken esses,
@@ -412,6 +422,7 @@ src/
   adobe-auth.js               Adobe login window, token persistence (safeStorage), silent reauth
   metrics.js                  QC analysis pass (loudness, bands, rolloff, silences) → flags
   pairing.js                  Detects original ↔ Enhanced/ pairs (adobe-podcast-batch convention)
+  align.js                    Recovers a Mode 2 pair's time offset (envelope cross-correlation)
   fusion.js                   Mode 2 blend (bands / bed / bands+bed filter graphs)
   presets.js                  Delivery loudness/TP/LRA targets per platform
   ffmpeg-run.js               Shared ffmpeg/ffprobe spawn helper (timeout, progress, cancellation)

@@ -8,6 +8,7 @@ const { runFfmpeg, runFfprobe } = require('./ffmpeg-run');
 const binPaths = require('./bin-paths');
 const metrics = require('./metrics');
 const fusion = require('./fusion');
+const align = require('./align');
 const { getPreset } = require('./presets');
 
 // ── Base EQ (F6-style) ──
@@ -384,6 +385,10 @@ async function processFile(file, settings, { emit, isCancelled, setCurrent, t0, 
     let mode = 1;
     let stepTotal = 4;
     let stepIndex = 0;
+    // Set when a Mode 2 pair needed realigning or couldn't be used at all;
+    // merged into the QC flags below so it reaches the file row and the report
+    // rather than only the log.
+    let pairNote = null;
 
     if (file.pairPath && settings.fusionEnabled !== false) {
       stepTotal = 5;
@@ -392,18 +397,55 @@ async function processFile(file, settings, { emit, isCancelled, setCurrent, t0, 
       const [origMeta, enhMeta] = await Promise.all([probeBasic(file.path), probeBasic(file.pairPath)]);
       const durOk = origMeta.duration != null && enhMeta.duration != null &&
         Math.abs(origMeta.duration - enhMeta.duration) <= PAIR_DURATION_TOLERANCE_SEC;
-      if (durOk) {
+
+      // A duration mismatch used to drop straight to Mode 1 with nothing but a
+      // log line, quietly throwing away the Adobe pass the user spent credits
+      // on. Adobe trims leading/trailing silence, so the usual cause is a
+      // constant offset: measure it and trim it out. Only files that really
+      // aren't the same take fall back now, and they say so on the file row.
+      let fuseOriginal = file.path;
+      let fuseEnhanced = file.pairPath;
+      if (!durOk) {
+        emit('progress', { file: file.path, step: 'Realigning pair', stepIndex, stepTotal, pct: 2, eta: calcEta(t0, done, total) });
+        const shift = await align.estimateOffset(file.path, file.pairPath);
+        if (shift.confident && Math.abs(shift.offsetSec) > 0.01) {
+          // offsetSec > 0 means the enhanced file starts later in the take, so
+          // the original carries that much extra head to drop.
+          const [target, trim] = shift.offsetSec > 0
+            ? ['original', shift.offsetSec]
+            : ['enhanced', -shift.offsetSec];
+          const shifted = await align.renderShifted(
+            target === 'original' ? file.path : file.pairPath, trim, { setCurrent });
+          tempFiles.push(shifted);
+          if (target === 'original') fuseOriginal = shifted; else fuseEnhanced = shifted;
+          pairNote = {
+            code: 'PAIR_REALIGNED',
+            detail: `pair was ${Math.abs(shift.offsetSec).toFixed(2)}s out of sync (correlation ${shift.correlation.toFixed(2)}) — realigned`,
+          };
+          emit('loudness', { file: file.path, message: `Pair realigned by ${shift.offsetSec.toFixed(2)}s (correlation ${shift.correlation.toFixed(2)})` });
+        } else {
+          pairNote = {
+            code: 'PAIR_MISMATCH',
+            detail: shift.offsetSec == null
+              ? 'could not compare the pair — processed the original only, without the Adobe pass'
+              : `the pair doesn't look like the same take (best correlation ${shift.correlation.toFixed(2)}, ` +
+                `orig ${origMeta.duration?.toFixed(1)}s vs enhanced ${enhMeta.duration?.toFixed(1)}s) — ` +
+                'processed the original only, without the Adobe pass',
+          };
+          emit('loudness', { file: file.path, message: `Pair mismatch — ${pairNote.detail}` });
+        }
+      }
+
+      if (durOk || pairNote?.code === 'PAIR_REALIGNED') {
         mode = 2;
         emit('progress', { file: file.path, step: 'Fusing sources', stepIndex, stepTotal, pct: 4, eta: calcEta(t0, done, total) });
         const fusedPath = tempPathFor(file.path, 'fused');
         tempFiles.push(fusedPath);
-        await fusion.runFusion(file.path, file.pairPath, fusedPath, settings, {
+        await fusion.runFusion(fuseOriginal, fuseEnhanced, fusedPath, settings, {
           duration: origMeta.duration, setCurrent,
           onProgress: frac => emit('progress', { file: file.path, step: 'Fusing sources', stepIndex, stepTotal, pct: Math.round(4 + frac * 8), eta: calcEta(t0, done, total) }),
         });
         workingPath = fusedPath;
-      } else {
-        emit('loudness', { file: file.path, message: `Pair duration mismatch (orig ${origMeta.duration?.toFixed(1)}s vs enhanced ${enhMeta.duration?.toFixed(1)}s) — processing original only` });
       }
     }
 
@@ -420,6 +462,10 @@ async function processFile(file, settings, { emit, isCancelled, setCurrent, t0, 
       qc = await metrics.analyzeFile(workingPath);
     } catch (err) {
       emit('loudness', { file: file.path, message: `Analysis failed (${err.message}) — continuing with baseline processing` });
+    }
+    if (pairNote) {
+      if (qc) qc.flags.unshift(pairNote);
+      else emit('qc', { file: file.path, mode, flags: [pairNote], loudnessIn: null });
     }
     if (qc) {
       emit('qc', { file: file.path, mode, flags: qc.flags.map(f => ({ code: f.code, detail: f.detail })), loudnessIn: qc.loudness });

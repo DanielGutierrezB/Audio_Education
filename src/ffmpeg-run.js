@@ -47,6 +47,38 @@ function runFfmpeg(args, opts = {}) {
   });
 }
 
+// Same handling as runFfmpeg, but keeps stdout instead of discarding it, for
+// the passes that pipe raw PCM back to us (src/align.js) rather than writing
+// a file. Resolves the stdout Buffer; stderr is only used for the error text.
+function runFfmpegCapture(args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(binPaths.ffmpeg(), args, opts.cwd ? { cwd: opts.cwd } : undefined);
+    if (opts.setCurrent) opts.setCurrent(proc);
+    const timeoutMs = opts.timeout ?? DEFAULT_TIMEOUT_MS;
+    const timer = setTimeout(() => {
+      proc.kill('SIGTERM');
+      if (opts.setCurrent) opts.setCurrent(null);
+      reject(new Error(`ffmpeg timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
+
+    const chunks = [];
+    let stderr = '';
+    proc.stdout.on('data', c => chunks.push(c));
+    proc.stderr.on('data', c => { stderr += c.toString(); });
+    proc.on('close', code => {
+      clearTimeout(timer);
+      if (opts.setCurrent) opts.setCurrent(null);
+      if (code === 0 || code === null) resolve(Buffer.concat(chunks));
+      else reject(new Error(`ffmpeg exited ${code}${stderr ? ': ' + stderr.slice(-300).trim() : ''}`));
+    });
+    proc.on('error', err => {
+      clearTimeout(timer);
+      if (opts.setCurrent) opts.setCurrent(null);
+      reject(err);
+    });
+  });
+}
+
 function runFfprobe(args) {
   return new Promise((resolve, reject) => {
     const proc = spawn(binPaths.ffprobe(), args);
@@ -57,4 +89,4 @@ function runFfprobe(args) {
   });
 }
 
-module.exports = { runFfmpeg, runFfprobe, DEFAULT_TIMEOUT_MS };
+module.exports = { runFfmpeg, runFfmpegCapture, runFfprobe, DEFAULT_TIMEOUT_MS };

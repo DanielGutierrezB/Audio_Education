@@ -107,7 +107,14 @@ test('Mismatched pair durations fall back to Mode 1 on the original', async () =
 
   const done = events.find(e => e.type === 'file:done');
   assert.ok(done, 'expected a file:done event');
-  assert.equal(done.mode, 1, 'duration mismatch should degrade to Mode 1');
+  assert.equal(done.mode, 1, 'an unusable pair should degrade to Mode 1');
+
+  // The degrade must be visible on the file row, not just in the log: the user
+  // paid Adobe credits for a pass that is being thrown away here.
+  const qc = events.find(e => e.type === 'qc');
+  assert.ok(qc, 'expected a qc event');
+  assert.ok(qc.flags.some(f => f.code === 'PAIR_MISMATCH'),
+    `expected PAIR_MISMATCH, got ${qc.flags.map(f => f.code)}`);
 });
 
 test('Cancellation mid-batch stops before the second file starts', async () => {

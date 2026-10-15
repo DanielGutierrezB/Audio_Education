@@ -103,7 +103,7 @@ async function applyGitUpdate(appRoot, current = readLocalVersion(appRoot)) {
   if (branch !== GH_BRANCH) {
     return {
       ok: false,
-      error: `Checkout de desarrollo en la rama "${branch ?? '?'}" — actualizá manualmente (git pull) para no pisar trabajo local.`,
+      error: `Checkout de desarrollo en la rama "${branch ?? '?'}" — actualiza manualmente (git pull) para no pisar trabajo local.`,
     };
   }
   const chk = await checkGitUpdate(appRoot, current);

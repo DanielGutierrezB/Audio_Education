@@ -258,6 +258,12 @@ live percentage on the pill) and relaunches into the new version.
   preset, QC flags, verification badge, output path) and kept across
   restarts, capped at the 500 most recent. Useful for answering "did this
   class already go through, and how did it land?" without re-measuring.
+- **Debug log** — the clipboard button copies the current session's log, and
+  the same entries are appended to a rotating file in `logs/` under the app's
+  data folder (5 files × 5 MB). Right-click the button to reveal it in Finder.
+  The file is what survives a crash or a force-quit mid-batch, which is
+  exactly when the log is worth reading and when "Copy Log" can no longer be
+  clicked.
 
 ## Queue
 
@@ -484,7 +490,7 @@ src/
   presets.js                  Delivery loudness/TP/LRA targets per platform
   ffmpeg-run.js               Shared ffmpeg/ffprobe spawn helper (timeout, progress, cancellation)
   bin-paths.js                Resolves paths to bundled binaries + RNNoise model (dev vs packaged)
-  logger.js                   Structured logging (copyable from the app)
+  logger.js                   Structured logging — in-memory ring buffer + rotating file in userData/logs/
   spectrogram.js              showspectrumpic PNG render for the QC spectrogram modal
   qc-report.js                Markdown QC report builder for the batch export button
   updater.js                  Self-update helpers (git reset path for dev checkouts; packaged

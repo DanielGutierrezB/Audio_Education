@@ -234,6 +234,14 @@ btnCopyLog.addEventListener('click', async () => {
   }
 });
 
+// Right-click reveals the log file itself. Kept off the toolbar on purpose:
+// it is for the rare "it closed on me, what happened" case, and the toolbar
+// already wraps on narrow windows.
+btnCopyLog.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  window.api?.log.reveal();
+});
+
 document.getElementById('btn-empty-folders').addEventListener('click', addFoldersViaDialog);
 document.getElementById('btn-empty-files').addEventListener('click', addFilesViaDialog);
 

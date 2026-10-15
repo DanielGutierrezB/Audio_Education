@@ -4,7 +4,7 @@
 // that only read or write persisted state. src/settings.js owns the schema
 // and validation; src/history.js owns the history whitelist and cap.
 
-const { ipcMain } = require('electron');
+const { ipcMain, shell } = require('electron');
 
 const settings = require('../settings');
 const history = require('../history');
@@ -27,6 +27,15 @@ function register({ store }) {
   ipcMain.handle('history:clear', () => history.clear(store));
 
   ipcMain.handle('log:getFormatted', () => logger.formatForClipboard());
+  // Reveals the rotating log file. The in-memory buffer only covers the
+  // current session, so when the question is "what happened before it
+  // crashed", the file on disk is the only answer.
+  ipcMain.handle('log:reveal', () => {
+    const file = logger.currentLogPath();
+    if (!file) return false;
+    shell.showItemInFolder(file);
+    return true;
+  });
   ipcMain.handle('log:push', (_, category, message, data) => {
     const cat = String(category ?? 'renderer').slice(0, MAX_LOG_CATEGORY);
     const msg = String(message ?? '').slice(0, MAX_LOG_MESSAGE);

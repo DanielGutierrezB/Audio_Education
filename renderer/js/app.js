@@ -795,12 +795,44 @@ function hideEnhanceLimit() {
   enhanceBanner.hidden = true;
 }
 
-function setProgress(pct, step, stepIndex, stepTotal, filename, eta) {
-  progressFill.style.width = `${pct}%`;
-  progressPercent.textContent = `${pct}%`;
-  progressStep.textContent = `Step ${stepIndex}/${stepTotal} · ${step}`;
-  if (filename) progressFilename.textContent = filename;
-  progressEta.textContent = `ETA: ${formatEta(eta)}`;
+// Several files render at once, so the bar tracks the whole batch rather than
+// whichever file reported last — otherwise it jumps backwards every time a
+// different worker checks in. Per-file state still lives on the file rows.
+const inFlight = new Map(); // path -> { pct, step, eta }
+let batchTotal = 0;
+
+function resetProgressTracking(total) {
+  inFlight.clear();
+  batchTotal = total;
+}
+
+function noteFileFinished(filePath) {
+  inFlight.delete(filePath);
+}
+
+function setProgress(event) {
+  const { file, pct, step, eta } = event;
+  inFlight.set(file, { pct, step, eta });
+
+  const activeCount = inFlight.size;
+  const finished = completedFiles.size;
+  // Each in-flight file contributes its own fraction of one slot.
+  const activeFraction = [...inFlight.values()].reduce((a, p) => a + (p.pct ?? 0) / 100, 0);
+  const overall = batchTotal > 0
+    ? Math.min(99, Math.round(((finished + activeFraction) / batchTotal) * 100))
+    : pct;
+
+  progressFill.style.width = `${overall}%`;
+  progressPercent.textContent = `${overall}%`;
+  progressStep.textContent = activeCount > 1
+    ? `${finished}/${batchTotal} done · ${activeCount} in progress`
+    : `${finished}/${batchTotal} done · ${step}`;
+  progressFilename.textContent = activeCount > 1
+    ? [...inFlight.keys()].map(p => p.split('/').pop()).join(', ')
+    : (file || '').split('/').pop();
+  // The slowest remaining worker is what the batch actually waits on.
+  const etas = [...inFlight.values()].map(p => p.eta).filter(v => v != null);
+  progressEta.textContent = `ETA: ${formatEta(etas.length ? Math.max(...etas) : eta)}`;
 }
 
 function updateDoneBadge() {
@@ -828,9 +860,9 @@ function startProcessing() {
   btnAddFolders.disabled = true;
   btnAddFiles.disabled = true;
 
-  const firstStepTotal = (files[0].pairPath && prefs.fusionEnabled !== false) ? 5 : 4;
   progressSection.hidden = false;
-  setProgress(0, 'Starting…', 1, firstStepTotal, files[0].path.split('/').pop(), null);
+  resetProgressTracking(files.length);
+  setProgress({ file: files[0].path, pct: 0, step: 'Starting…', eta: null });
 
   unsubPipeline = window.api.pipeline.onEvent(handlePipelineEvent);
 
@@ -918,7 +950,7 @@ function handlePipelineEvent(event) {
       break;
 
     case 'progress':
-      setProgress(event.pct, event.step, event.stepIndex, event.stepTotal, filename, event.eta);
+      setProgress(event);
       break;
 
     case 'qc':
@@ -935,6 +967,7 @@ function handlePipelineEvent(event) {
         if (f) f.status = 'done';
       }
       completedFiles.set(event.file, event.outputPath);
+      noteFileFinished(event.file);
       updateDoneBadge();
       notifyQueueChanged();
       btnRemoveDone.hidden = false;
@@ -947,6 +980,7 @@ function handlePipelineEvent(event) {
         const f = group.files.find(f => f.path === event.file);
         if (f) { f.status = 'error'; f.errorMsg = event.error; }
       }
+      noteFileFinished(event.file);
       window.api?.log.push('renderer', `File error displayed: ${filename}`, event.error);
       recordHistory(event, 'error');
       break;

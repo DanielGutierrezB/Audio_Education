@@ -43,6 +43,9 @@ const VALID_STORE_KEYS = new Set([
   // Store-only for now: there is no Settings control, but a course whose
   // teacher needs a different balance can be retargeted without a rebuild.
   'adaptiveToneEnabled', 'toneTiltTarget',
+  // How many files render at once (src/pipeline.js processQueue). Store-only;
+  // 0 means "decide from the core count".
+  'concurrency',
   // Mode 2 fusion — original + Adobe Podcast Enhance 100% (docs/PLAN.md §2.4).
   'fusionEnabled', 'fusionMode', 'fusionCrossoverHz', 'fusionOriginalPct',
   // Embedded Adobe Enhance (docs/PLAN.md §3.1 Nivel 2 / Fase 10).
@@ -61,6 +64,7 @@ const RANGE_VALUES = {
   airExtraAmount:    [0, 100],
   deEsserAmount:     [0, 100],
   toneTiltTarget:    [6, 22],
+  concurrency:       [0, 4],
   fusionCrossoverHz: [80, 500],
   fusionOriginalPct: [0, 40],
   enhanceMixPct:     [0, 100],
@@ -85,6 +89,7 @@ const store = new Store({
     deEsserAmount: 0,
     adaptiveToneEnabled: true,
     toneTiltTarget: 14,
+    concurrency: 0,
     trimSilence: true,
     normalizeMode: 'both',
     fusionEnabled: true,
@@ -146,7 +151,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   if (pipelineState) {
     pipelineState.cancelled = true;
-    pipelineState.currentProc?.kill('SIGTERM');
+    killTrackedProcs(pipelineState, 'SIGTERM');
   }
   for (const f of previewTempFiles) {
     try { fs.unlinkSync(f); } catch { /* best effort */ }
@@ -171,7 +176,7 @@ ipcMain.handle('store:set', (_, key, value) => {
     'adaptiveToneEnabled',
   ]);
   const STRING_KEYS = new Set(['outputFormat', 'manualEqChain', 'customOutputDir']);
-  const INT_KEYS = new Set(['hpfFrequency', 'sampleRate', 'bodyPct', 'airExtraAmount', 'deEsserAmount', 'toneTiltTarget', 'fusionCrossoverHz', 'fusionOriginalPct', 'enhanceMixPct']);
+  const INT_KEYS = new Set(['hpfFrequency', 'sampleRate', 'bodyPct', 'airExtraAmount', 'deEsserAmount', 'toneTiltTarget', 'concurrency', 'fusionCrossoverHz', 'fusionOriginalPct', 'enhanceMixPct']);
   if (BOOL_KEYS.has(key) && typeof value !== 'boolean') return;
   if (STRING_KEYS.has(key) && typeof value !== 'string') return;
   if (INT_KEYS.has(key) && (typeof value !== 'number' || !Number.isFinite(value))) return;
@@ -295,6 +300,24 @@ ipcMain.handle('adobe:disconnect', () => {
 
 let pipelineState = null;
 
+// The queue runs several files at once (src/pipeline.js processQueue), so a
+// cancel has to reach every ffmpeg that is currently running, not just the
+// most recently started one. Each stage reports its process here as it starts
+// and clears it when it exits.
+function trackProc(state, proc, finished) {
+  if (!state) return;
+  if (proc) state.procs.add(proc);
+  else if (finished) state.procs.delete(finished);
+}
+
+function killTrackedProcs(state, signal) {
+  if (!state) return;
+  for (const proc of state.procs) {
+    try { proc.kill(signal); } catch { /* already gone */ }
+  }
+  state.procs.clear();
+}
+
 // Stage 0 of the batch when "Enhance with Adobe" is on: uploads every
 // file that arrived WITHOUT an Enhanced/ pair to Adobe Podcast, saves
 // the 100% clean voice to Enhanced/<stem>.wav (plus the optional local
@@ -385,6 +408,7 @@ ipcMain.handle('pipeline:start', (event, files) => {
     deEsserAmount:     store.get('deEsserAmount'),
     adaptiveToneEnabled: store.get('adaptiveToneEnabled'),
     toneTiltTarget:    store.get('toneTiltTarget'),
+    concurrency:       store.get('concurrency') || undefined,
     trimSilence:       store.get('trimSilence'),
     normalizeMode:     store.get('normalizeMode'),
     fusionEnabled:     store.get('fusionEnabled'),
@@ -393,7 +417,7 @@ ipcMain.handle('pipeline:start', (event, files) => {
     fusionOriginalPct: store.get('fusionOriginalPct'),
   };
 
-  pipelineState = { running: true, cancelled: false, currentProc: null };
+  pipelineState = { running: true, cancelled: false, procs: new Set() };
 
   const pairedCount = files.filter(f => f.pairPath).length;
   logger.push('pipeline', `Starting batch: ${files.length} files (${pairedCount} Mode 2 pairs)`, {
@@ -436,7 +460,7 @@ ipcMain.handle('pipeline:start', (event, files) => {
     await pipeline.processQueue(queueFiles, {
       emit,
       isCancelled: () => pipelineState?.cancelled ?? false,
-      setCurrent: proc => { if (pipelineState) pipelineState.currentProc = proc; },
+      setCurrent: (proc, finished) => trackProc(pipelineState, proc, finished),
       settings,
     });
   })().catch(err => {
@@ -460,7 +484,7 @@ ipcMain.handle('pipeline:cancel', () => {
   if (pipelineState) {
     logger.push('pipeline', 'Processing cancelled by user');
     pipelineState.cancelled = true;
-    pipelineState.currentProc?.kill();
+    killTrackedProcs(pipelineState);
   }
 });
 

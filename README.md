@@ -265,6 +265,18 @@ selection** in the toolbar switch between the whole batch and a hand-picked
 subset (re-running a single class after a tweak, for instance). Move
 up/down still overrides the name order per file.
 
+Several files render at once — every stage is a separate ffmpeg process that
+mostly occupies one core, so a course-sized batch used to leave the machine
+idle. Measured on four real classes through the full Mode 2 chain: 138 s at
+one file at a time, 86 s with two, **61 s with four (2.3×)**. It does not
+scale linearly because ffmpeg threads a little internally and the files
+compete for I/O.
+
+The worker count defaults to half the core count, capped at 4, and cancelling
+stops every running process rather than just the most recent one. Override it
+with the store-only `concurrency` key (0 = decide from the core count) if a
+batch should leave more of the machine free while someone edits.
+
 ## Output
 
 - WAV 24-bit (default), WAV 16-bit, or FLAC — 48 kHz or 44.1 kHz.
@@ -403,6 +415,8 @@ All settings persist across sessions via `electron-store`:
 - `adaptiveToneEnabled` (default on) and `toneTiltTarget` (default 14) — the
   adaptive tilt correction above. Also store-only; retargeting lets a course
   with an unusually deep or bright teacher be rebalanced without a rebuild.
+- `concurrency` (default 0 = half the core count, capped at 4) — how many
+  files render at once. Store-only.
 
 ## Architecture
 
@@ -415,7 +429,8 @@ renderer/
   js/eq-editor.js             Canvas EQ editor + spectrum auto-fit + Web Audio preview
   styles/app.css              Styling
 src/
-  pipeline.js                 Per-file orchestration: fuse → analyze → repair → tone/dynamics → loudness → verify
+  pipeline.js                 Per-file orchestration: align/fuse → analyze → repair → tone/dynamics → loudness → verify,
+                               plus the worker pool that runs several files at once
   enhance/
     phonos.js                 Adobe Enhance Speech client (ported from adobe-podcast-batch)
     batch.js                  Embedded-enhance workers + shared credits gate; saves Enhanced/ + Mix N/

@@ -526,36 +526,64 @@ async function processFile(file, settings, { emit, isCancelled, setCurrent, t0, 
 }
 
 // ── Queue runner ──
+// A course is 15-40 classes and every stage here is a separate ffmpeg process
+// that spends most of its time on one core, so running the queue strictly
+// one file at a time left the machine idle. Files are fully independent —
+// their own temp paths, their own output, their own ffmpeg instances — so a
+// small worker pool is safe.
+//
+// Deliberately small: each file still runs its own stages in sequence, and
+// too many concurrent ffmpeg processes just trade wall-clock for contention
+// on a laptop that the editor is also using.
+function defaultConcurrency() {
+  const cpus = os.availableParallelism?.() ?? os.cpus().length ?? 2;
+  return Math.max(1, Math.min(MAX_CONCURRENCY, Math.floor(cpus / 2)));
+}
+
+const MAX_CONCURRENCY = 4;
+
 async function processQueue(files, { emit, isCancelled, setCurrent, settings = {} }) {
   const total = files.length;
   let done = 0;
+  let next = 0;
   const t0 = Date.now();
 
-  for (const file of files) {
-    if (isCancelled()) break;
+  const concurrency = Math.max(1, Math.min(
+    MAX_CONCURRENCY,
+    settings.concurrency ?? defaultConcurrency(),
+    total,
+  ));
 
-    try { fs.accessSync(file.path, fs.constants.R_OK); } catch {
-      emit('file:error', { file: file.path, error: 'File not readable or not found' });
-      done++;
-      continue;
-    }
+  async function worker() {
+    while (!isCancelled()) {
+      const index = next++;
+      if (index >= files.length) return;
+      const file = files[index];
 
-    emit('file:start', { file: file.path, index: done, total });
+      try { fs.accessSync(file.path, fs.constants.R_OK); } catch {
+        emit('file:error', { file: file.path, error: 'File not readable or not found' });
+        done++;
+        continue;
+      }
 
-    try {
-      await processFile(file, settings, { emit, isCancelled, setCurrent, t0, done, total });
+      emit('file:start', { file: file.path, index, total });
+
+      try {
+        await processFile(file, settings, { emit, isCancelled, setCurrent, t0, done, total });
+      } catch (err) {
+        emit('file:error', { file: file.path, error: err.message });
+      }
       done++;
-    } catch (err) {
-      done++;
-      emit('file:error', { file: file.path, error: err.message });
     }
   }
 
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
   emit('batch:done', { total, done });
 }
 
 module.exports = {
   processQueue,
+  defaultConcurrency, MAX_CONCURRENCY,
   buildDeesserChain, buildExciterChain, buildLevelerChain,
   buildEqCutsChain, tiltShelfGainDb,
   TONE_TILT_REFERENCE_DB, TONE_TILT_MAX_SHELF_DB, TONE_TILT_DB_PER_SHELF_DB,

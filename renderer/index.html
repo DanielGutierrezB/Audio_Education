@@ -52,6 +52,10 @@
             <span class="btn-icon">&#128193;</span>
             <span class="btn-output-label" id="btn-output-label">Output: Default</span>
           </button>
+          <button class="btn btn-secondary" id="btn-retry-failed" hidden
+            title="Select only the files that failed and run them again">
+            &#8635; Retry failed
+          </button>
           <button class="btn-icon-only" id="btn-output-reset" hidden
             title="Reset output folder to default (Audio_Pro/ next to source)">&#10005;</button>
           <select class="settings-select" id="toolbar-preset"
@@ -159,6 +163,16 @@
                   <input type="range" id="set-air-extra" min="0" max="100" step="5" value="0" aria-label="Presence extra amount">
                   <span class="range-value" id="air-extra-value">0%</span>
                 </div>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="set-skip-unchanged"
+                  title="Skip a file whose output already matches what this render would produce. Re-recording a take, a new Enhanced/ pair, or any setting that reaches the render all count as changed, so it re-renders. Deleting the output does too.">
+                  Skip unchanged
+                </label>
+                <label class="toggle">
+                  <input type="checkbox" id="set-skip-unchanged" checked>
+                  <span class="toggle-track"></span>
+                </label>
               </div>
               <div class="settings-row">
                 <label class="settings-label" for="set-trim-silence"

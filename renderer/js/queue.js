@@ -5,10 +5,11 @@
 // and the view of the queue the EQ editor reads.
 
 import {
-  btnClearAll, btnClearSelection, btnProcessSelection, btnRemoveDone, btnSelectAll,
+  btnClearAll, btnClearSelection, btnProcessSelection, btnRemoveDone,
+  btnRetryFailed, btnSelectAll,
   queueContainer, queueEmpty, queueList, queueSummary,
 } from './dom.js';
-import { completedFiles, queue, selectedFiles, ui } from './state.js';
+import { completedFiles, isFinished, queue, selectedFiles, ui } from './state.js';
 import { formatDuration, formatEta, formatSize, isAudioFileName, statusIcon } from './format.js';
 import { showSpectrogram } from './qc-tools.js';
 
@@ -150,7 +151,7 @@ function clearAll() {
 function removeCompleted() {
   for (const [fp, group] of queue) {
     group.files = group.files.filter(f => {
-      if (f.status === 'done') { selectedFiles.delete(f.path); return false; }
+      if (isFinished(f.status)) { selectedFiles.delete(f.path); return false; }
       return true;
     });
     if (group.files.length === 0) queue.delete(fp);
@@ -165,7 +166,7 @@ function processableSelectedCount() {
   let n = 0;
   for (const [, group] of queue) {
     for (const f of group.files) {
-      if (f.status !== 'done' && selectedFiles.has(f.path)) n++;
+      if (!isFinished(f.status) && selectedFiles.has(f.path)) n++;
     }
   }
   return n;
@@ -174,7 +175,24 @@ function processableSelectedCount() {
 function selectAllFiles() {
   for (const [, group] of queue) {
     for (const f of group.files) {
-      if (f.status !== 'done') selectedFiles.add(f.path);
+      if (!isFinished(f.status)) selectedFiles.add(f.path);
+    }
+  }
+  renderQueue();
+}
+
+// Narrows the selection to just the files that failed, so a batch where two
+// of forty errored can be re-run without hand-picking them or re-rendering
+// the other thirty-eight. Also resets their status, since an 'error' row is
+// otherwise still an error row after a successful re-run.
+function selectFailedOnly() {
+  selectedFiles.clear();
+  for (const [, group] of queue) {
+    for (const f of group.files) {
+      if (f.status !== 'error') continue;
+      selectedFiles.add(f.path);
+      f.status = 'queued';
+      f.errorMsg = null;
     }
   }
   renderQueue();
@@ -205,7 +223,10 @@ function renderQueue() {
   btnClearAll.hidden = !hasFiles;
   refreshSelectionControls();
 
-  const hasDone = hasFiles && [...queue.values()].some(g => g.files.some(f => f.status === 'done'));
+  const hasFailed = hasFiles && [...queue.values()].some(g => g.files.some(f => f.status === 'error'));
+  btnRetryFailed.hidden = !hasFailed;
+
+  const hasDone = hasFiles && [...queue.values()].some(g => g.files.some(f => isFinished(f.status)));
   btnRemoveDone.hidden = !hasDone;
 
   if (!hasFiles) {
@@ -610,6 +631,7 @@ export {
   clearAll,
   removeCompleted,
   selectAllFiles,
+  selectFailedOnly,
   clearSelection,
   renderQueue,
   findQueuedFile,

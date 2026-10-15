@@ -9,6 +9,7 @@ const binPaths = require('./bin-paths');
 const metrics = require('./metrics');
 const fusion = require('./fusion');
 const align = require('./align');
+const renderManifest = require('./render-manifest');
 const { getPreset } = require('./presets');
 
 // ── Base EQ (F6-style) ──
@@ -390,6 +391,16 @@ async function processFile(file, settings, { emit, isCancelled, setCurrent, t0, 
     // rather than only the log.
     let pairNote = null;
 
+    // Checked first: fusion, the analysis pass and the loudness measure all
+    // run before anything is written, and all of them cost real time. Re-running
+    // a course to fix two classes should not re-render the other thirty-eight.
+    const outputPath = resolveOutputPath(file.path, settings);
+    const fingerprint = renderManifest.fingerprint(file, settings);
+    if (settings.skipUnchanged !== false && renderManifest.isUpToDate(outputPath, fingerprint)) {
+      emit('file:skipped', { file: file.path, outputPath, reason: 'unchanged since the last render' });
+      return;
+    }
+
     if (file.pairPath && settings.fusionEnabled !== false) {
       stepTotal = 5;
       stepIndex = 1;
@@ -517,13 +528,13 @@ async function processFile(file, settings, { emit, isCancelled, setCurrent, t0, 
     console.log(`[AudioPro] ${path.basename(file.path)} [Mode ${mode}]: ${summary}`);
     emit('loudness', { file: file.path, message: summary });
 
-    const outputPath = resolveOutputPath(file.path, settings);
-
     stepIndex++;
     emit('progress', { file: file.path, step: 'Rendering', stepIndex, stepTotal, pct: mode === 2 ? 58 : 46, eta: calcEta(t0, done + 0.5, total) });
     await renderFile(workingPath, outputPath, prefixParts, bodyPct, suffixParts, stats, applyLoudnorm, preset, settings, duration,
       frac => { if (!isCancelled()) emit('progress', { file: file.path, step: 'Rendering', stepIndex, stepTotal, pct: Math.round((mode === 2 ? 58 : 46) + frac * 44), eta: calcEta(t0, done + 0.5 + frac * 0.5, total) }); },
       setCurrent, cwd);
+
+    renderManifest.record(outputPath, fingerprint);
 
     const verify = await verifyOutput(outputPath, preset);
     emit('file:done', { file: file.path, outputPath, mode, verify });

@@ -42,7 +42,9 @@ function formatEta(seconds) {
 }
 
 function statusIcon(status) {
-  const map = { queued: '⏳', processing: '🔄', done: '✅', error: '❌' };
+  // "skipped" reads as a distinct state on purpose: the output is there and
+  // correct, but nothing was rendered, and a plain ✅ would hide that.
+  const map = { queued: '⏳', processing: '🔄', done: '✅', skipped: '↻', error: '❌' };
   return map[status] ?? '⏳';
 }
 

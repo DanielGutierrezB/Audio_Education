@@ -37,16 +37,64 @@ jobs:
       - name: Fetch bundled ffmpeg/ffprobe/RNNoise model (arm64, SHA256-verified)
         run: npm run setup:bin
 
+      # Signing and notarization only happen once the Apple Developer secrets
+      # exist. Until then every step below is a no-op and the build produces
+      # the same unsigned artifacts as before, so adding the configuration
+      # costs nothing while the decision is pending.
+      #
+      # Required secrets (see docs/SIGNING.md):
+      #   MACOS_CERTIFICATE          Developer ID Application .p12, base64
+      #   MACOS_CERTIFICATE_PASSWORD password for that .p12
+      #   APPLE_ID                   Apple ID that owns the Developer account
+      #   APPLE_APP_SPECIFIC_PASSWORD  app-specific password for that Apple ID
+      #   APPLE_TEAM_ID              10-character team identifier
+      - name: Check for signing credentials
+        id: signing
+        env:
+          CERT: ${{ secrets.MACOS_CERTIFICATE }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+        run: |
+          if [ -n "$CERT" ] && [ -n "$APPLE_ID" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No Apple Developer secrets configured — building unsigned."
+          fi
+
       - name: Build macOS arm64 zip + pkg (publish to this repo's Releases on tags)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # electron-builder reads the certificate from these two. Empty when
+          # unconfigured, which is how it decides to skip signing.
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            npm run build -- --publish always
-          else
-            npm run build -- --publish never
+          # Notarization is off in package.json and turned on here, so a local
+          # `npm run build` never waits on Apple for a build nobody ships.
+          args=()
+          if [ "${{ steps.signing.outputs.enabled }}" = "true" ]; then
+            args+=(--config.mac.notarize=true)
           fi
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            npm run build -- --publish always "${args[@]}"
+          else
+            npm run build -- --publish never "${args[@]}"
+          fi
+
+      # Proves the artifact is actually signed and notarized, rather than
+      # assuming the build step did it. `spctl` is what Gatekeeper itself runs.
+      - name: Verify signature and notarization
+        if: steps.signing.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          app="dist/mac-arm64/AudioPro.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          spctl --assess --type execute --verbose=4 "$app"
+          xcrun stapler validate "$app"
 
       - name: Locate installer
         id: pkg

@@ -174,7 +174,7 @@ Loudness target is a toolbar selector, not a fixed constant:
 
 | Preset | Integrated loudness | True peak | Notes |
 |---|---|---|---|
-| **Platzi** (default) | −16 LUFS | ≤ −2 dBTP | Spoken-word convention; Platzi has no published spec (see `docs/PLAN.md` §5 D1/D2 — pending empirical validation against a published class) |
+| **Platzi** (default) | −16 LUFS | ≤ −2 dBTP | Spoken-word convention; Platzi publishes no spec (see `docs/PLAN.md` §5 D1) |
 | **YouTube** | −14 LUFS | ≤ −1.5 dBTP | Matches YouTube's own normalization reference |
 | **Podcast** | −16 LUFS | ≤ −1 dBTP | Apple Podcasts spec (ITU-R BS.1770-5) |
 
@@ -440,10 +440,19 @@ bin/                          (gitignored) populated by the fetch scripts
 - Installers are not code-signed. Distribute over a trusted channel and
   instruct users to right-click → Open the `.pkg` the first time (macOS).
 - The Platzi loudness target (−16 LUFS) is the general spoken-word/podcast
-  convention, not a measured spec — see `docs/PLAN.md` §5 D1/D2 for the
-  pending validation experiment (measure a published class's actual level).
-- QC thresholds are calibrated against the synthetic corpus in `test/`, not
-  yet against real course recordings (`docs/PLAN.md` §5 D4).
+  convention, not a measured spec. AudioPro does hit it: all four validated
+  classes land at −16.0 LUFS / −2.0 dBTP. **The finished videos do not** —
+  five rendered classes measured −15.3 to −19.6 LUFS, a 4.3 LU spread, with
+  two peaking at or above 0 dBFS. That is introduced downstream, in the
+  Premiere edit where the master meets music and SFX with no loudness
+  control, so nothing AudioPro changes about its own target would fix it.
+  See `docs/PLAN.md` §5 D1 for the measurements and D7 for the open question
+  of checking the final deliverable.
+- `SIBILANT`, `NO_AIR` and the tilt target are calibrated against real course
+  recordings, but from **one teacher**. The remaining detectors are still on
+  the synthetic corpus in `test/` (`docs/PLAN.md` §5 D4). Use
+  `npm run calibrate` on a new course before trusting them on a very
+  different voice.
 - The embedded Enhance talks to Adobe's internal, unofficial endpoint (the
   same one `adobe-podcast-batch` uses) — it can change or break without
   notice, and it consumes your Adobe account's Enhance credits. Mode 2 with

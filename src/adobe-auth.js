@@ -4,10 +4,19 @@
 // Enhance stage (docs/PLAN.md §3.1 Nivel 2). Same proven pattern as
 // `adobe-podcast-batch`: a `podcast.adobe.com` window on a persistent
 // session partition, polling `window.adobeIMS.getAccessToken()` in-page,
-// and the token stored in its own file encrypted with `safeStorage`
-// whenever the OS allows it.
+// and the token kept in its own owner-only file under userData.
+//
+// Not in the macOS Keychain (`safeStorage`), deliberately. The app is
+// ad-hoc signed, and the Keychain ties "Always Allow" to the binary's
+// signature, so every update and every rebuild re-prompted the user for
+// access — at launch, on connect and on each silent re-auth. And it bought
+// almost nothing: Electron ships with the EnableCookieEncryption fuse off,
+// so the `persist:adobe` session cookies — the long-lived credential, the
+// one that can mint fresh tokens — already sit on disk unencrypted next to
+// it. The Keychain was guarding the ~24 h token while the key to it was in
+// the clear. Revisit both together once the app is Developer ID signed.
 
-const { BrowserWindow, app, safeStorage } = require('electron');
+const { BrowserWindow, app } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { tokenInfo } = require('./enhance/phonos');
@@ -21,23 +30,38 @@ let currentToken = null;
 
 const tokenPath = () => path.join(app.getPath('userData'), 'adobe-token.dat');
 
+// Adobe IMS access tokens are JWTs; anything else in the file is not one.
+function looksLikeToken(s) {
+  return typeof s === 'string' && s.startsWith('eyJ') && !/\s/.test(s);
+}
+
+// Returns true when a session was ever stored, which is what decides whether
+// startup attempts the silent re-auth — the hidden podcast.adobe.com window
+// must never open for users who don't use the feature.
+//
+// Files written before v0.7.1 hold a Keychain-encrypted blob. Reading them
+// without the Keychain is the whole point, so the blob is simply not used as
+// a token: the session still counts as stored, and the silent re-auth mints
+// a fresh token from the partition cookies, overwriting the old file.
 function loadStoredToken() {
+  let raw;
   try {
-    const raw = fs.readFileSync(tokenPath());
-    currentToken = safeStorage.isEncryptionAvailable()
-      ? safeStorage.decryptString(raw)
-      : raw.toString('utf8');
-  } catch { currentToken = null; }
-  return currentToken;
+    raw = fs.readFileSync(tokenPath(), 'utf8').trim();
+  } catch {
+    currentToken = null;
+    return false;
+  }
+  currentToken = looksLikeToken(raw) ? raw : null;
+  return true;
 }
 
 function persistToken(tok) {
   currentToken = tok;
   try {
-    const data = safeStorage.isEncryptionAvailable()
-      ? safeStorage.encryptString(tok)
-      : Buffer.from(tok, 'utf8');
-    fs.writeFileSync(tokenPath(), data);
+    fs.writeFileSync(tokenPath(), tok, { encoding: 'utf8', mode: 0o600 });
+    // writeFileSync only applies `mode` when it creates the file, so a file
+    // left over from an earlier version keeps whatever it had.
+    fs.chmodSync(tokenPath(), 0o600);
   } catch { /* token still usable in memory for this session */ }
 }
 

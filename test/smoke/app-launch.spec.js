@@ -21,6 +21,15 @@ const APP_ROOT = path.join(__dirname, '..', '..');
 let app;
 let userDataDir;
 
+// The gear toggles, so clicking it blindly means whichever test runs second
+// closes the panel the first one opened.
+async function openSettings(win) {
+  if (await win.locator('#settings-panel').isHidden()) {
+    await win.locator('#btn-settings').click();
+  }
+  await win.locator('#settings-panel').waitFor({ state: 'visible' });
+}
+
 test.beforeAll(async () => {
   // A throwaway userData directory, so the suite never reads or writes the
   // developer's real settings, history or Adobe session.
@@ -133,6 +142,10 @@ test('the settings panel opens and reflects the stored preset', async () => {
   await expect(win.locator('#settings-panel')).toBeHidden();
   await win.locator('#btn-settings').click();
   await expect(win.locator('#settings-panel')).toBeVisible();
+
+  // Left closed again so the next test starts from a known state.
+  await win.locator('#btn-settings').click();
+  await expect(win.locator('#settings-panel')).toBeHidden();
 });
 
 test('changing the delivery preset persists it', async () => {
@@ -146,6 +159,29 @@ test('changing the delivery preset persists it', async () => {
     .toBe(next);
 
   await win.locator('#toolbar-preset').selectOption(before);
+});
+
+test('a course profile saves, applies and deletes through the real bridge', async () => {
+  const win = await app.firstWindow();
+  await openSettings(win);
+
+  // Capture a distinctive setting under a profile, change it, then bring it
+  // back. This is the whole promise of profiles in one pass.
+  await win.evaluate(() => window.api.store.set('toneTiltTarget', 18));
+  await win.locator('#set-profile-name').fill('Curso de prueba');
+  await win.locator('#btn-profile-save').click();
+  await expect(win.locator('#set-profile')).toHaveValue('Curso de prueba');
+
+  await win.evaluate(() => window.api.store.set('toneTiltTarget', 10));
+  await win.locator('#set-profile').selectOption('Curso de prueba');
+  await expect
+    .poll(() => win.evaluate(() => window.api.store.get('toneTiltTarget')))
+    .toBe(18);
+
+  await win.locator('#btn-profile-delete').click();
+  await expect
+    .poll(() => win.evaluate(() => window.api.profiles.list()))
+    .not.toContain('Curso de prueba');
 });
 
 test('Process Selection stays disabled while the queue is empty', async () => {

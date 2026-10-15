@@ -367,6 +367,34 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Profile name field — same shell as .settings-select so the row reads as one
+   control group, but it is a text input, so no pointer cursor. */
+.settings-text {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 11.5px;
+  padding: 3px 8px;
+  transition: border-color 0.12s;
+}
+
+.settings-text:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-text::placeholder {
+  color: var(--text-3);
+}
+
+.btn-small {
+  padding: 3px 10px;
+  font-size: 11.5px;
+}
+
 .settings-select {
   appearance: none;
   background: var(--bg-elevated);
@@ -385,9 +413,14 @@ body {
   align-items: center;
   gap: 8px;
   flex: 1;
+  /* A flex item won't shrink below its content's intrinsic width by default,
+     and a range input's is ~130px. Without this the row stays wider than its
+     settings column and the value label spills into the next one. */
+  min-width: 0;
 }
 .range-row input[type="range"] {
   flex: 1;
+  min-width: 0;
   accent-color: var(--accent);
   cursor: pointer;
 }
@@ -395,6 +428,8 @@ body {
   font-size: 11px;
   color: var(--text-3);
   min-width: 52px;
+  /* The slider gives way, not the number: a clipped "200 Hz" is useless. */
+  flex-shrink: 0;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }

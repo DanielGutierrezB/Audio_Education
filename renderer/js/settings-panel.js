@@ -10,7 +10,7 @@ import {
 import { prefs, ui } from './state.js';
 import {
   addFilesViaDialog, addFoldersViaDialog, clearAll, clearSelection,
-  removeCompleted, selectAllFiles, selectFailedOnly,
+  removeCompleted, selectAllFiles, selectFailedOnly, setProfileAppliedHandler,
 } from './queue.js';
 import { cancelProcessing, startProcessing } from './processing.js';
 
@@ -75,6 +75,7 @@ function applySettingsUI(p) {
   if (airExtraValue) airExtraValue.textContent = `${airAmt}%`;
   setTrimSilence.checked = p.trimSilence !== false;
   setSkipUnchanged.checked = p.skipUnchanged !== false;
+  refreshProfiles(ui.profile);
   setNormalize.value = p.normalizeMode ?? 'both';
   setFusionEnabled.checked = p.fusionEnabled !== false;
   setFusionMode.value = p.fusionMode ?? 'bands';
@@ -262,3 +263,83 @@ btnProcessSelection.addEventListener('click', () => {
 export {
   applySettingsUI,
 };
+
+// ── Course profiles ──
+// A course is one teacher in one room, so its settings belong to it rather
+// than to the app. Applying a profile overwrites every processing setting, so
+// the panel is re-read from the store afterwards rather than patched field by
+// field — that way a profile written by an older version can't leave the
+// controls showing something the store doesn't hold.
+const setProfile       = document.getElementById('set-profile');
+const setProfileName   = document.getElementById('set-profile-name');
+const btnProfileSave   = document.getElementById('btn-profile-save');
+const btnProfileDelete = document.getElementById('btn-profile-delete');
+
+async function refreshProfiles(selected = setProfile.value) {
+  if (!window.api?.profiles) return;
+  const names = await window.api.profiles.list();
+  setProfile.innerHTML = '';
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = names.length ? '(none)' : '(no profiles yet)';
+  setProfile.appendChild(none);
+  for (const name of names) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    setProfile.appendChild(opt);
+  }
+  setProfile.value = names.includes(selected) ? selected : '';
+  btnProfileDelete.hidden = !setProfile.value;
+}
+
+setProfile.addEventListener('change', async () => {
+  btnProfileDelete.hidden = !setProfile.value;
+  if (!setProfile.value) return;
+  const name = setProfile.value;
+  await window.api.profiles.apply(name);
+  // Re-read everything rather than patching field by field: apply() writes
+  // many settings at once and re-validates each on the way in, so the store is
+  // the only honest account of what actually landed.
+  Object.assign(prefs, await window.api.store.getAll());
+  applySettingsUI(prefs);
+  ui.profile = name;
+  setProfile.value = name;
+  window.api?.log.push('settings', `Profile applied: ${name}`);
+});
+
+btnProfileSave.addEventListener('click', async () => {
+  const name = setProfileName.value.trim() || setProfile.value;
+  if (!name) {
+    setProfileName.focus();
+    return;
+  }
+  const ok = await window.api.profiles.save(name);
+  if (!ok) {
+    setProfileName.focus();
+    return;
+  }
+  setProfileName.value = '';
+  ui.profile = name;
+  await refreshProfiles(name);
+  window.api?.log.push('settings', `Profile saved: ${name}`);
+});
+
+btnProfileDelete.addEventListener('click', async () => {
+  const name = setProfile.value;
+  if (!name) return;
+  await window.api.profiles.remove(name);
+  if (ui.profile === name) ui.profile = '';
+  await refreshProfiles('');
+  window.api?.log.push('settings', `Profile deleted: ${name}`);
+});
+
+// When a dropped folder brings its own profile, the panel has to catch up:
+// every control below it has just been overwritten.
+setProfileAppliedHandler(async (name) => {
+  Object.assign(prefs, await window.api.store.getAll());
+  applySettingsUI(prefs);
+  setProfile.value = name;
+  btnProfileDelete.hidden = false;
+  window.api?.log.push('settings', `Profile applied from folder: ${name}`);
+});

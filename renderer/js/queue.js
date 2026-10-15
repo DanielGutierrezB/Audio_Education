@@ -53,9 +53,33 @@ async function processFolderPaths(folderPaths) {
     added.push(fp);
   }
   if (!added.length) return;
+  await applyRememberedProfile(added);
   renderQueue();
   for (const fp of added) loadFolderMetadata(fp);
 }
+
+// A folder that was processed with a profile re-applies it when dropped back
+// in, which is the point of profiles: coming back to a course next week should
+// not mean re-tuning its settings from memory. Only the first match is used —
+// dropping several courses at once has no single right answer, so the rest are
+// left to the dropdown rather than guessed at.
+async function applyRememberedProfile(folderPaths) {
+  if (!window.api?.profiles) return;
+  for (const folderPath of folderPaths) {
+    const name = await window.api.profiles.forFolder(folderPath);
+    if (!name || name === ui.profile) continue;
+    await window.api.profiles.apply(name);
+    ui.profile = name;
+    onProfileApplied?.(name, folderPath);
+    return;
+  }
+}
+
+// Set by settings-panel.js so the panel can re-read itself after a folder
+// brings its own profile in. A callback rather than an import because the
+// panel already imports this file.
+let onProfileApplied = null;
+function setProfileAppliedHandler(fn) { onProfileApplied = fn; }
 
 function addIndividualFiles(fileInfos) {
   // Group by parent directory
@@ -632,6 +656,7 @@ export {
   removeCompleted,
   selectAllFiles,
   selectFailedOnly,
+  setProfileAppliedHandler,
   clearSelection,
   renderQueue,
   findQueuedFile,

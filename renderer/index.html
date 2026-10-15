@@ -89,6 +89,26 @@
           <div class="settings-categories">
 
             <div class="settings-category">
+              <div class="settings-cat-title">Profile</div>
+              <div class="settings-row">
+                <span class="settings-label"
+                  title="A course is one teacher in one room, so its settings belong to it. Applying a profile overwrites every processing setting below. Folders remember the profile they were processed with and re-apply it when dropped in again.">Course profile</span>
+                <select class="settings-select" id="set-profile">
+                  <option value="">(none)</option>
+                </select>
+              </div>
+              <div class="settings-row">
+                <input class="settings-text" id="set-profile-name" type="text"
+                  placeholder="Name this course's settings…" maxlength="60"
+                  aria-label="Profile name">
+                <button class="btn btn-secondary btn-small" id="btn-profile-save"
+                  title="Save every processing setting below under this name">Save</button>
+                <button class="btn-icon-only" id="btn-profile-delete" hidden
+                  title="Delete the selected profile">&#10005;</button>
+              </div>
+            </div>
+
+            <div class="settings-category">
               <div class="settings-cat-title">Output</div>
               <div class="settings-row">
                 <span class="settings-label" title="Output file format. WAV 24-bit is best quality, FLAC saves space.">Format</span>

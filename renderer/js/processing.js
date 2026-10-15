@@ -143,6 +143,15 @@ function startProcessing() {
   resetProgressTracking(files.length);
   setProgress({ file: files[0].path, pct: 0, step: 'Starting…', eta: null });
 
+  // Tie the folders in this batch to the active profile, so dropping them back
+  // in next week re-applies it. Done at start rather than on completion: a
+  // cancelled or partly failed batch was still run with these settings.
+  if (ui.profile) {
+    for (const folderPath of queue.keys()) {
+      window.api.profiles?.rememberFolder(folderPath, ui.profile);
+    }
+  }
+
   unsubPipeline = window.api.pipeline.onEvent(handlePipelineEvent);
 
   window.api.pipeline.start(files).catch(err => {

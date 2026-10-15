@@ -182,6 +182,27 @@ naturally deep voice is still a deep voice — the shelf only removes the
 target itself is calibrated against one teacher so far; `docs/PLAN.md` §5 D4
 tracks the multi-teacher corpus needed to set it per voice type.
 
+## Course profiles
+
+A course is one teacher in one room, so its settings belong to it rather than
+to the app. Without profiles they are global: tuning for a deep voice means
+the next course inherits it, and coming back means re-tuning from memory.
+
+**Settings → Profile** names the current processing settings and recalls them.
+A profile captures exactly the settings that change the audio — the same list
+`src/render-manifest.js` uses to decide whether a render is stale, reused
+rather than duplicated so a new control gets remembered and invalidates a
+stale render in one step.
+
+Folders remember the profile they were processed with, so dropping a course
+back in next week re-applies it. Dropping several at once applies the first
+match only: there is no single right answer, so the rest is left to the
+dropdown rather than guessed at.
+
+Applying re-validates every value through the settings schema, so a profile
+written by an older version — or hand-edited in the store — can't put
+something the pipeline won't read into play.
+
 ## Delivery presets
 
 Loudness target is a toolbar selector, not a fixed constant:
@@ -507,6 +528,7 @@ src/
   metrics.js                  QC analysis pass (loudness, bands, rolloff, silences) → flags
   pairing.js                  Detects original ↔ Enhanced/ pairs (adobe-podcast-batch convention)
   render-manifest.js          What each master was made from, so unchanged files can be skipped
+  profiles.js                 Named settings per course, and the folders that remember them
   align.js                    Recovers a Mode 2 pair's time offset (envelope cross-correlation)
   fusion.js                   Mode 2 blend (bands / bed / bands+bed filter graphs)
   presets.js                  Delivery loudness/TP/LRA targets per platform

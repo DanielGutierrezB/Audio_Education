@@ -8,6 +8,7 @@ const { ipcMain, shell } = require('electron');
 
 const settings = require('../settings');
 const history = require('../history');
+const profiles = require('../profiles');
 const logger = require('../logger');
 
 const MAX_LOG_CATEGORY = 32;
@@ -25,6 +26,16 @@ function register({ store }) {
   ipcMain.handle('history:add', (_, rec) => history.add(store, rec));
   ipcMain.handle('history:list', () => history.list(store));
   ipcMain.handle('history:clear', () => history.clear(store));
+
+  // Settings profiles: one course is one teacher in one room, so its settings
+  // belong to it rather than to the app (src/profiles.js).
+  ipcMain.handle('profiles:list', () => profiles.list(store));
+  ipcMain.handle('profiles:save', (_, name) => !!profiles.save(store, name));
+  ipcMain.handle('profiles:apply', (_, name) => profiles.apply(store, name));
+  ipcMain.handle('profiles:remove', (_, name) => profiles.remove(store, name));
+  ipcMain.handle('profiles:rememberFolder', (_, folderPath, name) =>
+    profiles.rememberFolder(store, folderPath, name));
+  ipcMain.handle('profiles:forFolder', (_, folderPath) => profiles.profileForFolder(store, folderPath));
 
   ipcMain.handle('log:getFormatted', () => logger.formatForClipboard());
   // Reveals the rotating log file. The in-memory buffer only covers the

@@ -115,17 +115,43 @@ function buildLevelerChain(qc, settings) {
 
 function clampPct(v) { return Math.max(0, Math.min(100, Number(v) || 0)); }
 
-// De-esser and exciter are now intensity-driven (0–100%). The old on/off
-// flags are honoured as a fallback (≈60%) so existing settings keep working.
+// ── De-esser ──
+// Both stages below are intensity-driven (0–100%); the old on/off flags are
+// honoured as a fallback (≈60%) so settings files that predate the sliders
+// keep working.
+//
+// Two things about `adynamicequalizer` broke every version up to v0.7.0:
+// its `mode=0` is `cutbelow`, which attenuates while the detection band is
+// *below* the threshold (the inverse of a de-esser), and `threshold` is
+// linear amplitude, not dB — so `threshold=15` sat above full scale and the
+// stage attenuated every sample. Measured on a real class: a near-constant
+// −17.5 dB out of 5–9 kHz plus −6 dB of collateral presence loss, i.e. the
+// "muddy, no clarity" complaint was coming from the de-esser itself.
+//
+// `auto=adaptive` rather than any fixed threshold, because this stage runs
+// *before* loudnorm and therefore sees raw source level. Same class at
+// −12 / 0 / +12 dB input gain: a fixed threshold reduced sibilance by
+// −0.3 / −2.6 / −4.2 dB, adaptive held −5.5 dB throughout.
+//
+// Detection and target sit at 7.5 kHz with a narrow target bell. At 6.5 kHz
+// with tqfactor=1.5 the bell's skirt reached into the 2–5 kHz presence band
+// and cost 2.6 dB there to get 9.4 dB of sibilance; 7.5 kHz at tqfactor=3.5
+// gets 5.7 dB of sibilance for 1.2 dB of presence.
+const DEESSER_FREQ_HZ = 7500;
+const DEESSER_RANGE_MIN_DB = 2;
+const DEESSER_RANGE_SPAN_DB = 10;
+// What the SIBILANT flag alone asks for when the user left the slider at 0.
+const DEESSER_AUTO_PCT = 50;
+
 function buildDeesserChain(qc, settings) {
   let amt = settings.deEsserAmount != null ? clampPct(settings.deEsserAmount) : (settings.deEsserEnabled ? 60 : 0);
   // Still auto-engage on measured sibilance even if the user left it at 0.
-  if (amt <= 0 && hasFlag(qc, 'SIBILANT')) amt = 50;
+  if (amt <= 0 && hasFlag(qc, 'SIBILANT')) amt = DEESSER_AUTO_PCT;
   if (amt <= 0) return null;
-  const f = amt / 100;
-  const range = (f * 24).toFixed(1);          // up to 24 dB max reduction
-  const threshold = (20 - f * 12).toFixed(1); // 20 (gentle) → 8 dB (sensitive)
-  return `adynamicequalizer=dfrequency=6500:dqfactor=1.5:tfrequency=6500:tqfactor=1.5:threshold=${threshold}:ratio=6:range=${range}:mode=0`;
+  const range = (DEESSER_RANGE_MIN_DB + (amt / 100) * DEESSER_RANGE_SPAN_DB).toFixed(1);
+  return `adynamicequalizer=dfrequency=${DEESSER_FREQ_HZ}:dqfactor=2:` +
+    `tfrequency=${DEESSER_FREQ_HZ}:tqfactor=3.5:` +
+    `ratio=6:range=${range}:mode=cutabove:auto=adaptive`;
 }
 
 function buildExciterChain(settings) {
@@ -418,4 +444,4 @@ async function processQueue(files, { emit, isCancelled, setCurrent, settings = {
   emit('batch:done', { total, done });
 }
 
-module.exports = { processQueue };
+module.exports = { processQueue, buildDeesserChain, buildExciterChain };

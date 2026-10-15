@@ -19,8 +19,24 @@ const QC_THRESHOLDS = {
   clipFlatFactor:    1,     // astats Flat_factor above this + near-0dBFS peak ⇒ clipping
   clipPeakDb:        -1,
   humRatioDb:        -12,   // (narrow 50/60Hz band RMS − full RMS) above this ⇒ mains hum
-  sibilanceRatioDb:  -2,    // (sibilance band RMS − presence band RMS) above this ⇒ harsh/over-bright esses
-  rolloffHz:         7000,  // spectral rolloff (85%) below this ⇒ band-limited source, skip air boost
+  // (sibilance band RMS − presence band RMS) above this ⇒ harsh/over-bright esses.
+  // Calibrated against 28 real course files (originals, Adobe-enhanced and
+  // mixes, one teacher): they span −4.1 … +0.4 dB, so the former −2 dB split
+  // that population in half and fired on 22 of 28 — it was reading normal
+  // voice, not harsh esses. +1 clears the loudest real file by 0.6 dB and
+  // still catches the synthetic sibilant fixture (+2.3 dB).
+  sibilanceRatioDb:  1,
+  // (air band RMS − presence band RMS) below this ⇒ band-limited source,
+  // skip the air shelf. This replaced an absolute spectral-rolloff test:
+  // rolloff can't separate the two cases, because its value tracks content
+  // more than bandwidth. Measured: normal real voice 4.8 kHz, a genuinely
+  // lowpassed-at-8 kHz copy of that same voice 3.1 kHz, and the broadband
+  // synthetic fixtures 17 kHz — so normal voice sat *below* the band-limited
+  // synthetic fixture (6.8 kHz) and the 7000 Hz threshold fired on 28 of 28
+  // real files, meaning no real voice ever received the air shelf. The
+  // relative measure separates cleanly: normal −3.1 … −9.1 dB, band-limited
+  // −12.3 … −21.1 dB.
+  airRatioDb:        -11,
   lraFlat:           3,     // integrated LRA below this ⇒ already squashed, skip leveler compression
   noiseFloorNoisyDb: -50,   // astats Noise_floor above this ⇒ worth conditional local denoise
   dcOffset:          0.003, // |DC offset| above this ⇒ note it (HPF already removes it downstream)
@@ -191,8 +207,11 @@ function deriveFlags({ global, bandData }) {
     }
   }
 
-  if (bandData.rolloff != null && bandData.rolloff < T.rolloffHz) {
-    flags.push({ code: 'NO_AIR', detail: `spectral rolloff ${Math.round(bandData.rolloff)} Hz (threshold ${T.rolloffHz})` });
+  if (bands.air != null && bands.presence != null) {
+    const ratio = bands.air - bands.presence;
+    if (ratio < T.airRatioDb) {
+      flags.push({ code: 'NO_AIR', detail: `air band ${ratio.toFixed(1)} dB relative to presence (threshold ${T.airRatioDb})` });
+    }
   }
 
   if (global.loudness.lra != null && global.loudness.lra < T.lraFlat) {

@@ -60,7 +60,23 @@ test('hard-driven signal raises CLIP', async () => {
 test('lowpassed source raises NO_AIR', async () => {
   const qc = await metrics.analyzeFile(files.noair);
   assert.ok(codes(qc).includes('NO_AIR'), `expected NO_AIR, got ${codes(qc)}`);
-  assert.ok(qc.rolloff < metrics.QC_THRESHOLDS.rolloffHz);
+  assert.ok(qc.bands.air - qc.bands.presence < metrics.QC_THRESHOLDS.airRatioDb);
+});
+
+// Both of these used to fire on material that is neither sibilant nor dull,
+// which is how a near-constant 18 dB cut at 6.5 kHz went unnoticed: the
+// thresholds were calibrated on broadband synthetic signals, then met real
+// speech. See QC_THRESHOLDS in src/metrics.js for the measured ranges.
+test('an elevated noise floor is not mistaken for sibilance', async () => {
+  const qc = await metrics.analyzeFile(files.noisy);
+  assert.ok(!codes(qc).includes('SIBILANT'), `expected no SIBILANT, got ${codes(qc)}`);
+});
+
+test('full-bandwidth material is never reported as band-limited', async () => {
+  for (const name of ['clean', 'noisy', 'squashed']) {
+    const qc = await metrics.analyzeFile(files[name]);
+    assert.ok(!codes(qc).includes('NO_AIR'), `${name}: expected no NO_AIR, got ${codes(qc)}`);
+  }
 });
 
 test('flat continuous level raises FLAT_DYNAMICS', async () => {

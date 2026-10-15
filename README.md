@@ -84,9 +84,9 @@ with the conditional stages skipped, not a different code path.
 ## QC flags & artifact catalogue
 
 Every file gets one read-only analysis pass before anything is written. The
-detectors (thresholds documented in `src/metrics.js`, calibrated against the
-synthetic fixtures in `test/fixtures.js`) surface as chips next to each queued
-file:
+detectors (thresholds documented in `src/metrics.js`) surface as chips next to
+each queued file. `SIBILANT` and `NO_AIR` are calibrated against real course
+recordings; the rest against the synthetic fixtures in `test/fixtures.js`:
 
 | Flag | Meaning | Repair triggered |
 |---|---|---|
@@ -94,7 +94,7 @@ file:
 | `HUM` | 50/60 Hz mains hum (+ 2nd harmonic) | `bandreject` notches |
 | `SIBILANT` | Harsh/over-bright esses | dynamic de-esser |
 | `NOISY` | Noise floor above threshold (Mode 1 only) | RNNoise, mix scaled to excess |
-| `NO_AIR` | Band-limited source (rolloff < ~7 kHz) | air shelf skipped |
+| `NO_AIR` | Band-limited source (10–16 kHz band more than 11 dB under presence) | air shelf skipped |
 | `FLAT_DYNAMICS` | Already squashed (LRA < 3 LU) | leveler compression skipped |
 | `DC_OFFSET` | DC bias | reported (HPF already removes it) |
 | `SILENCE_HEAD` / `SILENCE_TAIL` | ≥1s of dead air at start/end | trimmed with a small pad |

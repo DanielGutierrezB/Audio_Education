@@ -10,7 +10,8 @@
     "setup:bin:win": "powershell -ExecutionPolicy Bypass -File scripts/fetch-bin.ps1",
     "build": "electron-builder --mac --arm64",
     "build:win": "electron-builder --win --x64",
-    "build:icon": "rsvg-convert -w 512 -h 512 build/icon.svg -o build/icons/512x512.png && rsvg-convert -w 1024 -h 1024 build/icon.svg -o build/icons/1024x1024.png || (convert build/icon.svg -resize 512x512 build/icons/512x512.png && convert build/icon.svg -resize 1024x1024 build/icons/1024x1024.png)"
+    "build:icon": "rsvg-convert -w 512 -h 512 build/icon.svg -o build/icons/512x512.png && rsvg-convert -w 1024 -h 1024 build/icon.svg -o build/icons/1024x1024.png || (convert build/icon.svg -resize 512x512 build/icons/512x512.png && convert build/icon.svg -resize 1024x1024 build/icons/1024x1024.png)",
+    "calibrate": "node scripts/calibrate.js"
   },
   "dependencies": {
     "electron-store": "^8.1.0",

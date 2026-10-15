@@ -640,13 +640,47 @@ avanzar en paralelo desde la Fase 2; 10 requiere 6 y la decisión D6 (§5).
 
 ## 5. Decisiones abiertas (responder antes o durante Fase 2)
 
-- **D1 — Nivel Platzi**: ¿−16 LUFS mono está bien, o Platzi/producción pide otra cosa?
-  **Experimento propuesto**: tomar una clase ya publicada en Platzi, medir su audio
-  (`ffmpeg -i clase.mp4 -af ebur128 -f null -`) y fijar el target/offset del preset
-  con ese dato real.
-- **D2 — Mono → video**: confirmar cómo inserta producción el WAV en el video (¿dual-mono
-  sin pan law? → el master mono debería apuntar ~3 LU más abajo). Mismo experimento de
-  arriba lo responde.
+- **D1 — Nivel Platzi** ⚠️ *medido, y el hallazgo es otro* (octubre 2026): se midieron
+  5 clases **ya terminadas** (los `render/*.mp4` de `2609_ClaudeProgramadores` y
+  `2026_jev`), que es el entregable real:
+
+  | clase | I (LUFS) | LRA (LU) | TP (dBFS) |
+  |---|---|---|---|
+  | `01_2609_claude-code-dev` | −15.3 | 4.4 | **+0.1** |
+  | `02_2609_claude-code-dev` | −19.5 | 5.4 | −1.4 |
+  | `03_2609_claude-code-dev` | −19.6 | 4.4 | −1.3 |
+  | `clase_4_1` | −19.3 | 4.1 | **0.0** |
+  | `clase_5_1` | −16.9 | 3.5 | −0.1 |
+
+  AudioPro entrega **todos** sus masters en −16.0 LUFS y −2.0 dBTP, verificado en las
+  4 clases del corpus con su pasada de re-medición. Pero el video terminado varía
+  **4.3 LU** (−15.3 a −19.6) y dos de cinco **pasan de 0 dBFS**. Esa dispersión y ese
+  clipping no los introduce AudioPro: aparecen **después**, en el montaje en Premiere,
+  donde el master se mezcla con música y efectos sin ningún control de loudness.
+
+  **Conclusión sobre el preset**: cambiar el target de −16 LUFS no arregla nada, porque
+  el target se está cumpliendo. El problema está un paso más abajo en la cadena. Lo que
+  falta no es recalibrar `DELIVERY_PRESETS.platzi`, es **medir el video final** — ver
+  D7.
+
+  **Límite de esta medición**: son los renders que salen del estudio, no lo que Platzi
+  sirve tras su propia normalización. Para cerrar D1 del todo haría falta descargar una
+  clase publicada desde la plataforma.
+
+- **D2 — Mono → video** ✅ *resuelta por la misma medición*: la preocupación era
+  dual-mono sin pan law (+3 LU al duplicar el master mono a dos canales). No aplica:
+  restando L−R en los 5 renders, los canales **no son idénticos** (−11.7 a −16.2 dB de
+  diferencia), es decir hay contenido estéreo real —música y efectos— con la voz
+  centrada dentro de esa cama. El master mono no se está duplicando a ciegas, así que
+  no corresponde ningún offset de −3 LU en el preset.
+
+- **D7 — Control de loudness del entregable final** *(nueva, abierta, nace de D1)*:
+  AudioPro clava −16 LUFS y el montaje posterior lo deshace. Opciones:
+  (a) que AudioPro verifique el `render/*.mp4` terminado y marque las clases fuera de
+  spec, reusando `verifyOutput` y el QC report, que ya saben medir y emitir badges;
+  (b) un preset de loudness en Premiere / Media Encoder para el paso de export;
+  (c) ambas. La (a) es la que encaja con lo que esta herramienta ya hace y con
+  "consistencia a nivel curso" (§Fase 3).
 - **D3 — SOP del equipo para Modo 2** *(reformulada: la decisión "100 % + original"
   ya está tomada)*: fijar por escrito que en `adobe-podcast-batch` el slider "Voz
   limpia" queda al **100 %** y que se conservan los originales junto a `Enhanced/`.

@@ -17,7 +17,17 @@ const AUDIO_EXTS = ['.wav', '.mp3', '.m4a', '.aac', '.flac', '.ogg', '.aiff', '.
 const ENHANCED_DIR_NAME = 'Enhanced';
 const NESTED_CLEAN_DIR_NAME = 'Clean voice';
 
+// macOS writes an AppleDouble sidecar (`._name.wav`) next to every file on
+// filesystems that can't hold extended attributes — exFAT, which is what the
+// external drives course audio travels on. They carry the real file's name
+// and extension but only a few KB of metadata, so without this they queue up
+// as audio and fail at the first ffmpeg pass.
+function isAppleDoubleSidecar(name) {
+  return name.startsWith('._');
+}
+
 function isAudioFile(name) {
+  if (isAppleDoubleSidecar(name)) return false;
   return AUDIO_EXTS.includes(path.extname(name).toLowerCase());
 }
 

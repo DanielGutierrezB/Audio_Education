@@ -174,7 +174,7 @@ Loudness target is a toolbar selector, not a fixed constant:
 
 | Preset | Integrated loudness | True peak | Notes |
 |---|---|---|---|
-| **Platzi** (default) | −16 LUFS | ≤ −2 dBTP | Spoken-word convention; Platzi has no published spec (see `docs/PLAN.md` §5 D1/D2 — pending empirical validation against a published class) |
+| **Platzi** (default) | −16 LUFS | ≤ −2 dBTP | Spoken-word convention; Platzi publishes no spec (see `docs/PLAN.md` §5 D1) |
 | **YouTube** | −14 LUFS | ≤ −1.5 dBTP | Matches YouTube's own normalization reference |
 | **Podcast** | −16 LUFS | ≤ −1 dBTP | Apple Podcasts spec (ITU-R BS.1770-5) |
 
@@ -317,6 +317,26 @@ and a suite that validates a different runtime than the one that ships
 cannot catch audio regressions. CI runs it on macOS arm64 against those same
 pinned binaries on every push/PR (`.github/workflows/test.yml`).
 
+## Calibrating against real recordings
+
+```bash
+npm run calibrate -- /path/to/course/PRE
+```
+
+Read-only sweep: runs the QC analysis over every file in a folder, groups
+each original with its `Enhanced/` counterpart and its `Audio_Pro/` master,
+and prints the tilt / sibilance / air ratios per stage plus how often each
+detector fires. No Adobe credits are spent and nothing is written.
+
+This exists because thresholds calibrated on the synthetic fixtures misfired
+on speech — `SIBILANT` fired on 22 of 28 real files and `NO_AIR` on 28 of 28,
+so no real voice ever received the air shelf. A detector firing on more than
+~60% of a corpus is flagged in the output, since at that point it is
+describing normal material rather than a defect.
+
+Keep the corpus out of the repo: `corpus/` is gitignored, because this is
+unpublished teaching material.
+
 ## Build
 
 ```bash
@@ -408,6 +428,7 @@ test/
 scripts/
   fetch-bin.sh                Downloads macOS arm64 ffmpeg/ffprobe/RNNoise model (SHA256-pinned)
   fetch-bin.ps1                Downloads Windows x64 ffmpeg/ffprobe/RNNoise model
+  calibrate.js                 Read-only QC sweep over a real corpus → threshold calibration
 docs/
   PLAN.md                      Design doc + phased implementation plan + status
   DESIGN.md                    Earlier design notes
@@ -419,10 +440,19 @@ bin/                          (gitignored) populated by the fetch scripts
 - Installers are not code-signed. Distribute over a trusted channel and
   instruct users to right-click → Open the `.pkg` the first time (macOS).
 - The Platzi loudness target (−16 LUFS) is the general spoken-word/podcast
-  convention, not a measured spec — see `docs/PLAN.md` §5 D1/D2 for the
-  pending validation experiment (measure a published class's actual level).
-- QC thresholds are calibrated against the synthetic corpus in `test/`, not
-  yet against real course recordings (`docs/PLAN.md` §5 D4).
+  convention, not a measured spec. AudioPro does hit it: all four validated
+  classes land at −16.0 LUFS / −2.0 dBTP. **The finished videos do not** —
+  five rendered classes measured −15.3 to −19.6 LUFS, a 4.3 LU spread, with
+  two peaking at or above 0 dBFS. That is introduced downstream, in the
+  Premiere edit where the master meets music and SFX with no loudness
+  control, so nothing AudioPro changes about its own target would fix it.
+  See `docs/PLAN.md` §5 D1 for the measurements and D7 for the open question
+  of checking the final deliverable.
+- `SIBILANT`, `NO_AIR` and the tilt target are calibrated against real course
+  recordings, but from **one teacher**. The remaining detectors are still on
+  the synthetic corpus in `test/` (`docs/PLAN.md` §5 D4). Use
+  `npm run calibrate` on a new course before trusting them on a very
+  different voice.
 - The embedded Enhance talks to Adobe's internal, unofficial endpoint (the
   same one `adobe-podcast-batch` uses) — it can change or break without
   notice, and it consumes your Adobe account's Enhance credits. Mode 2 with

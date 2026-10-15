@@ -13,7 +13,7 @@
     "build:icon": "rsvg-convert -w 512 -h 512 build/icon.svg -o build/icons/512x512.png && rsvg-convert -w 1024 -h 1024 build/icon.svg -o build/icons/1024x1024.png || (convert build/icon.svg -resize 512x512 build/icons/512x512.png && convert build/icon.svg -resize 1024x1024 build/icons/1024x1024.png)"
   },
   "dependencies": {
-    "electron-store": "^8.1.0",
+    "electron-store": "^11.0.2",
     "electron-updater": "^6.8.9"
   },
   "devDependencies": {

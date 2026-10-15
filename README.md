@@ -84,9 +84,9 @@ with the conditional stages skipped, not a different code path.
 ## QC flags & artifact catalogue
 
 Every file gets one read-only analysis pass before anything is written. The
-detectors (thresholds documented in `src/metrics.js`, calibrated against the
-synthetic fixtures in `test/fixtures.js`) surface as chips next to each queued
-file:
+detectors (thresholds documented in `src/metrics.js`) surface as chips next to
+each queued file. `SIBILANT` and `NO_AIR` are calibrated against real course
+recordings; the rest against the synthetic fixtures in `test/fixtures.js`:
 
 | Flag | Meaning | Repair triggered |
 |---|---|---|
@@ -94,7 +94,7 @@ file:
 | `HUM` | 50/60 Hz mains hum (+ 2nd harmonic) | `bandreject` notches |
 | `SIBILANT` | Harsh/over-bright esses | dynamic de-esser |
 | `NOISY` | Noise floor above threshold (Mode 1 only) | RNNoise, mix scaled to excess |
-| `NO_AIR` | Band-limited source (rolloff < ~7 kHz) | air shelf skipped |
+| `NO_AIR` | Band-limited source (10–16 kHz band more than 11 dB under presence) | air shelf skipped |
 | `FLAT_DYNAMICS` | Already squashed (LRA < 3 LU) | leveler compression skipped |
 | `DC_OFFSET` | DC bias | reported (HPF already removes it) |
 | `SILENCE_HEAD` / `SILENCE_TAIL` | ≥1s of dead air at start/end | trimmed with a small pad |
@@ -265,18 +265,28 @@ npm start
 ## Testing
 
 ```bash
-npm test    # node:test — generates synthetic fixtures on the fly, no bin/ needed
+npm run setup:bin   # once, so the suite runs against the ffmpeg that ships
+npm test            # node:test — generates synthetic fixtures on the fly
 ```
 
 The suite (`test/`) builds its own WAV fixtures with ffmpeg's `lavfi` sources
-(clean, noisy, hum, sibilant, clipped, band-limited, silence-padded, DC-biased
-voice-like signals) and asserts on: every QC detector, preset conformity,
-pairing (`Enhanced/` convention), the fusion filter graph, the embedded
-enhance orchestration (credits gate, auth retry, `Enhanced/` reuse, the
-`Mix N/` render — with the Adobe network client stubbed), and full Mode
-1/Mode 2 end-to-end renders (duration match, cancellation). Runs against
-whatever `ffmpeg`/`ffprobe` is on `PATH` — no bundled binaries required. CI
-runs it on every push/PR via `.github/workflows/test.yml`.
+(clean, noisy, hum, a steady sibilant bed, spaced ess transients, clipped,
+band-limited, silence-padded, DC-biased voice-like signals) and asserts on:
+every QC detector, preset conformity, pairing (`Enhanced/` convention), the
+fusion filter graph, the render-side tone behaviour (the de-esser must cut
+sibilance, spare presence and ignore input level), the render history
+whitelist, the embedded enhance orchestration (credits gate, auth retry,
+`Enhanced/` reuse, the `Mix N/` render — with the Adobe network client
+stubbed), and full Mode 1/Mode 2 end-to-end renders (duration match,
+cancellation).
+
+It runs against the **bundled** `ffmpeg`/`ffprobe` resolved by
+`src/bin-paths.js`, so run `npm run setup:bin` first. That is deliberate:
+filters differ between ffmpeg majors — `adynamicequalizer`'s `auto` option
+that the de-esser relies on does not take the same values on older builds —
+and a suite that validates a different runtime than the one that ships
+cannot catch audio regressions. CI runs it on macOS arm64 against those same
+pinned binaries on every push/PR (`.github/workflows/test.yml`).
 
 ## Build
 

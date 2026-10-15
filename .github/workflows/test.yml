@@ -7,8 +7,15 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Runs on macOS arm64 so the suite exercises the exact SHA-pinned ffmpeg
+    # the app bundles (scripts/fetch-bin.sh), resolved through src/bin-paths.js
+    # like a dev checkout does. Ubuntu's apt ffmpeg is several majors behind
+    # and its filters differ: adynamicequalizer's `auto` option, which the
+    # de-esser depends on, doesn't accept the same values there. Testing the
+    # pipeline against a different filter runtime than the one that ships is
+    # how a de-esser that attenuated the whole top end stayed green.
+    runs-on: macos-15
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -17,14 +24,13 @@ jobs:
           node-version: '20'
           cache: npm
 
-      # The suite (docs/PLAN.md Fase 9) generates its own synthetic WAV
-      # fixtures via ffmpeg's lavfi sources and runs the pipeline against
-      # them — the system package is enough, no bundled binaries needed.
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-
       - name: Install dependencies
         run: npm ci
+
+      # The suite (docs/PLAN.md Fase 9) generates its own synthetic WAV
+      # fixtures via ffmpeg's lavfi sources and runs the pipeline against them.
+      - name: Fetch bundled ffmpeg/ffprobe/RNNoise model (arm64, SHA256-verified)
+        run: npm run setup:bin
 
       - name: Run tests
         run: npm test

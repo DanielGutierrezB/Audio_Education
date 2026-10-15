@@ -101,6 +101,45 @@ async function buildSibilant(outPath, workDir) {
   return outPath;
 }
 
+// Real esses are short bursts, not the constant 5-9 kHz bed `buildSibilant`
+// lays down. The flat bed is what the SIBILANT *detector* is calibrated
+// against (it measures average band energy), but a dynamic de-esser keys on
+// the transient: given a steady bed its adaptive reference simply rides up
+// with the bed and it correctly does nothing, which says nothing about
+// whether the stage works. This fixture spaces short HF bursts through the
+// same voice so the render-side tests have real peaks to act on.
+//
+// The burst shape is tuned to land in the range real course audio occupies
+// (sibilance ~1 dB above presence) and to reproduce what the de-esser does
+// to a real class: roughly -6 dB of sibilance for -1.7 dB of presence,
+// against -5.5 / -0.7 measured on an actual recording.
+const ESS_BURSTS = 6;
+const ESS_BURST_SEC = 0.08;
+const ESS_GAP_SEC = 0.90;
+const ESS_BURST_AMPLITUDE = 0.25;
+
+async function buildSibilantPeaks(outPath, workDir) {
+  const base = path.join(workDir, '_sibpeakbase.wav');
+  await buildClean(base);
+
+  const bursts = path.join(workDir, '_sibpeakbursts.wav');
+  const segments = [];
+  for (let i = 0; i < ESS_BURSTS; i++) {
+    segments.push(`anoisesrc=color=white:sample_rate=${SR}:duration=${ESS_BURST_SEC}:amplitude=${ESS_BURST_AMPLITUDE}:seed=${NOISE_SEED}`);
+    segments.push(silenceSegmentGraph(ESS_GAP_SEC, -94));
+  }
+  await concatSegments(segments, bursts);
+
+  await runFfmpeg([
+    '-y', '-i', base, '-i', bursts,
+    '-filter_complex',
+    '[1:a]bandpass=f=7500:width_type=h:w=2000[ess];' +
+    '[0:a][ess]amix=inputs=2:normalize=0:duration=first[out]',
+    '-map', '[out]', '-ac', '1', '-ar', String(SR), outPath,
+  ], { timeout: BUILD_TIMEOUT_MS });
+  return outPath;
+}
+
 async function buildClipped(outPath, workDir) {
   const base = path.join(workDir, '_clipbase.wav');
   await buildClean(base);
@@ -160,7 +199,7 @@ function rand() { return crypto.randomBytes(3).toString('hex'); }
 module.exports = {
   SR,
   tmpDir,
-  buildClean, buildNoisy, buildHum, buildSibilant, buildClipped,
+  buildClean, buildNoisy, buildHum, buildSibilant, buildSibilantPeaks, buildClipped,
   buildNoAir, buildSquashed, buildSilenceEdges, buildDcOffset, buildTone,
   rand,
 };

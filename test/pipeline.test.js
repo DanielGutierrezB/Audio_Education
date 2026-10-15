@@ -125,7 +125,7 @@ test('Cancellation mid-batch stops before the second file starts', async () => {
   const events = [];
   const emit = (type, data) => {
     events.push({ type, ...data });
-    // Cancel as soon as the first file finishes so the loop's next
+    // Cancel as soon as the first file finishes so the worker's next
     // isCancelled() check (before file 2's file:start) short-circuits it.
     if (type === 'file:done' || type === 'file:error') cancelled = true;
   };
@@ -134,7 +134,10 @@ test('Cancellation mid-batch stops before the second file starts', async () => {
     emit,
     isCancelled: () => cancelled,
     setCurrent: () => {},
-    settings: { customOutputDir: outDir },
+    // Pinned to one worker: this is about cancellation claiming no further
+    // work, not about the pool. With N workers up to N files are already in
+    // flight when the cancel lands, which concurrency.test.js covers instead.
+    settings: { customOutputDir: outDir, concurrency: 1 },
   });
 
   const starts = events.filter(e => e.type === 'file:start');

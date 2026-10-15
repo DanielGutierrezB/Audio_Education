@@ -3,6 +3,11 @@
 // Shared child-process helper for every FFmpeg invocation in the app
 // (rendering, fusion, and analysis passes) — one place to get timeout
 // handling, progress parsing, and cancellation right.
+//
+// `setCurrent` is called as setCurrent(proc) when a process starts and
+// setCurrent(null, proc) when it ends. The second argument matters because
+// the queue runs several files concurrently: a bare null would not say which
+// process finished, so the caller could not stop tracking just that one.
 
 const { spawn } = require('child_process');
 const binPaths = require('./bin-paths');
@@ -17,7 +22,7 @@ function runFfmpeg(args, opts = {}) {
     const timeoutMs = opts.timeout ?? DEFAULT_TIMEOUT_MS;
     const timer = setTimeout(() => {
       proc.kill('SIGTERM');
-      if (opts.setCurrent) opts.setCurrent(null);
+      if (opts.setCurrent) opts.setCurrent(null, proc);
       reject(new Error(`ffmpeg timed out after ${timeoutMs / 1000}s`));
     }, timeoutMs);
 
@@ -35,13 +40,13 @@ function runFfmpeg(args, opts = {}) {
     });
     proc.on('close', code => {
       clearTimeout(timer);
-      if (opts.setCurrent) opts.setCurrent(null);
+      if (opts.setCurrent) opts.setCurrent(null, proc);
       if (code === 0 || code === null) resolve(stderr);
       else reject(new Error(`ffmpeg exited ${code}${stderr ? ': ' + stderr.slice(-300).trim() : ''}`));
     });
     proc.on('error', err => {
       clearTimeout(timer);
-      if (opts.setCurrent) opts.setCurrent(null);
+      if (opts.setCurrent) opts.setCurrent(null, proc);
       reject(err);
     });
   });
@@ -57,7 +62,7 @@ function runFfmpegCapture(args, opts = {}) {
     const timeoutMs = opts.timeout ?? DEFAULT_TIMEOUT_MS;
     const timer = setTimeout(() => {
       proc.kill('SIGTERM');
-      if (opts.setCurrent) opts.setCurrent(null);
+      if (opts.setCurrent) opts.setCurrent(null, proc);
       reject(new Error(`ffmpeg timed out after ${timeoutMs / 1000}s`));
     }, timeoutMs);
 
@@ -67,13 +72,13 @@ function runFfmpegCapture(args, opts = {}) {
     proc.stderr.on('data', c => { stderr += c.toString(); });
     proc.on('close', code => {
       clearTimeout(timer);
-      if (opts.setCurrent) opts.setCurrent(null);
+      if (opts.setCurrent) opts.setCurrent(null, proc);
       if (code === 0 || code === null) resolve(Buffer.concat(chunks));
       else reject(new Error(`ffmpeg exited ${code}${stderr ? ': ' + stderr.slice(-300).trim() : ''}`));
     });
     proc.on('error', err => {
       clearTimeout(timer);
-      if (opts.setCurrent) opts.setCurrent(null);
+      if (opts.setCurrent) opts.setCurrent(null, proc);
       reject(err);
     });
   });

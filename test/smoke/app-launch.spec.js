@@ -121,6 +121,49 @@ test('settings round-trip over IPC, and an invalid value is refused', async () =
   expect(await win.evaluate(() => window.api.store.get('platformPreset'))).not.toBe('spotify');
 });
 
+// The renderer is split across modules that share state through state.js, so
+// these cover the wiring most likely to break on a reorganisation: a control
+// that reads a preference, a control that writes one, and the parts that
+// reach each other across files.
+test('the settings panel opens and reflects the stored preset', async () => {
+  const win = await app.firstWindow();
+  const stored = await win.evaluate(() => window.api.store.get('platformPreset'));
+
+  await expect(win.locator('#toolbar-preset')).toHaveValue(stored);
+  await expect(win.locator('#settings-panel')).toBeHidden();
+  await win.locator('#btn-settings').click();
+  await expect(win.locator('#settings-panel')).toBeVisible();
+});
+
+test('changing the delivery preset persists it', async () => {
+  const win = await app.firstWindow();
+  const before = await win.evaluate(() => window.api.store.get('platformPreset'));
+  const next = before === 'youtube' ? 'podcast' : 'youtube';
+
+  await win.locator('#toolbar-preset').selectOption(next);
+  await expect
+    .poll(() => win.evaluate(() => window.api.store.get('platformPreset')))
+    .toBe(next);
+
+  await win.locator('#toolbar-preset').selectOption(before);
+});
+
+test('Process Selection stays disabled while the queue is empty', async () => {
+  const win = await app.firstWindow();
+  await expect(win.locator('#btn-process-selection')).toBeDisabled();
+});
+
+test('the EQ tab renders — eq-editor still loads alongside the modules', async () => {
+  const win = await app.firstWindow();
+  await win.locator('.tab[data-tab="eq"]').click();
+  await expect(win.locator('#eq-canvas')).toBeVisible();
+  // eq-editor.js is a plain script that reads the queue through the
+  // window.audioProQueue bridge, so a module-only renderer would leave it
+  // undefined and the editor silently empty.
+  expect(await win.evaluate(() => typeof window.audioProQueue)).not.toBe('undefined');
+  await win.locator('.tab[data-tab="processing"]').click();
+});
+
 test('starting a batch with nothing queued is refused, not crashed on', async () => {
   const win = await app.firstWindow();
   const res = await win.evaluate(() => window.api.pipeline.start([]));

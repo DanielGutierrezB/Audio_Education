@@ -47,19 +47,26 @@ module.exports = [
     rules: SHARED_RULES,
   },
   {
-    // Renderer: browser globals, plus the `api` bridge preload.js exposes.
+    // Renderer: ES modules in the browser. Being modules is what keeps
+    // `no-undef` meaningful across the split — as plain scripts sharing one
+    // scope, every cross-file reference reads as undefined and the rule has to
+    // be turned off, which is exactly the check worth keeping.
     files: ['renderer/js/**/*.js'],
     languageOptions: {
       ecmaVersion: 2023,
-      sourceType: 'script',
-      globals: { ...globals.browser, api: 'readonly' },
+      sourceType: 'module',
+      globals: { ...globals.browser },
     },
     rules: {
       ...SHARED_RULES,
-      // The renderer is loaded as several plain <script> tags sharing one
-      // scope, so helpers defined in one file are used from another.
       'no-unused-vars': ['error', { args: 'none', varsIgnorePattern: '^_', caughtErrors: 'none' }],
     },
+  },
+  {
+    // eq-editor.js is still a plain <script>: it reaches the queue through the
+    // window.audioProQueue bridge rather than through imports.
+    files: ['renderer/js/eq-editor.js'],
+    languageOptions: { sourceType: 'script' },
   },
   {
     // src/enhance/ is a hand-synced copy of adobe-podcast-batch's engine, kept

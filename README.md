@@ -455,9 +455,20 @@ All settings persist across sessions via `electron-store`:
 main.js                       Electron main process, IPC handlers, electron-store
 preload.js                    Context bridge (renderer ↔ main)
 renderer/
-  index.html                  UI markup (Processing / EQ / About tabs)
-  js/app.js                   Renderer logic — queue, settings, processing UI, QC chips
+  index.html                  UI markup (Processing / EQ / History / About tabs)
+  js/app.js                   Entry point (ES module) — the rest arrives through its imports
+  js/dom.js                   Every element the renderer holds on to          ┐ leaves:
+  js/state.js                 Queue, selection and flags more than one part reads │ no imports,
+  js/format.js                Pure display helpers (durations, sizes, icons)  ┘ no cycles
+  js/tabs.js                  Tab strip + preference load
+  js/queue.js                 Queue: add/remove/reorder, selection, rows, context menu, drag & drop
+  js/qc-tools.js              Spectrogram modal + QC report export
+  js/processing.js            Progress bar, embedded Enhance stage, pipeline event stream
+  js/history.js               History tab — records and renders finished renders
+  js/settings-panel.js        Settings panel, Adobe connection, toolbar, output dir, Copy Log
+  js/update.js                The ⟳ version pill
   js/eq-editor.js             Canvas EQ editor + spectrum auto-fit + Web Audio preview
+                               (a plain script — reaches the queue via window.audioProQueue)
   styles/app.css              Styling
 src/
   pipeline.js                 Per-file orchestration: align/fuse → analyze → repair → tone/dynamics → loudness → verify,

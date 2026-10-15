@@ -548,7 +548,11 @@
     </div>
   </div>
 
-  <script src="js/app.js"></script>
+  <!-- One module entry point; the rest of the renderer arrives through its
+       import graph, so load order is the graph's problem rather than this
+       file's. eq-editor.js stays a plain script: it reaches the queue through
+       the window.audioProQueue bridge, not through imports. -->
   <script src="js/eq-editor.js"></script>
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>

@@ -12,7 +12,8 @@
     "build:win": "electron-builder --win --x64",
     "build:icon": "rsvg-convert -w 512 -h 512 build/icon.svg -o build/icons/512x512.png && rsvg-convert -w 1024 -h 1024 build/icon.svg -o build/icons/1024x1024.png || (convert build/icon.svg -resize 512x512 build/icons/512x512.png && convert build/icon.svg -resize 1024x1024 build/icons/1024x1024.png)",
     "calibrate": "node scripts/calibrate.js",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test:smoke": "playwright test"
   },
   "dependencies": {
     "electron-store": "^8.1.0",
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.1",
     "electron": "^44.7.2",
     "electron-builder": "^26.15.3",
     "eslint": "^10.12.0",

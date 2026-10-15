@@ -38,6 +38,13 @@ jobs:
       - name: Run tests
         run: npm test
 
+      # Boots the real app: nothing in the node:test suite loads main.js or the
+      # renderer, so a broken preload bridge or a renderer script that throws
+      # on load would otherwise ship green. Needs a window server, which the
+      # macOS runner has.
+      - name: Electron startup smoke test
+        run: npm run test:smoke
+
       # Only runtime dependencies gate the build: the remaining advisories all
       # sit inside electron-builder's own tree, which ships nothing to users
       # and has no release that resolves them.

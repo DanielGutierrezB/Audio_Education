@@ -526,7 +526,7 @@
   // ── Canvas rendering ──
   function drawCurve() {
     const dpr = window.devicePixelRatio || 1;
-    const { W, H, PW, PH } = plotArea();
+    const { W, H } = plotArea();
     if (canvas.width !== W * dpr || canvas.height !== H * dpr) {
       canvas.width  = Math.floor(W * dpr);
       canvas.height = Math.floor(H * dpr);

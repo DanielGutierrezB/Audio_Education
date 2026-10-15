@@ -32,5 +32,14 @@ jobs:
       - name: Fetch bundled ffmpeg/ffprobe/RNNoise model (arm64, SHA256-verified)
         run: npm run setup:bin
 
+      - name: Lint
+        run: npm run lint
+
       - name: Run tests
         run: npm test
+
+      # Only runtime dependencies gate the build: the remaining advisories all
+      # sit inside electron-builder's own tree, which ships nothing to users
+      # and has no release that resolves them.
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=high

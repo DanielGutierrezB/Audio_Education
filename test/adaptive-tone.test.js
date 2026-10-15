@@ -12,7 +12,6 @@ const fs = require('fs');
 const path = require('path');
 
 const pipeline = require('../src/pipeline');
-const metrics = require('../src/metrics');
 const { runFfmpeg } = require('../src/ffmpeg-run');
 const fx = require('./fixtures');
 

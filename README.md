@@ -318,6 +318,7 @@ npm start
 ```bash
 npm run setup:bin   # once, so the suite runs against the ffmpeg that ships
 npm test            # node:test — generates synthetic fixtures on the fly
+npm run lint        # eslint
 ```
 
 The suite (`test/`) builds its own WAV fixtures with ffmpeg's `lavfi` sources
@@ -337,7 +338,20 @@ filters differ between ffmpeg majors — `adynamicequalizer`'s `auto` option
 that the de-esser relies on does not take the same values on older builds —
 and a suite that validates a different runtime than the one that ships
 cannot catch audio regressions. CI runs it on macOS arm64 against those same
-pinned binaries on every push/PR (`.github/workflows/test.yml`).
+pinned binaries on every push/PR (`.github/workflows/test.yml`), together
+with `npm run lint` and `npm audit --omit=dev --audit-level=high`.
+
+The ESLint config (`eslint.config.js`) is scoped to things that are bugs —
+an undefined name in a filter string, a duplicate key in a settings map, a
+promise nobody awaits — and not to style. There is no Prettier: the codebase
+aligns settings maps and filter parameter tables on purpose and carries the
+reasoning for every audio decision in its comments, so a blanket reformat
+would cost more in blame and readability than it returns. `require-atomic-updates`
+is off for the same reason — it fires on correct `await`-then-assign handlers
+in single-threaded renderer code, and a rule that cries wolf trains people to
+ignore the linter. `src/enhance/**` is exempt from one rule because it is a
+hand-synced copy of `adobe-podcast-batch`'s engine (`docs/PLAN.md` §5 D6) and
+tidying it would be paid for at every future sync.
 
 ## Calibrating against real recordings
 

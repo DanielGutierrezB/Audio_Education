@@ -86,7 +86,7 @@ function buildEqCutsChain(qc, settings) {
   return parts.join(',');
 }
 
-function buildEqBoostsChain(qc, settings) {
+function buildEqBoostsChain(qc) {
   const parts = [`equalizer=f=${EQ_PRESENCE.f}:width_type=q:width=${EQ_PRESENCE.q}:g=${EQ_PRESENCE.g}`];
   if (!hasFlag(qc, 'NO_AIR')) parts.push(`highshelf=f=${EQ_AIR_SHELF.f}:g=${EQ_AIR_SHELF.g}`);
   return parts.join(',');
@@ -96,13 +96,13 @@ function buildToneChain(qc, settings) {
   if (settings.manualEqApply === true && typeof settings.manualEqChain === 'string' && settings.manualEqChain.trim()) {
     return { cuts: settings.manualEqChain.trim(), boosts: null };
   }
-  return { cuts: buildEqCutsChain(qc, settings), boosts: buildEqBoostsChain(qc, settings) };
+  return { cuts: buildEqCutsChain(qc, settings), boosts: buildEqBoostsChain(qc) };
 }
 
 // ── Conditional repair ──
 // adeclick runs unconditionally (cheap, safe defaults, catches mouth
 // clicks/plosive pops the analysis pass doesn't explicitly flag).
-function buildRepairChain(qc, settings) {
+function buildRepairChain(qc) {
   const parts = ['adeclick'];
   if (hasFlag(qc, 'CLIP')) parts.push('adeclip');
   for (const fl of (qc?.flags ?? [])) {
@@ -476,7 +476,7 @@ async function processFile(file, settings, { emit, isCancelled, setCurrent, t0, 
     const targetSr = denoiseSpec ? DENOISE_WORKING_SR : parseInt(settings.sampleRate ?? 48000, 10);
     const preChain = buildPreEqChain(meta, targetSr);
     const trimChain = buildTrimSpec(qc, duration, settings);
-    const repairChain = buildRepairChain(qc, settings);
+    const repairChain = buildRepairChain(qc);
     const tone = buildToneChain(qc, settings);
     const levelerChain = buildLevelerChain(qc, settings);
     const deesserChain = buildDeesserChain(qc, settings);

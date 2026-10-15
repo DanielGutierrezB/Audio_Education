@@ -5,7 +5,7 @@ recording and get course-ready output with consistent loudness and a
 polished, full-bodied voice — including the Adobe Podcast Enhance Speech
 step, now embedded: the whole process runs from one interface.
 
-Current version: **v0.6.0** (macOS arm64 · Windows x64).
+Current version: **v0.7.0** (macOS arm64 · Windows x64).
 
 ## Purpose
 
@@ -29,7 +29,7 @@ design rationale):
    masters from that best-of-both starting point.
 3. **Embedded Enhance — the whole process in one click.** Turn on
    **Enhance with Adobe** in Settings, connect your Adobe account once, and
-   drop just the raw takes. On **Process All**, AudioPro uploads each
+   drop just the raw takes. On **Process Selection**, AudioPro uploads each
    unpaired file to Adobe Podcast Enhance Speech itself (5 in parallel,
    waiting out credit limits automatically), saves the 100% clean voice to
    `Enhanced/` next to the original, then continues as Mode 2 — fusion +
@@ -114,7 +114,7 @@ leaving the app:
   in-memory and stored encrypted with the OS keychain (`safeStorage`). The
   session persists across restarts and re-authenticates silently when the
   token expires mid-batch.
-- **Enhance with Adobe** (toggle). When on, **Process All** first uploads
+- **Enhance with Adobe** (toggle). When on, **Process Selection** first uploads
   every queued file that doesn't already have an `Enhanced/` pair — 5 in
   parallel, the same ceiling Adobe applies per account. When Adobe runs out
   of credits the whole batch pauses with a visible countdown and resumes by
@@ -158,7 +158,7 @@ target, or "raise only" as a conservative legacy mode.
   *source* file (scroll over a band to change its Q, shift-click to toggle it
   on/off). On file selection the three cut bands auto-fit to the local
   spectral peaks of that voice (FFT analysis, ±1/3 octave). Every tweak
-  auto-saves; **Process All** always renders what the editor shows.
+  auto-saves; **Process Selection** always renders what the editor shows.
 - **Reset** returns to the base curve; **Bypass** A/Bs the preview without
   touching saved state.
 - A manual EQ override replaces the built-in cuts+boosts curve entirely; the
@@ -172,18 +172,18 @@ target, or "raise only" as a conservative legacy mode.
 - **Three-way A/B for Mode 2 pairs** — when the selected file has an
   `Enhanced/` pair, a second toggle (**Original / Enhanced / Fusion**)
   appears. "Fusion" renders an on-demand preview through the same filter
-  graph `Process All` would use (cached per file + fusion settings), and
+  graph `Process Selection` would use (cached per file + fusion settings), and
   switching sources hot-swaps the audio element in place, preserving
   playback position so you can A/B the exact same passage.
 
 ## Updating the app
 
-The version pill in the titlebar (⟳ v0.6.1) is the updater. This repo is
+The version pill in the titlebar (⟳ v0.7.0) is the updater. This repo is
 public, so the built artifacts and the update metadata live in its own
 [Releases](https://github.com/DanielGutierrezB/audio_education/releases) and
 installed apps read them anonymously — no token, no login, no GitHub account.
 The pill checks at launch and every 30 minutes; when a newer version exists it
-highlights and shows `v0.6.1 → v0.7.0`, clicking downloads the update (with a
+highlights and shows `v0.7.0 → v0.8.0`, clicking downloads the update (with a
 live percentage on the pill) and relaunches into the new version.
 
 - **Packaged install (pkg / installer)** — `electron-updater` reads
@@ -211,6 +211,20 @@ live percentage on the pill) and relaunches into the new version.
   whole batch (per-file mode, duration, QC flags, output verification badge,
   and a flagged-files detail section) to a location you choose, ready to
   attach to a course deliverable.
+- **History tab** — every finished render is logged (name, mode, target
+  preset, QC flags, verification badge, output path) and kept across
+  restarts, capped at the 500 most recent. Useful for answering "did this
+  class already go through, and how did it land?" without re-measuring.
+
+## Queue
+
+Files enter the queue sorted by name in natural/numeric order, so `10`
+follows `9` instead of `1`, and arrive pre-selected — the common
+"process the whole folder" case is still one click. **Process Selection**
+runs only the checked, not-yet-done files; **Select all** / **Clear
+selection** in the toolbar switch between the whole batch and a hand-picked
+subset (re-running a single class after a tweak, for instance). Move
+up/down still overrides the name order per file.
 
 ## Output
 
@@ -298,13 +312,16 @@ All settings persist across sessions via `electron-store`:
 
 - **Delivery preset** (toolbar) — Platzi / YouTube / Podcast, see above.
 - **Output** — format (WAV24/WAV16/FLAC), sample rate, custom output dir.
-- **EQ** — HPF frequency, force de-esser on.
+- **EQ** — HPF frequency, de-esser intensity.
 - **Dynamics & Body** — leveler (auto/off), local denoise (auto/off, Mode 1
   only), body amount (parallel compression blend), presence extra
-  (`aexciter`, off by default), trim silence, normalize mode (both
-  directions / raise only).
+  (`aexciter`), de-esser intensity, trim silence, normalize mode (both
+  directions / raise only). Body, presence extra and the de-esser are
+  0–100% intensity sliders with a live channel-strip preview in the EQ tab;
+  0 means the stage is skipped entirely. The older on/off flags are still
+  honoured when a settings file predates the sliders.
 - **Adobe Enhance** — "Enhance with Adobe" toggle (embedded Enhance stage on
-  Process All), "Clean voice mix" percentage (extra `Enhanced/Mix N/`
+  Process Selection), "Clean voice mix" percentage (extra `Enhanced/Mix N/`
   deliverable; 100% = no extra file), and the Adobe account
   connect/sign-out. The session token is stored encrypted per machine, not
   in `electron-store`.
@@ -369,10 +386,10 @@ bin/                          (gitignored) populated by the fetch scripts
   notice, and it consumes your Adobe account's Enhance credits. Mode 2 with
   a manually produced `Enhanced/` folder and Mode 1 remain the fallbacks
   (`docs/PLAN.md` §3.1).
-- Installs older than v0.6.1 carry an updater that pointed at a repo that
+- Installs older than v0.7.0 carry an updater that pointed at a repo that
   was private (v0.5.x) or never existed (v0.6.0), so they can never see an
-  update on their own — each machine needs the v0.6.1 `.pkg` / installer
-  run manually once. From v0.6.1 on, updates come from this repo's public
+  update on their own — each machine needs the v0.7.0 `.pkg` / installer
+  run manually once. From v0.7.0 on, updates come from this repo's public
   Releases and need no token.
 - `electron-updater` on unsigned macOS builds relies on ad-hoc arm64
   signing; if a macOS update ever fails to apply, the fallback is simply

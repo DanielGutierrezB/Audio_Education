@@ -13,6 +13,7 @@ const pairing = require('./src/pairing');
 const fusion = require('./src/fusion');
 const spectrogram = require('./src/spectrogram');
 const qcReport = require('./src/qc-report');
+const history = require('./src/history');
 const updater = require('./src/updater');
 const adobeAuth = require('./src/adobe-auth');
 const enhanceBatch = require('./src/enhance/batch');
@@ -182,61 +183,10 @@ ipcMain.handle('store:set', (_, key, value) => {
 });
 ipcMain.handle('store:getAll', () => store.store);
 
-// ── Render history ──
-// A persistent, capped log of finished renders (kept out of the settings
-// store validation above since it's app-managed data, not a user pref).
-// Newest entries are returned first for the History tab.
-const HISTORY_KEY = 'renderHistory';
-const HISTORY_CAP = 500;
-
-// Trust only the fields the History tab renders — the renderer builds the
-// record, but we still whitelist so a stray key never lands in the store.
-function sanitizeHistoryRecord(rec) {
-  if (!rec || typeof rec !== 'object') return null;
-  const str = (v) => (typeof v === 'string' ? v.slice(0, 1024) : null);
-  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-  const out = {
-    ts: num(rec.ts) ?? 0,
-    name: str(rec.name),
-    source: str(rec.source),
-    output: str(rec.output),
-    preset: str(rec.preset),
-    mode: num(rec.mode),
-    status: rec.status === 'error' ? 'error' : 'done',
-    error: str(rec.error),
-    verify: null,
-    flags: [],
-  };
-  if (rec.verify && typeof rec.verify === 'object') {
-    out.verify = { i: num(rec.verify.i), tp: num(rec.verify.tp), badge: rec.verify.badge === 'ok' ? 'ok' : 'warn' };
-  }
-  if (Array.isArray(rec.flags)) {
-    out.flags = rec.flags.slice(0, 20)
-      .filter(f => f && typeof f.code === 'string')
-      .map(f => ({ code: f.code.slice(0, 40), detail: str(f.detail) }));
-  }
-  return out;
-}
-
-ipcMain.handle('history:add', (_, rec) => {
-  const clean = sanitizeHistoryRecord(rec);
-  if (!clean) return 0;
-  const list = store.get(HISTORY_KEY) || [];
-  list.push(clean);
-  const capped = list.slice(-HISTORY_CAP);
-  store.set(HISTORY_KEY, capped);
-  return capped.length;
-});
-
-ipcMain.handle('history:list', () => {
-  const list = store.get(HISTORY_KEY) || [];
-  return [...list].reverse(); // newest first
-});
-
-ipcMain.handle('history:clear', () => {
-  store.set(HISTORY_KEY, []);
-  return true;
-});
+// ── Render history (src/history.js owns sanitizing + capping) ──
+ipcMain.handle('history:add', (_, rec) => history.add(store, rec));
+ipcMain.handle('history:list', () => history.list(store));
+ipcMain.handle('history:clear', () => history.clear(store));
 
 ipcMain.handle('folders:open', async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);

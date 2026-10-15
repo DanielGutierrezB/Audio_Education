@@ -1,0 +1,69 @@
+name: Build macOS Installer
+
+# Tag pushes (v0.6.1, v0.6.2, ...) build the unsigned arm64 zip + .pkg and
+# publish them — with electron-updater's latest-mac.yml metadata — to this
+# repo's own Releases. The repo is public, so installed apps read the update
+# metadata anonymously and any editor can download a release without an
+# account or a token. The zip is what Squirrel.Mac swaps in on an in-app
+# update; the .pkg is the installer humans run the first time. Manual runs
+# (workflow_dispatch) build and upload the .pkg as a workflow artifact only,
+# for testing the packaging step without cutting a release.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # macos-15 is the current arm64 image; macos-14 is deprecated and
+    # AudioPro only targets Apple Silicon (see package.json build.mac.arch).
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fetch bundled ffmpeg/ffprobe/RNNoise model (arm64, SHA256-verified)
+        run: npm run setup:bin
+
+      - name: Build macOS arm64 zip + pkg (publish to this repo's Releases on tags)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            npm run build -- --publish always
+          else
+            npm run build -- --publish never
+          fi
+
+      - name: Locate installer
+        id: pkg
+        run: |
+          set -euo pipefail
+          pkg_path="$(find dist -maxdepth 1 -name '*.pkg' -print -quit)"
+          if [ -z "$pkg_path" ]; then
+            echo "No .pkg found under dist/" >&2
+            exit 1
+          fi
+          echo "path=$pkg_path" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$pkg_path")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload installer as workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: ${{ steps.pkg.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30

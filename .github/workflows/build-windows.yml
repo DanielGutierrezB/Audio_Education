@@ -1,13 +1,12 @@
 name: Build Windows Installer
 
-# Tag pushes (v0.3.0, v0.3.1, ...) build the NSIS x64 installer and
-# publish it — with electron-updater's latest.yml metadata — to the same
-# public audiopro-releases repo as the macOS job (which runs in parallel
-# on the same tag; electron-builder appends assets to the shared release
-# instead of clobbering it). Requires the RELEASES_TOKEN secret: a PAT
-# with Contents read/write on audiopro-releases. Manual runs
-# (workflow_dispatch) build and upload the installer as a workflow
-# artifact only, for testing the packaging step without cutting a release.
+# Tag pushes (v0.6.1, v0.6.2, ...) build the NSIS x64 installer and publish
+# it — with electron-updater's latest.yml metadata — to this repo's own
+# Releases, the same release the macOS job targets (both run in parallel on
+# the same tag; electron-builder appends assets instead of clobbering them).
+# The repo is public, so installed apps read the update metadata anonymously
+# and need no token. Manual runs (workflow_dispatch) build and upload the
+# installer as a workflow artifact only, without cutting a release.
 on:
   push:
     tags:
@@ -15,7 +14,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -35,10 +34,10 @@ jobs:
       - name: Fetch bundled ffmpeg/ffprobe/RNNoise model (x64, SHA256-verified)
         run: npm run setup:bin:win
 
-      - name: Build Windows x64 installer (publish to audiopro-releases on tags)
+      - name: Build Windows x64 installer (publish to this repo's Releases on tags)
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then

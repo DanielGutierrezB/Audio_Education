@@ -250,6 +250,18 @@ function denoiseMixFor(noiseFloorDb) {
   return Math.max(0.25, Math.min(0.85, 0.25 + t * 0.6));
 }
 
+// Spectral tilt: how much louder the body of the voice (100-300 Hz) is than
+// its intelligibility range (2-5 kHz). This is the number behind "Adobe gives
+// too much bass": on the real corpus it reads ~15.4 dB on the raw takes and
+// ~18.0 dB after Adobe Podcast, i.e. the enhancement adds ~2.5 dB of relative
+// low end on every file. The tone stage corrects against it (src/pipeline.js
+// TONE_TILT_REFERENCE_DB) so a dark source and a bright one land in the same
+// place instead of being offset by the same fixed curve.
+function tiltOf(bands) {
+  if (bands.body == null || bands.presence == null) return null;
+  return bands.body - bands.presence;
+}
+
 async function analyzeFile(inputPath) {
   const [global, bandData] = await Promise.all([
     analyzeGlobal(inputPath),
@@ -257,6 +269,7 @@ async function analyzeFile(inputPath) {
   ]);
   const flags = deriveFlags({ global, bandData });
   return {
+    tilt: tiltOf(bandData.bands),
     loudness:    global.loudness,
     crestFactor: global.crestFactor,
     noiseFloor:  global.noiseFloor,
@@ -271,4 +284,4 @@ async function analyzeFile(inputPath) {
   };
 }
 
-module.exports = { analyzeFile, deriveFlags, denoiseMixFor, QC_THRESHOLDS, BAND_DEFS };
+module.exports = { analyzeFile, deriveFlags, denoiseMixFor, tiltOf, QC_THRESHOLDS, BAND_DEFS };

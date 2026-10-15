@@ -39,6 +39,10 @@ const VALID_STORE_KEYS = new Set([
   // Intensity (0–100%) for the exciter / de-esser — supersede the on/off
   // flags above (kept for back-compat). 0 = off.
   'airExtraAmount', 'deEsserAmount',
+  // Adaptive tilt correction (src/pipeline.js TONE_TILT_REFERENCE_DB).
+  // Store-only for now: there is no Settings control, but a course whose
+  // teacher needs a different balance can be retargeted without a rebuild.
+  'adaptiveToneEnabled', 'toneTiltTarget',
   // Mode 2 fusion — original + Adobe Podcast Enhance 100% (docs/PLAN.md §2.4).
   'fusionEnabled', 'fusionMode', 'fusionCrossoverHz', 'fusionOriginalPct',
   // Embedded Adobe Enhance (docs/PLAN.md §3.1 Nivel 2 / Fase 10).
@@ -56,6 +60,7 @@ const RANGE_VALUES = {
   bodyPct:           [0, 100],
   airExtraAmount:    [0, 100],
   deEsserAmount:     [0, 100],
+  toneTiltTarget:    [6, 22],
   fusionCrossoverHz: [80, 500],
   fusionOriginalPct: [0, 40],
   enhanceMixPct:     [0, 100],
@@ -78,6 +83,8 @@ const store = new Store({
     airExtraEnabled: false,
     airExtraAmount: 0,
     deEsserAmount: 0,
+    adaptiveToneEnabled: true,
+    toneTiltTarget: 14,
     trimSilence: true,
     normalizeMode: 'both',
     fusionEnabled: true,
@@ -161,9 +168,10 @@ ipcMain.handle('store:set', (_, key, value) => {
   const BOOL_KEYS = new Set([
     'deEsserEnabled', 'showNotifications', 'manualEqApply',
     'airExtraEnabled', 'trimSilence', 'fusionEnabled', 'enhanceEnabled',
+    'adaptiveToneEnabled',
   ]);
   const STRING_KEYS = new Set(['outputFormat', 'manualEqChain', 'customOutputDir']);
-  const INT_KEYS = new Set(['hpfFrequency', 'sampleRate', 'bodyPct', 'airExtraAmount', 'deEsserAmount', 'fusionCrossoverHz', 'fusionOriginalPct', 'enhanceMixPct']);
+  const INT_KEYS = new Set(['hpfFrequency', 'sampleRate', 'bodyPct', 'airExtraAmount', 'deEsserAmount', 'toneTiltTarget', 'fusionCrossoverHz', 'fusionOriginalPct', 'enhanceMixPct']);
   if (BOOL_KEYS.has(key) && typeof value !== 'boolean') return;
   if (STRING_KEYS.has(key) && typeof value !== 'string') return;
   if (INT_KEYS.has(key) && (typeof value !== 'number' || !Number.isFinite(value))) return;
@@ -375,6 +383,8 @@ ipcMain.handle('pipeline:start', (event, files) => {
     airExtraEnabled:   store.get('airExtraEnabled'),
     airExtraAmount:    store.get('airExtraAmount'),
     deEsserAmount:     store.get('deEsserAmount'),
+    adaptiveToneEnabled: store.get('adaptiveToneEnabled'),
+    toneTiltTarget:    store.get('toneTiltTarget'),
     trimSilence:       store.get('trimSilence'),
     normalizeMode:     store.get('normalizeMode'),
     fusionEnabled:     store.get('fusionEnabled'),

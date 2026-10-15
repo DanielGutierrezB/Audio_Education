@@ -66,9 +66,11 @@ Mode 2: original + enhanced ─▶ 0. Fuse (bands / bed crossover) ─┴┤
                    detector exists); de-clip / hum notch / silence trim only
                    when their own detector actually fired
                                    │
-                4. Tone + dynamics — HPF → EQ cuts (mud/box/honk) → leveling
-                   compressor (skipped if already dense) → parallel "body"
-                   compression → presence/air boosts (air skips on
+                4. Tone + dynamics — HPF → EQ cuts (mud/box/honk) → adaptive
+                   tilt shelf (pulls the measured body/presence balance to the
+                   target, so a dark take and a bright one land together) →
+                   leveling compressor (skipped if already dense) → parallel
+                   "body" compression → presence/air boosts (air skips on
                    band-limited sources) → dynamic de-esser (sibilance-gated)
                                    │
                 5. Loudness — two-pass loudnorm to the selected delivery
@@ -138,6 +140,33 @@ leaving the app:
   same one `adobe-podcast-batch` has always used); it can change without
   notice. If it does, Mode 2 with a manually produced `Enhanced/` folder and
   Mode 1 keep working as fallbacks.
+
+## Tonal balance across a course
+
+Adobe Podcast Enhance adds roughly **2.5 dB of relative low end** to every
+file (measured across the real corpus: raw takes sit at ~15.4 dB of
+body-minus-presence, the enhanced versions at ~18.0 dB). That is the "too
+much bass, not enough clarity" complaint, and the amount is not constant —
+it varies with the take and with the voice.
+
+A fixed EQ curve cannot fix that: whatever arrives darker leaves exactly
+that much darker. So the tone stage measures each source's **spectral tilt**
+(body 100–300 Hz minus presence 2–5 kHz) and adds a 300 Hz shelf scaled to
+how far it sits from the target, capped at ±6 dB of shelf. A file already at
+the target gets no shelf at all.
+
+On the four validated classes this takes the spread between classes from
+**3.0 dB down to 0.5 dB** — every class in a course lands on the same
+balance instead of inheriting whatever Adobe happened to do to it. The
+target (`toneTiltTarget`, default 14 dB of source tilt) and the on/off
+switch (`adaptiveToneEnabled`) are store-only for now; there is no Settings
+control yet.
+
+The measurement is a band-energy ratio, not a model of a voice, so a
+naturally deep voice is still a deep voice — the shelf only removes the
+*excess* over the target, and the cap keeps it from flattening anyone. The
+target itself is calibrated against one teacher so far; `docs/PLAN.md` §5 D4
+tracks the multi-teacher corpus needed to set it per voice type.
 
 ## Delivery presets
 
@@ -341,6 +370,9 @@ All settings persist across sessions via `electron-store`:
   toggle here).
 - `showNotifications` (default on) — desktop notification when a batch
   finishes. Store-only for now; there's no toggle in the Settings panel yet.
+- `adaptiveToneEnabled` (default on) and `toneTiltTarget` (default 14) — the
+  adaptive tilt correction above. Also store-only; retargeting lets a course
+  with an unusually deep or bright teacher be rebalanced without a rebuild.
 
 ## Architecture
 

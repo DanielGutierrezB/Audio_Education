@@ -13,6 +13,7 @@ const btnSelectAll   = document.getElementById('btn-select-all');
 const btnClearSelection = document.getElementById('btn-clear-selection');
 const btnClearAll    = document.getElementById('btn-clear-all');
 const btnRemoveDone  = document.getElementById('btn-remove-completed');
+const btnRetryFailed = document.getElementById('btn-retry-failed');
 const queueEmpty     = document.getElementById('queue-empty');
 const queueList      = document.getElementById('queue-list');
 const queueSummary   = document.getElementById('queue-summary');
@@ -29,6 +30,7 @@ export {
   btnClearSelection,
   btnClearAll,
   btnRemoveDone,
+  btnRetryFailed,
   queueEmpty,
   queueList,
   queueSummary,

@@ -5,12 +5,12 @@
 
 import {
   btnAddFiles, btnAddFolders, btnClearAll, btnClearSelection,
-  btnProcessSelection, btnRemoveDone, btnSelectAll,
+  btnProcessSelection, btnRemoveDone, btnRetryFailed, btnSelectAll,
 } from './dom.js';
 import { prefs, ui } from './state.js';
 import {
   addFilesViaDialog, addFoldersViaDialog, clearAll, clearSelection,
-  removeCompleted, selectAllFiles,
+  removeCompleted, selectAllFiles, selectFailedOnly,
 } from './queue.js';
 import { cancelProcessing, startProcessing } from './processing.js';
 
@@ -33,6 +33,7 @@ const setAirExtra      = document.getElementById('set-air-extra');
 const airExtraValue    = document.getElementById('air-extra-value');
 const deesserValue     = document.getElementById('deesser-value');
 const setTrimSilence   = document.getElementById('set-trim-silence');
+const setSkipUnchanged = document.getElementById('set-skip-unchanged');
 const setNormalize     = document.getElementById('set-normalize');
 const setFusionEnabled = document.getElementById('set-fusion-enabled');
 const setFusionMode    = document.getElementById('set-fusion-mode');
@@ -73,6 +74,7 @@ function applySettingsUI(p) {
   setAirExtra.value = airAmt;
   if (airExtraValue) airExtraValue.textContent = `${airAmt}%`;
   setTrimSilence.checked = p.trimSilence !== false;
+  setSkipUnchanged.checked = p.skipUnchanged !== false;
   setNormalize.value = p.normalizeMode ?? 'both';
   setFusionEnabled.checked = p.fusionEnabled !== false;
   setFusionMode.value = p.fusionMode ?? 'bands';
@@ -118,6 +120,7 @@ setAirExtra.addEventListener('input', () => {
   savePref('airExtraAmount', v);
 });
 setTrimSilence.addEventListener('change', () => savePref('trimSilence', setTrimSilence.checked));
+setSkipUnchanged.addEventListener('change', () => savePref('skipUnchanged', setSkipUnchanged.checked));
 setNormalize.addEventListener('change', () => savePref('normalizeMode', setNormalize.value));
 setFusionEnabled.addEventListener('change', () => savePref('fusionEnabled', setFusionEnabled.checked));
 setFusionMode.addEventListener('change', () => savePref('fusionMode', setFusionMode.value));
@@ -179,6 +182,12 @@ btnAddFiles.addEventListener('click', addFilesViaDialog);
 btnClearAll.addEventListener('click', clearAll);
 btnRemoveDone.addEventListener('click', removeCompleted);
 btnSelectAll.addEventListener('click', selectAllFiles);
+// Selects the failed files and starts straight away: having to click Retry and
+// then Process Selection would be two clicks for one intent.
+btnRetryFailed.addEventListener('click', () => {
+  selectFailedOnly();
+  startProcessing();
+});
 btnClearSelection.addEventListener('click', clearSelection);
 
 // ── Custom output directory ──

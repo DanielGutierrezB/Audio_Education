@@ -43,6 +43,10 @@ const DEFAULTS = {
   // different balance can be retargeted without a rebuild.
   adaptiveToneEnabled: true,
   toneTiltTarget: 14,
+  // Skip a file whose output already matches what this render would produce
+  // (src/render-manifest.js). Re-running a course to fix two classes should
+  // not re-render the rest.
+  skipUnchanged: true,
   // How many files render at once (src/pipeline.js processQueue). Store-only;
   // 0 means "decide from the core count".
   concurrency: 0,
@@ -63,6 +67,7 @@ const VALID_KEYS = new Set(Object.keys(DEFAULTS));
 const BOOL_KEYS = new Set([
   'deEsserEnabled', 'showNotifications', 'manualEqApply', 'airExtraEnabled',
   'trimSilence', 'fusionEnabled', 'enhanceEnabled', 'adaptiveToneEnabled',
+  'skipUnchanged',
 ]);
 const STRING_KEYS = new Set(['outputFormat', 'manualEqChain', 'customOutputDir']);
 const INT_KEYS = new Set([
@@ -146,6 +151,7 @@ function pipelineSettings(store) {
     // an absent setting rather than a zero worker pool.
     concurrency: get('concurrency') || undefined,
     trimSilence: get('trimSilence'),
+    skipUnchanged: get('skipUnchanged'),
     normalizeMode: get('normalizeMode'),
     fusionEnabled: get('fusionEnabled'),
     fusionMode: get('fusionMode'),

@@ -293,6 +293,19 @@ stops every running process rather than just the most recent one. Override it
 with the store-only `concurrency` key (0 = decide from the core count) if a
 batch should leave more of the machine free while someone edits.
 
+**Skip unchanged** (on by default) means re-running a course to fix two
+classes doesn't re-render the other thirty-eight. A manifest in the output
+folder (`.audiopro-renders.json`) records what each master was made from —
+the source and its Mode 2 pair by size and mtime, plus every setting that
+reaches the render — so re-recording a take, dropping in a new `Enhanced/`
+pair, nudging any processing control, or deleting the output all count as
+changed and re-render. Skipped files show `↻` rather than `✅`, because the
+output is correct but nothing was made.
+
+**Retry failed** appears in the toolbar as soon as anything errors: it narrows
+the selection to just those files, clears their error state and starts, rather
+than making you hand-pick them.
+
 ## Output
 
 - WAV 24-bit (default), WAV 16-bit, or FLAC — 48 kHz or 44.1 kHz.
@@ -437,6 +450,8 @@ All settings persist across sessions via `electron-store`:
 - **Delivery preset** (toolbar) — Platzi / YouTube / Podcast, see above.
 - **Output** — format (WAV24/WAV16/FLAC), sample rate, custom output dir.
 - **EQ** — HPF frequency, de-esser intensity.
+- **Skip unchanged** (default on) — skip a file whose output already matches
+  what this render would produce. See "Queue" above for what counts as changed.
 - **Dynamics & Body** — leveler (auto/off), local denoise (auto/off, Mode 1
   only), body amount (parallel compression blend), presence extra
   (`aexciter`), de-esser intensity, trim silence, normalize mode (both
@@ -491,6 +506,7 @@ src/
   adobe-auth.js               Adobe login window, token persistence (0600 file), silent reauth
   metrics.js                  QC analysis pass (loudness, bands, rolloff, silences) → flags
   pairing.js                  Detects original ↔ Enhanced/ pairs (adobe-podcast-batch convention)
+  render-manifest.js          What each master was made from, so unchanged files can be skipped
   align.js                    Recovers a Mode 2 pair's time offset (envelope cross-correlation)
   fusion.js                   Mode 2 blend (bands / bed / bands+bed filter graphs)
   presets.js                  Delivery loudness/TP/LRA targets per platform

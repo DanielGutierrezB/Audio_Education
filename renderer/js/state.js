@@ -26,3 +26,10 @@ export const ui = {
   // same button cancel and keeps the queue controls disabled.
   processing: false,
 };
+
+// A file is finished when its output on disk is what this configuration would
+// produce — whether it was rendered now or skipped because it already was.
+// Both are excluded from "Process Selection" and swept by "Remove completed".
+export function isFinished(status) {
+  return status === 'done' || status === 'skipped';
+}

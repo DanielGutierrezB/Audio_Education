@@ -6,7 +6,7 @@
 import {
   badgeDone, btnAddFiles, btnAddFolders, btnProcessSelection, btnRemoveDone,
 } from './dom.js';
-import { completedFiles, queue, selectedFiles, ui } from './state.js';
+import { completedFiles, isFinished, queue, selectedFiles, ui } from './state.js';
 import { formatEta } from './format.js';
 import {
   findQueuedFile, notifyQueueChanged, patchFileFlags, patchFileMode,
@@ -127,7 +127,7 @@ function startProcessing() {
   const files = [];
   for (const [, group] of queue) {
     for (const file of group.files) {
-      if (file.status !== 'done' && selectedFiles.has(file.path)) {
+      if (!isFinished(file.status) && selectedFiles.has(file.path)) {
         files.push({ path: file.path, duration: file.duration, ...(file.pairPath ? { pairPath: file.pairPath } : {}) });
       }
     }
@@ -252,6 +252,24 @@ function handlePipelineEvent(event) {
       notifyQueueChanged();
       btnRemoveDone.hidden = false;
       recordHistory(event, 'done');
+      break;
+
+    // Skipped files count as handled: the output on disk already matches what
+    // this run would have produced, so they belong in completedFiles (which
+    // feeds "Open output", the QC report and Remove completed) while the row
+    // still shows that nothing was re-rendered.
+    case 'file:skipped':
+      patchFileStatus(event.file, 'skipped');
+      for (const [, group] of queue) {
+        const f = group.files.find(f => f.path === event.file);
+        if (f) { f.status = 'skipped'; f.skipReason = event.reason; }
+      }
+      completedFiles.set(event.file, event.outputPath);
+      noteFileFinished(event.file);
+      updateDoneBadge();
+      notifyQueueChanged();
+      btnRemoveDone.hidden = false;
+      window.api?.log.push('renderer', `Skipped (unchanged): ${filename}`);
       break;
 
     case 'file:error':

@@ -57,6 +57,10 @@ before — its output folders are detected and never re-uploaded.
 
 ## Pipeline
 
+Summarised below. **`docs/PREMIERE-INTEGRATION.md` §1–§8 is the complete
+reference** — every stage, threshold and condition with the measurements behind
+it — and is the place to start before changing anything in the audio path.
+
 ```
 Mode 1: original ────────────────────────────────────────────────┐
 Embedded Enhance: original ─▶ −1. Enhance (upload to Adobe,      │
@@ -549,6 +553,7 @@ scripts/
   calibrate.js                 Read-only QC sweep over a real corpus → threshold calibration
 docs/
   PLAN.md                      Design doc + phased implementation plan + status
+  PREMIERE-INTEGRATION.md      The processing model in full, and how to drive it from the CEP panel
   DESIGN.md                    Earlier design notes
   SIGNING.md                   What signing/notarizing needs, and what it would fix
 bin/                          (gitignored) populated by the fetch scripts

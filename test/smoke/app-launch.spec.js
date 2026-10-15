@@ -132,7 +132,10 @@ test('the version pill reports the running version', async () => {
   const win = await app.firstWindow();
   const version = await win.evaluate(() => window.api.update.getVersion());
   expect(version).toMatch(/^\d+\.\d+\.\d+$/);
-  // The pill in the titlebar is static markup until the renderer fills it in,
-  // so this also proves that wiring ran.
-  await expect(win.locator('#version-label')).toHaveText(`v${version}`);
+  // The pill is static markup until the renderer fills it in, so this also
+  // proves that wiring ran. Matched on "contains" rather than equality: the
+  // pill has two legitimate forms, and on a dev checkout it often shows the
+  // second one. checkGitUpdate reports `changed` from the commit count, not
+  // the version, so any commit on main makes it read "v0.7.0 → v0.7.0".
+  await expect(win.locator('#version-label')).toContainText(`v${version}`);
 });

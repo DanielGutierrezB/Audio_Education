@@ -2,7 +2,7 @@
 
 // Tests for the self-updater helpers. The packaged-install path is
 // electron-updater (exercised only inside Electron, against the public
-// audiopro-releases repo); what lives in src/updater.js — and what this
+// repo's own Releases); what lives in src/updater.js — and what this
 // suite covers — are the pure version helpers plus the dev-checkout git
 // path's install-type detection.
 

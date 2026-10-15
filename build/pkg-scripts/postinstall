@@ -1,0 +1,19 @@
+#!/bin/sh
+# Installer copies the bundle as root, so /Applications/AudioPro.app ends up
+# owned by root. Squirrel.Mac (what electron-updater drives on macOS) applies
+# updates as the logged-in user and silently fails on a bundle it cannot write,
+# which would leave the in-app ⟳ pill permanently unable to update. Hand the
+# bundle back to whoever is actually at the machine.
+set -e
+
+DEST="${2:-/Applications}"
+APP="$DEST/AudioPro.app"
+[ -d "$APP" ] || exit 0
+
+CONSOLE_USER=$(stat -f%Su /dev/console 2>/dev/null || echo '')
+case "$CONSOLE_USER" in
+  '' | root | loginwindow) exit 0 ;;
+esac
+
+chown -R "$CONSOLE_USER":staff "$APP"
+exit 0

@@ -178,32 +178,28 @@ target, or "raise only" as a conservative legacy mode.
 
 ## Updating the app
 
-The version pill in the titlebar (⟳ v0.6.0) is the updater. Same
-architecture as the Sync app (`sync-app` → `sync-releases`): the source
-repo stays private, and built artifacts + update metadata are published to
-the **public releases-only repo**
-[`audiopro-releases`](https://github.com/DanielGutierrezB/audiopro-releases),
-so installed apps never need a token or login to update. The pill checks at
-launch and every 30 minutes; when a newer version exists it highlights and
-shows `v0.6.0 → v0.7.0`, clicking downloads the update (with a live
-percentage on the pill) and relaunches into the new version.
+The version pill in the titlebar (⟳ v0.6.1) is the updater. This repo is
+public, so the built artifacts and the update metadata live in its own
+[Releases](https://github.com/DanielGutierrezB/audio_education/releases) and
+installed apps read them anonymously — no token, no login, no GitHub account.
+The pill checks at launch and every 30 minutes; when a newer version exists it
+highlights and shows `v0.6.1 → v0.7.0`, clicking downloads the update (with a
+live percentage on the pill) and relaunches into the new version.
 
-- **Packaged install (DMG / installer)** — `electron-updater` reads
-  `latest-mac.yml` / `latest.yml` from the latest `audiopro-releases`
-  release, verifies the artifact's SHA-512, and installs the full new
-  build (macOS: zip swap via Squirrel; Windows: silent NSIS). Because the
-  whole app is replaced, updates that change dependencies or the bundled
-  ffmpeg binaries are fine — no more "needs a fresh DMG" cases.
+- **Packaged install (pkg / installer)** — `electron-updater` reads
+  `latest-mac.yml` / `latest.yml` from the latest release, verifies the
+  artifact's SHA-512, and installs the full new build (macOS: zip swap via
+  Squirrel; Windows: silent NSIS). Because the whole app is replaced,
+  updates that change dependencies or the bundled ffmpeg binaries are fine.
 - **Dev checkout (has `.git`)** — `git fetch` + compare against `origin/main`;
   applying runs `git reset --hard origin/main`, and refuses to run at all if
   the checkout is on any branch other than `main` (so it can't wipe
-  feature-branch work). Uses your own git credentials, so the private
-  source repo is not an issue.
+  feature-branch work).
 - **Publishing flow (CI)** — pushing a `v*.*.*` tag makes the macOS and
-  Windows workflows build and `--publish always` to `audiopro-releases`
-  via the `RELEASES_TOKEN` repo secret (a PAT with Contents read/write on
-  `audiopro-releases` only). Nothing is published to this repo's own
-  Releases anymore.
+  Windows workflows build and `--publish always` to this repo's Releases
+  using the workflow's own `GITHUB_TOKEN`; no personal access token is
+  involved. Only repo admins can push a `v*` tag (ruleset
+  `protect-release-tags`), so a release can't be cut from unreviewed code.
 
 ## QC tools
 
@@ -227,8 +223,8 @@ percentage on the pill) and relaunches into the new version.
 
 ## Requirements
 
-- **macOS** 10.12+ on Apple Silicon (M1/M2/M3), or **Windows 10+** x64
-- Node.js 18+ (development)
+- **macOS** 10.15+ on Apple Silicon (M1/M2/M3), or **Windows 10+** x64
+- Node.js 18+ (development only — the installers are self-contained)
 
 `ffmpeg` / `ffprobe` and the RNNoise model are downloaded as static,
 SHA256-verified artifacts by the setup scripts — no Homebrew, no Rosetta, no
@@ -271,23 +267,30 @@ runs it on every push/PR via `.github/workflows/test.yml`.
 ## Build
 
 ```bash
-npm run build        # macOS arm64 DMG → dist/
+npm run build        # macOS arm64 zip + .pkg installer → dist/
 npm run build:win    # Windows x64 NSIS installer → dist/
 ```
 
-The artifacts are unsigned — first-time macOS users need to right-click →
-**Open** to bypass Gatekeeper.
+The macOS target is a **`.pkg` installer**: double-click, next-next-done,
+the app lands in `/Applications` with the bundled ffmpeg/ffprobe/RNNoise
+model already inside — no dragging, no separate dependency step. A
+`postinstall` script (`build/pkg-scripts/postinstall`) hands the installed
+bundle back to the logged-in user, because Installer copies it as root and
+Squirrel.Mac needs write access to apply later in-app updates. The `zip`
+target is built alongside it and is what the updater swaps in; it is not
+meant to be installed by hand.
 
-`.github/workflows/build-macos-dmg.yml` and `.github/workflows/build-windows.yml`
-build the zip+DMG and the NSIS installer on a macOS / Windows Actions runner
+The artifacts are unsigned — the first time, right-click → **Open** on the
+`.pkg` itself to get past Gatekeeper. The installed app opens normally
+afterwards, since Installer does not propagate the quarantine flag to it.
+
+`.github/workflows/build-macos.yml` and `.github/workflows/build-windows.yml`
+build the zip+pkg and the NSIS installer on a macOS / Windows Actions runner
 respectively (`windows-latest` is real Windows, so this is an actual build+
 package smoke test, not a cross-compile guess) and publish both — plus the
-`latest-mac.yml` / `latest.yml` metadata the in-app updater reads — to the
-public [`audiopro-releases`](https://github.com/DanielGutierrezB/audiopro-releases)
-repo whenever a `v*.*.*` tag is pushed (or upload as workflow artifacts on
-a manual `workflow_dispatch` run, without publishing anything). Publishing
-needs the `RELEASES_TOKEN` secret on this repo: a fine-grained PAT with
-**Contents read/write on `audiopro-releases`** only.
+`latest-mac.yml` / `latest.yml` metadata the in-app updater reads — to this
+repo's Releases whenever a `v*.*.*` tag is pushed (or upload as workflow
+artifacts on a manual `workflow_dispatch` run, without publishing anything).
 
 ## Settings
 
@@ -338,7 +341,7 @@ src/
   spectrogram.js              showspectrumpic PNG render for the QC spectrogram modal
   qc-report.js                Markdown QC report builder for the batch export button
   updater.js                  Self-update helpers (git reset path for dev checkouts; packaged
-                               installs use electron-updater against audiopro-releases, wired in main.js)
+                               installs use electron-updater against this repo's Releases, wired in main.js)
 test/
   fixtures.js                 Synthetic WAV generator (ffmpeg lavfi) for the corpus below
   *.test.js                   node:test suite — metrics, pairing, fusion, presets, pipeline,
@@ -355,7 +358,7 @@ bin/                          (gitignored) populated by the fetch scripts
 ## Known limitations
 
 - Installers are not code-signed. Distribute over a trusted channel and
-  instruct users to right-click → Open the first time (macOS).
+  instruct users to right-click → Open the `.pkg` the first time (macOS).
 - The Platzi loudness target (−16 LUFS) is the general spoken-word/podcast
   convention, not a measured spec — see `docs/PLAN.md` §5 D1/D2 for the
   pending validation experiment (measure a published class's actual level).
@@ -366,11 +369,11 @@ bin/                          (gitignored) populated by the fetch scripts
   notice, and it consumes your Adobe account's Enhance credits. Mode 2 with
   a manually produced `Enhanced/` folder and Mode 1 remain the fallbacks
   (`docs/PLAN.md` §3.1).
-- Installs older than v0.6.0 carry the previous updater, which read this
-  (private) repo's `main` anonymously and therefore could never see an
-  update — they must be updated by installing a release DMG/installer
-  manually once. From v0.6.0 on, updates come from the public
-  `audiopro-releases` repo and need no token.
-- `electron-updater` on unsigned macOS builds relies on the same ad-hoc
-  arm64 signing the Sync app ships with; if a macOS update ever fails to
-  apply, the fallback is simply installing the release DMG over the app.
+- Installs older than v0.6.1 carry an updater that pointed at a repo that
+  was private (v0.5.x) or never existed (v0.6.0), so they can never see an
+  update on their own — each machine needs the v0.6.1 `.pkg` / installer
+  run manually once. From v0.6.1 on, updates come from this repo's public
+  Releases and need no token.
+- `electron-updater` on unsigned macOS builds relies on ad-hoc arm64
+  signing; if a macOS update ever fails to apply, the fallback is simply
+  running the release `.pkg` over the installed app.

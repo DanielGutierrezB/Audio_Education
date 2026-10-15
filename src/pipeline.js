@@ -137,6 +137,13 @@ function clampPct(v) { return Math.max(0, Math.min(100, Number(v) || 0)); }
 // with tqfactor=1.5 the bell's skirt reached into the 2–5 kHz presence band
 // and cost 2.6 dB there to get 9.4 dB of sibilance; 7.5 kHz at tqfactor=3.5
 // gets 5.7 dB of sibilance for 1.2 dB of presence.
+// `mode` and `auto` go in numerically because the named spellings
+// (`cutabove`, `adaptive`) are rejected by the ffmpeg 6.1 that CI installs
+// from apt, while the numeric values are stable across versions. An opaque
+// number in the filter string is exactly what hid the original bug, so the
+// meaning lives in these names instead.
+const DEQ_MODE_CUTABOVE = 1;  // 0 is cutbelow: attenuates everything *but* the esses
+const DEQ_AUTO_ADAPTIVE = 4;  // threshold tracks the signal instead of a fixed level
 const DEESSER_FREQ_HZ = 7500;
 const DEESSER_RANGE_MIN_DB = 2;
 const DEESSER_RANGE_SPAN_DB = 10;
@@ -151,7 +158,7 @@ function buildDeesserChain(qc, settings) {
   const range = (DEESSER_RANGE_MIN_DB + (amt / 100) * DEESSER_RANGE_SPAN_DB).toFixed(1);
   return `adynamicequalizer=dfrequency=${DEESSER_FREQ_HZ}:dqfactor=2:` +
     `tfrequency=${DEESSER_FREQ_HZ}:tqfactor=3.5:` +
-    `ratio=6:range=${range}:mode=cutabove:auto=adaptive`;
+    `ratio=6:range=${range}:mode=${DEQ_MODE_CUTABOVE}:auto=${DEQ_AUTO_ADAPTIVE}`;
 }
 
 function buildExciterChain(settings) {

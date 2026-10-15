@@ -101,8 +101,11 @@ test('de-esser intensity scales the maximum reduction, and 0 disables the stage'
 
 test('de-esser never uses the inverted cutbelow mode or a linear-scale threshold', () => {
   const chain = pipeline.buildDeesserChain(null, { deEsserAmount: 60 });
-  assert.match(chain, /mode=cutabove/, 'cutbelow attenuates everything except the esses');
-  assert.match(chain, /auto=adaptive/);
+  // mode=1 is cutabove; mode=0 is cutbelow, which attenuates everything
+  // except the esses. auto=4 is adaptive. Numeric because the named
+  // spellings are rejected by older ffmpeg builds — see src/pipeline.js.
+  assert.match(chain, /mode=1\b/, 'mode=0 (cutbelow) attenuates everything except the esses');
+  assert.match(chain, /auto=4\b/, 'without adaptive the threshold is a fixed level');
   assert.doesNotMatch(chain, /threshold=/,
     'a manual threshold is linear amplitude here and breaks as soon as input level changes');
 });

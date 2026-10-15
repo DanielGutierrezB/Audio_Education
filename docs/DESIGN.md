@@ -27,7 +27,7 @@ degraded already-clean Adobe Podcast material).
 - **UI:** Electron (vanilla HTML/CSS/JS) — dark theme, Processing / EQ / About tabs
 - **Backend:** Node.js main process, IPC via contextBridge
 - **Audio processing:** bundled static FFmpeg / FFprobe (no other runtime deps)
-- **Distribution:** unsigned DMG (macOS arm64) and NSIS installer (Windows x64)
+- **Distribution:** unsigned .pkg (macOS arm64) and NSIS installer (Windows x64)
 
 ## User flow
 

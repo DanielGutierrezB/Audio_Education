@@ -27,7 +27,7 @@
     "publish": {
       "provider": "github",
       "owner": "DanielGutierrezB",
-      "repo": "audiopro-releases",
+      "repo": "audio_education",
       "releaseType": "release"
     },
     "asar": false,
@@ -58,28 +58,21 @@
           ]
         },
         {
-          "target": "dmg",
+          "target": "pkg",
           "arch": [
             "arm64"
           ]
         }
       ]
     },
-    "dmg": {
-      "title": "AudioPro ${version}",
-      "background": null,
-      "contents": [
-        {
-          "x": 130,
-          "y": 220
-        },
-        {
-          "x": 410,
-          "y": 220,
-          "type": "link",
-          "path": "/Applications"
-        }
-      ]
+    "pkg": {
+      "installLocation": "/Applications",
+      "isRelocatable": false,
+      "overwriteAction": "upgrade",
+      "allowAnywhere": false,
+      "allowCurrentUserHome": false,
+      "allowRootDirectory": true,
+      "scripts": "pkg-scripts"
     },
     "win": {
       "icon": "build/icons/1024x1024.png",

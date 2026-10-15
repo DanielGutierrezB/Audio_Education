@@ -18,7 +18,7 @@ BIN="$ROOT/bin"
 
 # Pinned SHA256 hashes for the artefacts we trust. If osxexperts.net ever
 # serves different bytes, we abort instead of silently shipping a different
-# binary inside the .app/.dmg.
+# binary inside the .app/.pkg.
 FFMPEG_ZIP_SHA256="ebb82529562b71170807bbc6b0e7eb4f0b13af8cbb0e085bb9e8f6fe709598ad"
 FFPROBE_ZIP_SHA256="a6640a77d38a6f0527c5b597e599cb36a3427a6931444ed80bc62542421950a1"
 RNNOISE_MODEL_SHA256="70bb6685eb0c2a1d18e2918dca3fbfbd39317010b1802eb1b6ea73a92f3fdec0"

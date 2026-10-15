@@ -1,21 +1,20 @@
 'use strict';
 
 // ── Self-update ────────────────────────────────────────────────────────
-// Two install types, two mechanisms (same split as the Sync app):
+// Two install types, two mechanisms:
 //
-//   - Packaged install (DMG / NSIS) → `electron-updater` against the
-//     PUBLIC releases-only repo (audiopro-releases). The source repo
-//     stays private; only built artifacts + update metadata
-//     (latest-mac.yml / latest.yml, zips, blockmaps) are public, so the
-//     updater needs no token and works for every install. That side
-//     lives in main.js (electron-updater needs the Electron runtime);
-//     this module only contributes version helpers to it.
+//   - Packaged install (PKG / NSIS) → `electron-updater` against this
+//     repo's own Releases. The repo is public, so the artifacts and the
+//     update metadata (latest-mac.yml / latest.yml, zips, blockmaps) are
+//     readable anonymously: the updater needs no token and works for
+//     every install. That side lives in main.js (electron-updater needs
+//     the Electron runtime); this module only contributes version
+//     helpers to it.
 //
 //   - Dev install (a .git folder exists at the app root) → git fetch and
 //     compare, apply with `git reset --hard origin/<branch>` — but only
 //     when the checkout is actually on <branch>, so an update click can
-//     never blow away work on a feature branch. Uses the developer's own
-//     git credentials, so the private source repo is not a problem.
+//     never blow away work on a feature branch.
 
 const fs = require('fs');
 const path = require('path');

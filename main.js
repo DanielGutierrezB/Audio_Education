@@ -528,13 +528,11 @@ ipcMain.handle('qc:saveReport', async (event, fileSummaries) => {
 });
 
 // ── Self-update (⟳ button in the titlebar) ──
-// Same architecture as the Sync app (sync-app → sync-releases):
 //
-//   - Packaged install → `electron-updater` against the PUBLIC
-//     releases-only repo (audiopro-releases, set in package.json's
-//     build.publish). The source repo stays private; the update
-//     metadata (latest-mac.yml / latest.yml) and artifacts are public,
-//     so no token or login is ever needed.
+//   - Packaged install → `electron-updater` against this repo's own
+//     Releases (set in package.json's build.publish). The repo is public,
+//     so the update metadata (latest-mac.yml / latest.yml) and artifacts
+//     are readable anonymously: no token or login is ever needed.
 //   - Dev checkout → git fetch/reset via src/updater.js, using the
 //     developer's own credentials.
 //

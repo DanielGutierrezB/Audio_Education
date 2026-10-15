@@ -450,6 +450,15 @@ function patchFileMode(filePath, mode, findFile) {
   else if (badge) main.insertBefore(badge, main.querySelector('.file-duration'));
 }
 
+// Measurements the file row doesn't show but the QC report needs: the source
+// tilt and the input loudness behind the chips.
+function patchFileMetrics(filePath, metrics, findFile) {
+  const file = findFile(filePath);
+  if (!file) return;
+  if (metrics.tilt != null) file.tilt = metrics.tilt;
+  if (metrics.loudnessIn) file.loudnessIn = metrics.loudnessIn;
+}
+
 function patchFileFlags(filePath, flags, findFile) {
   const file = findFile(filePath);
   if (file) file.qcFlags = flags;
@@ -608,6 +617,7 @@ export {
   patchFileStatus,
   patchFileMode,
   patchFileFlags,
+  patchFileMetrics,
   patchFileVerify,
   FLAG_SEVERITY,
 };

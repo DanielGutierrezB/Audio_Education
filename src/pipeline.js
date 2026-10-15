@@ -468,7 +468,14 @@ async function processFile(file, settings, { emit, isCancelled, setCurrent, t0, 
       else emit('qc', { file: file.path, mode, flags: [pairNote], loudnessIn: null });
     }
     if (qc) {
-      emit('qc', { file: file.path, mode, flags: qc.flags.map(f => ({ code: f.code, detail: f.detail })), loudnessIn: qc.loudness });
+      emit('qc', {
+        file: file.path, mode,
+        flags: qc.flags.map(f => ({ code: f.code, detail: f.detail })),
+        loudnessIn: qc.loudness,
+        // Carried through to the QC report, where the spread across a course
+        // matters more than any single file's value.
+        tilt: qc.tilt,
+      });
     }
     if (isCancelled()) return;
 

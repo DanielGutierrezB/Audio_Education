@@ -55,6 +55,119 @@ function escapeCell(s) {
   return String(s ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 }
 
+// ── Course consistency ──
+// Within one course, what people notice is classes sounding different from
+// *each other* far more than any one of them sitting a dB from an absolute
+// target. Watching a course back, a class 2 LU louder than the rest stands
+// out; a course uniformly 2 LU off its target does not.
+//
+// AudioPro masters every file to the same figure, so a spread in the output
+// column means something didn't land and is worth a look before delivery.
+// Source tilt is included for the opposite reason: a spread there is expected
+// (it is what the adaptive correction exists to absorb), but a class far from
+// the others was recorded differently — different mic, different room — and
+// that is worth knowing even when the correction handled it.
+
+// loudnorm lands within a few tenths of a LU, so anything past this is not
+// measurement noise.
+const LOUDNESS_SPREAD_LU = 1.0;
+// Source tilt varies a few dB across takes of the same voice; past this it is
+// a different recording setup, not a different day.
+const TILT_OUTLIER_DB = 4.0;
+
+function median(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function spreadOf(files, pick) {
+  const measured = files
+    .map(f => ({ name: f.name, value: pick(f) }))
+    .filter(x => typeof x.value === 'number' && Number.isFinite(x.value));
+  if (measured.length < 2) return null;
+  const values = measured.map(x => x.value);
+  const mid = median(values);
+  return {
+    count: measured.length,
+    min: Math.min(...values),
+    max: Math.max(...values),
+    spread: Math.max(...values) - Math.min(...values),
+    median: mid,
+    // Sorted by how far off they are, so the worst offender reads first.
+    byDistance: measured
+      .map(x => ({ ...x, distance: Math.abs(x.value - mid) }))
+      .sort((a, b) => b.distance - a.distance),
+  };
+}
+
+// Returns null when there is nothing to compare — a single file, or a batch
+// where nothing finished.
+function analyzeConsistency(files) {
+  const done = (Array.isArray(files) ? files : []).filter(f => f.status === 'done');
+  if (done.length < 2) return null;
+
+  const loudness = spreadOf(done, f => f.verify?.i);
+  const tilt = spreadOf(done, f => f.tilt);
+
+  const loudnessOutliers = loudness && loudness.spread > LOUDNESS_SPREAD_LU
+    ? loudness.byDistance.filter(x => x.distance > LOUDNESS_SPREAD_LU / 2)
+    : [];
+  const tiltOutliers = tilt
+    ? tilt.byDistance.filter(x => x.distance > TILT_OUTLIER_DB)
+    : [];
+
+  return { loudness, tilt, loudnessOutliers, tiltOutliers };
+}
+
+function consistencyLines(files) {
+  const c = analyzeConsistency(files);
+  if (!c) return [];
+
+  const lines = ['', '## Course consistency', ''];
+  lines.push('How alike the finished classes are, which is what a viewer notices');
+  lines.push('across a course more than any single file\u2019s distance from target.');
+  lines.push('');
+  lines.push('| Measure | Across | Lowest | Highest | Spread |');
+  lines.push('|---|---|---|---|---|');
+  if (c.loudness) {
+    lines.push(`| Output loudness | ${c.loudness.count} files | ${c.loudness.min.toFixed(1)} LUFS ` +
+      `| ${c.loudness.max.toFixed(1)} LUFS | **${c.loudness.spread.toFixed(1)} LU** |`);
+  }
+  if (c.tilt) {
+    lines.push(`| Source tone (body \u2212 presence) | ${c.tilt.count} files | ${c.tilt.min.toFixed(1)} dB ` +
+      `| ${c.tilt.max.toFixed(1)} dB | ${c.tilt.spread.toFixed(1)} dB |`);
+  }
+  lines.push('');
+
+  if (c.loudnessOutliers.length) {
+    lines.push(`\u26A0 **Loudness is not uniform** \u2014 the batch spans ${c.loudness.spread.toFixed(1)} LU ` +
+      `where every file targets the same figure, so these did not land:`);
+    for (const o of c.loudnessOutliers) {
+      lines.push(`  - ${escapeCell(o.name)} \u2014 ${o.value.toFixed(1)} LUFS ` +
+        `(${o.value > c.loudness.median ? '+' : ''}${(o.value - c.loudness.median).toFixed(1)} LU vs the rest)`);
+    }
+    lines.push('');
+  } else if (c.loudness) {
+    lines.push(`\u2713 Loudness is uniform across the batch (${c.loudness.spread.toFixed(1)} LU spread).`);
+    lines.push('');
+  }
+
+  if (c.tiltOutliers.length) {
+    lines.push('These classes were **recorded differently** from the rest \u2014 the tone');
+    lines.push('correction absorbed it, but worth a listen before delivery:');
+    for (const o of c.tiltOutliers) {
+      lines.push(`  - ${escapeCell(o.name)} \u2014 source tone ${o.value.toFixed(1)} dB ` +
+        `(${o.value > c.tilt.median ? 'darker' : 'brighter'} than the others by ` +
+        `${o.distance.toFixed(1)} dB)`);
+    }
+    lines.push('');
+  }
+
+  return lines;
+}
+
 function needsAttention(file) {
   if (file.status === 'error') return true;
   if (file.verify && file.verify.badge !== 'ok') return true;
@@ -92,6 +205,8 @@ function buildQcReportMarkdown(files, opts = {}) {
     lines.push(`| ${row.join(' | ')} |`);
   }
 
+  lines.push(...consistencyLines(list));
+
   if (flaggedFiles.length) {
     lines.push('');
     lines.push('## Details \u2014 files that need a look');
@@ -121,4 +236,7 @@ function buildQcReportMarkdown(files, opts = {}) {
   return lines.join('\n');
 }
 
-module.exports = { buildQcReportMarkdown, defaultReportFilename, WARN_FLAG_CODES };
+module.exports = {
+  buildQcReportMarkdown, defaultReportFilename, WARN_FLAG_CODES,
+  analyzeConsistency, LOUDNESS_SPREAD_LU, TILT_OUTLIER_DB,
+};

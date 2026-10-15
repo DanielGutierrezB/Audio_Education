@@ -10,7 +10,7 @@ import { completedFiles, queue, selectedFiles, ui } from './state.js';
 import { formatEta } from './format.js';
 import {
   findQueuedFile, notifyQueueChanged, patchFileFlags, patchFileMode,
-  patchFileStatus, patchFileVerify, renderQueue,
+  patchFileMetrics, patchFileStatus, patchFileVerify, renderQueue,
 } from './queue.js';
 import { recordHistory } from './history.js';
 
@@ -235,6 +235,7 @@ function handlePipelineEvent(event) {
     case 'qc':
       patchFileMode(event.file, event.mode, findQueuedFile);
       patchFileFlags(event.file, event.flags, findQueuedFile);
+      patchFileMetrics(event.file, event, findQueuedFile);
       break;
 
     case 'file:done':

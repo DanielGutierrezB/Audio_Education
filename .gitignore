@@ -17,3 +17,6 @@ build/icon.iconset/
 .claude/
 .vscode/
 .idea/
+
+# Private calibration corpus — real course recordings, never published.
+corpus/

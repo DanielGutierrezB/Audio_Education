@@ -79,3 +79,24 @@ test('isAudioFile recognises the documented extension set', () => {
   for (const ext of pairing.AUDIO_EXTS) assert.equal(pairing.isAudioFile(`x${ext}`), true);
   assert.equal(pairing.isAudioFile('x.txt'), false);
 });
+
+// Course audio travels on exFAT external drives, where macOS stores extended
+// attributes in a `._name.wav` sidecar. Those carry the real name and
+// extension but only metadata, so they used to queue as audio and die at the
+// first ffmpeg pass.
+test('AppleDouble sidecars are not treated as audio', async () => {
+  assert.equal(pairing.isAudioFile('._clase.wav'), false);
+  assert.equal(pairing.isAudioFile('clase.wav'), true);
+
+  const dir = path.join(workDir, 'exfat-sidecars');
+  fs.mkdirSync(path.join(dir, 'Enhanced'), { recursive: true });
+  await fx.buildTone(path.join(dir, 'clase.wav'));
+  await fx.buildTone(path.join(dir, 'Enhanced', 'clase.wav'));
+  fs.writeFileSync(path.join(dir, '._clase.wav'), Buffer.alloc(4096));
+  fs.writeFileSync(path.join(dir, 'Enhanced', '._clase.wav'), Buffer.alloc(4096));
+
+  const { pairs, singles } = pairing.findPairs(dir);
+  assert.equal(pairs.length, 1);
+  assert.equal(singles.length, 0, `sidecars leaked into the queue: ${singles.map(s => s.name)}`);
+  assert.ok(!pairs[0].enhanced.name.startsWith('._'));
+});

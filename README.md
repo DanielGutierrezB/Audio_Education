@@ -317,6 +317,26 @@ and a suite that validates a different runtime than the one that ships
 cannot catch audio regressions. CI runs it on macOS arm64 against those same
 pinned binaries on every push/PR (`.github/workflows/test.yml`).
 
+## Calibrating against real recordings
+
+```bash
+npm run calibrate -- /path/to/course/PRE
+```
+
+Read-only sweep: runs the QC analysis over every file in a folder, groups
+each original with its `Enhanced/` counterpart and its `Audio_Pro/` master,
+and prints the tilt / sibilance / air ratios per stage plus how often each
+detector fires. No Adobe credits are spent and nothing is written.
+
+This exists because thresholds calibrated on the synthetic fixtures misfired
+on speech — `SIBILANT` fired on 22 of 28 real files and `NO_AIR` on 28 of 28,
+so no real voice ever received the air shelf. A detector firing on more than
+~60% of a corpus is flagged in the output, since at that point it is
+describing normal material rather than a defect.
+
+Keep the corpus out of the repo: `corpus/` is gitignored, because this is
+unpublished teaching material.
+
 ## Build
 
 ```bash
@@ -408,6 +428,7 @@ test/
 scripts/
   fetch-bin.sh                Downloads macOS arm64 ffmpeg/ffprobe/RNNoise model (SHA256-pinned)
   fetch-bin.ps1                Downloads Windows x64 ffmpeg/ffprobe/RNNoise model
+  calibrate.js                 Read-only QC sweep over a real corpus → threshold calibration
 docs/
   PLAN.md                      Design doc + phased implementation plan + status
   DESIGN.md                    Earlier design notes

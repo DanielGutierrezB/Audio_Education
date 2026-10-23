@@ -33,7 +33,7 @@ const response = (status, body) => ({
 
 // An Adobe that accepts the upload and then answers `pollAnswers` in order
 // (the last one repeating) when asked for the result.
-function fakeAdobe(pollAnswers) {
+function fakeAdobe(pollAnswers, trackAnswer) {
   const calls = [];
   let poll = 0;
   global.fetch = async (url, init = {}) => {
@@ -46,6 +46,10 @@ function fakeAdobe(pollAnswers) {
     if (u.includes('enhanced_audio')) {
       const [status, body] = pollAnswers[Math.min(poll++, pollAnswers.length - 1)];
       return response(status, body);
+    }
+    // The job's own status (GET /enhance_speech_tracks/<id>).
+    if (/enhance_speech_tracks\/[^/?]+\?/.test(u) && (init.method || 'GET') === 'GET') {
+      return trackAnswer ? response(...trackAnswer()) : response(200, { started_processing_at: '2026-10-23T19:00:00Z', limits: null });
     }
     if (u.includes('enhance_speech_tracks')) return response(200, { limits: {} });
     if (u === 'https://download/result') return response(200, {});
@@ -119,4 +123,52 @@ test('resume without a job id is a caller error, not a silent new upload', async
     /necesita el trackId/,
   );
   assert.equal(calls.length, 0);
+});
+
+test('a job held by the daily limit ends the wait with LIMIT, not a 45-minute poll', async () => {
+  // What Adobe actually does when the day's quota is used up: it accepts the
+  // job, the result endpoint says 204 forever, and only the job itself says
+  // it is limited — with the time the quota comes back.
+  const retryAt = new Date(Date.now() + 6 * 3600 * 1000).toISOString();
+  const calls = fakeAdobe([[204]], () => [200, {
+    started_processing_at: null,
+    limits: { 'is_limited?': true, time_remaining: 23031, retry_at_time: retryAt },
+  }]);
+  const started = Date.now();
+  await assert.rejects(
+    phonos.enhanceToFile(input(), path.join(dir, 'out.wav'), { token: 'eyJ.tok', trackId: 'job-1', pollMs: 1 }),
+    (err) => {
+      assert.equal(err.code, 'LIMIT');
+      assert.equal(err.retrySeconds, 23031);
+      assert.equal(err.trackId, 'job-1', 'the accepted job can be resumed after the reset');
+      return true;
+    },
+  );
+  assert.ok(Date.now() - started < 2000, 'detected on the first status read');
+  assert.ok(calls.some(c => /enhance_speech_tracks\/job-1\?/.test(c.url)));
+});
+
+test('a job that is not limited but never starts is reported as STUCK', async () => {
+  fakeAdobe([[204]], () => [200, { started_processing_at: null, limits: null }]);
+  await assert.rejects(
+    phonos.enhanceToFile(input(), path.join(dir, 'out.wav'), {
+      token: 'eyJ.tok', trackId: 'job-1', pollMs: 1, statusEvery: 1, stuckMs: 5,
+    }),
+    (err) => err.code === 'STUCK' && err.trackId === 'job-1',
+  );
+});
+
+test('an error Adobe records on the job is reported instead of waiting', async () => {
+  fakeAdobe([[204]], () => [200, { started_processing_at: '2026-10-23T19:00:00Z', error_type: 'invalid_audio' }]);
+  await assert.rejects(
+    phonos.enhanceToFile(input(), path.join(dir, 'out.wav'), { token: 'eyJ.tok', pollMs: 1 }),
+    /invalid_audio/,
+  );
+});
+
+test('a failed status read is not evidence of anything: the poll carries on', async () => {
+  fakeAdobe([[204], [200, { url: 'https://download/result' }]], () => [500, {}]);
+  const out = path.join(dir, 'out.wav');
+  await phonos.enhanceToFile(input(), out, { token: 'eyJ.tok', pollMs: 1, statusEvery: 1 });
+  assert.equal(fs.readFileSync(out, 'utf8'), 'enhanced-audio');
 });

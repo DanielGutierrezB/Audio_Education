@@ -79,6 +79,14 @@ function baseHeaders(token) {
 //   'AUTH'    — token rejected
 //   'TIMEOUT' — Adobe still processing after maxWaitMs; e.trackId to resume
 //   'GONE'    — resume asked for a job Adobe no longer has
+//   'STUCK'   — Adobe accepted the job but never started it, while not limited
+//
+// The daily processing limit deserves its own note: Adobe accepts a job even
+// when the account has used up its quota, and then simply never starts it.
+// The result endpoint answers 204 ("still processing") forever; the limit is
+// only visible on the job itself (`limits['is_limited?']`). So while polling,
+// the job's own status is read too, and a limited job ends the wait with
+// 'LIMIT' (retry time included) instead of a long, pointless one.
 //
 // Why the wait is long and resumable: Adobe's processing time grows with the
 // recording and with its own load. The old fixed 6-minute cap timed out on
@@ -98,6 +106,8 @@ async function enhanceToFile(inPath, outPath, opts = {}) {
     resume = false,
     maxWaitMs = DEFAULT_MAX_WAIT_MS,
     pollMs = DEFAULT_POLL_MS,
+    statusEvery = DEFAULT_STATUS_EVERY,
+    stuckMs = DEFAULT_STUCK_MS,
   } = opts;
   const cleanPct = Math.max(0, Math.min(100, Number(cleanVoice)));
 
@@ -110,7 +120,7 @@ async function enhanceToFile(inPath, outPath, opts = {}) {
   if (!resume) await uploadAndCreate(inPath, trackId, model, H, onStatus);
   onTrack(trackId);
   onStatus(STATES.PROCESANDO);
-  const downloadUrl = await pollForResult(trackId, H, { resume, maxWaitMs, pollMs, onStatus });
+  const downloadUrl = await pollForResult(trackId, H, { resume, maxWaitMs, pollMs, statusEvery, stuckMs, onStatus });
 
   // 5) download the clean (enhanced) voice
   onStatus(STATES.DESCARGANDO);
@@ -145,6 +155,11 @@ async function enhanceToFile(inPath, outPath, opts = {}) {
 
 const DEFAULT_MAX_WAIT_MS = 45 * 60 * 1000;
 const DEFAULT_POLL_MS = 3000;
+// Read the job's own status on the first poll and every 10th after (~30 s).
+const DEFAULT_STATUS_EVERY = 10;
+// A job that is not limited and still has not started after this long is not
+// going to: Adobe normally starts within a minute or three.
+const DEFAULT_STUCK_MS = 10 * 60 * 1000;
 
 // Steps 1-3: upload the file and create the enhance job under `trackId`.
 async function uploadAndCreate(inPath, trackId, model, H, onStatus) {
@@ -192,11 +207,41 @@ async function uploadAndCreate(inPath, trackId, model, H, onStatus) {
   if (ctJson && ctJson.limits && ctJson.limits['is_limited?']) throw makeLimitError(ctJson);
 }
 
+// The job itself: { limits, started_processing_at, error_type, ... }, or
+// { gone: true } when Adobe has no such job, or null when the read failed (a
+// failed read is not evidence of anything; the poll just carries on).
+async function readTrack(trackId, H) {
+  try {
+    const r = await fetch(`${BASE}/api/v1/enhance_speech_tracks/${trackId}?time=${nowMs()}`, { method: 'GET', headers: H });
+    if (r.status === 404 || r.status === 410) return { gone: true };
+    if (r.status === 401) throw makeAuthError();
+    return r.ok ? await safeJson(r) : null;
+  } catch (err) {
+    if (err.code === 'AUTH') throw err;
+    return null;
+  }
+}
+
 // Step 4: poll until the job has a result, and return its download URL.
-async function pollForResult(trackId, H, { resume, maxWaitMs, pollMs, onStatus }) {
+async function pollForResult(trackId, H, { resume, maxWaitMs, pollMs, statusEvery, stuckMs, onStatus }) {
   const started = Date.now();
   let lastStatus = null;
+  let polls = 0;
   while (Date.now() - started <= maxWaitMs) {
+    if (polls++ % statusEvery === 0) {
+      const track = await readTrack(trackId, H);
+      if (track && track.gone) {
+        if (resume) throw makeGoneError(trackId);
+      } else if (track) {
+        if (track.limits && track.limits['is_limited?']) {
+          const e = makeLimitError(track);
+          e.trackId = trackId;
+          throw e;
+        }
+        if (track.error_type) throw new Error('Adobe no pudo procesar el audio: ' + track.error_type);
+        if (!track.started_processing_at && Date.now() - started >= stuckMs) throw makeStuckError(trackId);
+      }
+    }
     const r = await fetch(`${BASE}/api/v1/enhance_speech_tracks/${trackId}/enhanced_audio?time=${nowMs()}`, {
       method: 'GET', headers: H,
     });
@@ -295,6 +340,13 @@ function makeTimeoutError(trackId, maxWaitMs, lastStatus) {
   return e;
 }
 
+function makeStuckError(trackId) {
+  const e = new Error('Adobe aceptó el trabajo pero nunca lo empezó');
+  e.code = 'STUCK';
+  e.trackId = trackId;
+  return e;
+}
+
 function makeGoneError(trackId) {
   const e = new Error('Adobe ya no tiene ese trabajo');
   e.code = 'GONE';
@@ -326,7 +378,7 @@ function makeLimitError(json) {
 
 module.exports = {
   enhanceToFile, checkToken, tokenInfo, isTokenExpired,
-  blend, makeLimitError, makeAuthError, makeTimeoutError, makeGoneError,
+  blend, makeLimitError, makeAuthError, makeTimeoutError, makeGoneError, makeStuckError,
   DEFAULT_MAX_WAIT_MS,
   STATES, MIME, AUDIO_EXTS,
 };

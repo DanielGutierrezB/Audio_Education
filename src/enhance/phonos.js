@@ -65,8 +65,26 @@ function baseHeaders(token) {
 //   codec = 'pcm_s16le',  — WAV codec when blending
 //   saveCleanTo = null,   — extra path for the 100% clean voice (blend only)
 //   onStatus(state, pct)
+//   onTrack(trackId)      — called once Adobe has accepted the job, before
+//                           polling: a caller that saves it can resume this
+//                           job later instead of uploading (and paying) again
+//   trackId               — use this id for the job instead of a new one
+//   resume = false        — skip upload and creation: poll `trackId`, an
+//                           existing job, and download its result
+//   maxWaitMs = 45 min    — how long to poll before giving up
+//   pollMs = 3000
 // }
-// Returns { ok, outPath, cleanVoice } or throws Error (e.code: 'LIMIT' | 'AUTH').
+// Returns { ok, outPath, cleanVoice } or throws Error with e.code:
+//   'LIMIT'   — out of credits (e.retrySeconds)
+//   'AUTH'    — token rejected
+//   'TIMEOUT' — Adobe still processing after maxWaitMs; e.trackId to resume
+//   'GONE'    — resume asked for a job Adobe no longer has
+//
+// Why the wait is long and resumable: Adobe's processing time grows with the
+// recording and with its own load. The old fixed 6-minute cap timed out on
+// 25-40 minute classes that other runs had processed fine, and every retry
+// uploaded the class again and created a new job — spending credits each
+// time on work Adobe had very likely finished for the previous one.
 async function enhanceToFile(inPath, outPath, opts = {}) {
   const {
     token,
@@ -76,19 +94,65 @@ async function enhanceToFile(inPath, outPath, opts = {}) {
     codec = 'pcm_s16le',
     saveCleanTo = null,
     onStatus = () => {},
+    onTrack = () => {},
+    resume = false,
+    maxWaitMs = DEFAULT_MAX_WAIT_MS,
+    pollMs = DEFAULT_POLL_MS,
   } = opts;
   const cleanPct = Math.max(0, Math.min(100, Number(cleanVoice)));
 
   if (!token) throw new Error('Falta el token de Adobe');
   if (!fs.existsSync(inPath)) throw new Error('No existe el archivo: ' + inPath);
+  if (resume && !opts.trackId) throw new Error('resume necesita el trackId del trabajo');
 
+  const trackId = opts.trackId || crypto.randomUUID();
+  const H = baseHeaders(token);
+  if (!resume) await uploadAndCreate(inPath, trackId, model, H, onStatus);
+  onTrack(trackId);
+  onStatus(STATES.PROCESANDO);
+  const downloadUrl = await pollForResult(trackId, H, { resume, maxWaitMs, pollMs, onStatus });
+
+  // 5) download the clean (enhanced) voice
+  onStatus(STATES.DESCARGANDO);
+  const cleanBuf = await downloadBuf(downloadUrl);
+
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+
+  const wantBlend = cleanPct < 100 && ffmpeg;
+  if (!wantBlend) {
+    fs.writeFileSync(outPath, cleanBuf);
+    onStatus(STATES.LISTO, 100);
+    return { ok: true, outPath, cleanVoice: 100 };
+  }
+
+  if (saveCleanTo) {
+    fs.mkdirSync(path.dirname(saveCleanTo), { recursive: true });
+    fs.writeFileSync(saveCleanTo, cleanBuf);
+  }
+
+  // Dry/wet blend against the LOCAL original (inPath) — no need to
+  // download it back from Adobe.
+  const tClean = path.join(os.tmpdir(), `ape_${trackId}_clean.wav`);
+  fs.writeFileSync(tClean, cleanBuf);
+  try {
+    await blend(ffmpeg, tClean, inPath, cleanPct / 100, outPath, codec);
+  } finally {
+    try { fs.unlinkSync(tClean); } catch { /* best effort */ }
+  }
+  onStatus(STATES.LISTO, 100);
+  return { ok: true, outPath, cleanVoice: cleanPct };
+}
+
+const DEFAULT_MAX_WAIT_MS = 45 * 60 * 1000;
+const DEFAULT_POLL_MS = 3000;
+
+// Steps 1-3: upload the file and create the enhance job under `trackId`.
+async function uploadAndCreate(inPath, trackId, model, H, onStatus) {
   const name = path.basename(inPath);
   const ext = path.extname(name).toLowerCase();
   const mime = MIME[ext] || 'audio/mpeg';
   const data = fs.readFileSync(inPath);
   const checksum = crypto.createHash('md5').update(data).digest('base64');
-  const trackId = crypto.randomUUID();
-  const H = baseHeaders(token);
 
   // 1) direct upload URL
   onStatus(STATES.SUBIENDO);
@@ -126,60 +190,32 @@ async function enhanceToFile(inPath, outPath, opts = {}) {
   // Adobe reports credits/limits in the response's `limits` object
   const ctJson = await safeJson(ctRes);
   if (ctJson && ctJson.limits && ctJson.limits['is_limited?']) throw makeLimitError(ctJson);
+}
 
-  // 4) poll until ready
-  let downloadUrl = null;
-  const maxAttempts = 120, delay = 3000;
-  for (let i = 1; i <= maxAttempts; i++) {
+// Step 4: poll until the job has a result, and return its download URL.
+async function pollForResult(trackId, H, { resume, maxWaitMs, pollMs, onStatus }) {
+  const started = Date.now();
+  let lastStatus = null;
+  while (Date.now() - started <= maxWaitMs) {
     const r = await fetch(`${BASE}/api/v1/enhance_speech_tracks/${trackId}/enhanced_audio?time=${nowMs()}`, {
       method: 'GET', headers: H,
     });
+    lastStatus = r.status;
     if (r.status === 200) {
       const j = await r.json();
-      downloadUrl = j.url || j.download_url || j.enhanced_audio_url ||
+      const url = j.url || j.download_url || j.enhanced_audio_url ||
         Object.values(j).find(v => typeof v === 'string' && v.startsWith('http'));
-      if (downloadUrl) break;
+      if (url) return url;
       throw new Error('respuesta 200 sin URL de descarga: ' + JSON.stringify(j).slice(0, 300));
-    } else if (r.status === 429) {
-      throw makeLimitError(await safeJson(r));
-    } else if (r.status === 401) {
-      throw makeAuthError();
-    } else { // 204 = still processing; other transient statuses just retry
-      onStatus(STATES.PROCESANDO, Math.min(95, Math.round((i / maxAttempts) * 100)));
-      await sleep(delay);
     }
+    if (r.status === 429) throw makeLimitError(await safeJson(r));
+    if (r.status === 401) throw makeAuthError();
+    if (resume && (r.status === 404 || r.status === 410)) throw makeGoneError(trackId);
+    // 204 = still processing; other transient statuses just retry
+    onStatus(STATES.PROCESANDO, Math.min(95, Math.round(((Date.now() - started) / maxWaitMs) * 100)));
+    await sleep(pollMs);
   }
-  if (!downloadUrl) throw new Error('Timeout esperando el procesamiento');
-
-  // 5) download the clean (enhanced) voice
-  onStatus(STATES.DESCARGANDO);
-  const cleanBuf = await downloadBuf(downloadUrl);
-
-  fs.mkdirSync(path.dirname(outPath), { recursive: true });
-
-  const wantBlend = cleanPct < 100 && ffmpeg;
-  if (!wantBlend) {
-    fs.writeFileSync(outPath, cleanBuf);
-    onStatus(STATES.LISTO, 100);
-    return { ok: true, outPath, cleanVoice: 100 };
-  }
-
-  if (saveCleanTo) {
-    fs.mkdirSync(path.dirname(saveCleanTo), { recursive: true });
-    fs.writeFileSync(saveCleanTo, cleanBuf);
-  }
-
-  // Dry/wet blend against the LOCAL original (inPath) — no need to
-  // download it back from Adobe.
-  const tClean = path.join(os.tmpdir(), `ape_${trackId}_clean.wav`);
-  fs.writeFileSync(tClean, cleanBuf);
-  try {
-    await blend(ffmpeg, tClean, inPath, cleanPct / 100, outPath, codec);
-  } finally {
-    try { fs.unlinkSync(tClean); } catch { /* best effort */ }
-  }
-  onStatus(STATES.LISTO, 100);
-  return { ok: true, outPath, cleanVoice: cleanPct };
+  throw makeTimeoutError(trackId, maxWaitMs, lastStatus);
 }
 
 async function downloadBuf(url) {
@@ -251,6 +287,21 @@ async function safeJson(res) {
   try { return await res.json(); } catch { return null; }
 }
 
+function makeTimeoutError(trackId, maxWaitMs, lastStatus) {
+  const minutes = Math.round(maxWaitMs / 60000);
+  const e = new Error(`Adobe sigue procesando después de ${minutes} min (último estado HTTP ${lastStatus})`);
+  e.code = 'TIMEOUT';
+  e.trackId = trackId;
+  return e;
+}
+
+function makeGoneError(trackId) {
+  const e = new Error('Adobe ya no tiene ese trabajo');
+  e.code = 'GONE';
+  e.trackId = trackId;
+  return e;
+}
+
 function makeAuthError() {
   const e = new Error('Token expirado o inválido (401). Reconecta con Adobe.');
   e.code = 'AUTH';
@@ -275,6 +326,7 @@ function makeLimitError(json) {
 
 module.exports = {
   enhanceToFile, checkToken, tokenInfo, isTokenExpired,
-  blend, makeLimitError, makeAuthError,
+  blend, makeLimitError, makeAuthError, makeTimeoutError, makeGoneError,
+  DEFAULT_MAX_WAIT_MS,
   STATES, MIME, AUDIO_EXTS,
 };
